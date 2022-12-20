@@ -1,0 +1,2 @@
+# muscadet
+MUSCADET modelling library
