@@ -2,7 +2,7 @@
 
 from setuptools import setup, find_packages
 
-VERSION = "0.0.1"
+VERSION = "0.0.2"
 
 setup(name='muscadet',
       version=VERSION,
@@ -40,6 +40,8 @@ setup(name='muscadet',
           "pydantic>=1.10.2",
           "lxml",
           "colored",
+          "pyvis",
+          "graphviz",
       ],
       zip_safe=False,
       # scripts=[

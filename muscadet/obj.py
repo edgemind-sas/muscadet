@@ -1,10 +1,8 @@
 import Pycatshoo as pyc
-import pydantic
-import typing
-from .core import BaseModel
-from .flow import FlowIn, FlowOut, FlowIO, FlowOutOnTrigger
+from .flow import FlowIn, FlowOut, FlowIO, FlowOutOnTrigger, FlowOutTempo
 import pyctools
 import pkg_resources
+import copy
 import re
 installed_pkg = {pkg.key for pkg in pkg_resources.working_set}
 # ipdb is a debugger (pip install ipdb)
@@ -12,14 +10,57 @@ if 'ipdb' in installed_pkg:
     import ipdb  # noqa: F401
 
 
-class TransitionEffect(BaseModel):
-    var_name: str = \
-        pydantic.Field(..., description="Variable name")
-    var_value: typing.Any = \
-        pydantic.Field(..., description="Variable value to be affected")
+# class TransitionEffect(BaseModel):
+#     var_name: str = \
+#         pydantic.Field(..., description="Variable name")
+#     var_value: typing.Any = \
+#         pydantic.Field(..., description="Variable value to be affected")
 
 
-class ObjFlow(pyc.CComponent):
+class ObjBase(pyc.CComponent):
+
+    def __init__(self, name,
+                 label=None,
+                 description=None,
+                 metadata={}, **kwargs):
+
+        super().__init__(name)
+
+        self.label = name if label is None else label
+        self.description = self.label if description is None else description
+
+        self.metadata = copy.deepcopy(metadata)
+
+    @classmethod
+    def get_subclasses(cls, recursive=True):
+        """ Enumerates all subclasses of a given class.
+
+        # Arguments
+        cls: class. The class to enumerate subclasses for.
+        recursive: bool (default: True). If True, recursively finds all sub-classes.
+
+        # Return value
+        A list of subclasses of `cls`.
+        """
+        sub = cls.__subclasses__()
+        if recursive:
+            for cls in sub:
+                sub.extend(cls.get_subclasses(recursive))
+        return sub
+
+    @classmethod
+    def from_dict(basecls, **specs):
+        
+        cls_sub_dict = {
+            cls.__name__: cls for cls in basecls.get_subclasses()}
+
+        clsname = specs.pop("cls")
+        cls = cls_sub_dict.get(clsname)
+        if cls is None:
+            raise ValueError(
+                f"{clsname} is not a subclass of {basecls.__name__}")
+
+        return cls(**specs)
 
     # @pydantic.validator('flows', pre=True)
     # def check_flows(cls, value, values, **kwargs):
@@ -30,12 +71,21 @@ class ObjFlow(pyc.CComponent):
     # def check_automata(cls, value, values, **kwargs):
     #     value = [PycAutomaton(**v) for v in value]
     #     return value
+    
+class ObjFlow(ObjBase):
 
+    def __init__(self, name,
+                 label=None,
+                 description=None,
+                 metadata={}, **kwargs):
 
-    def __init__(self, name, **kwargs):
+        super().__init__(name,
+                         label=label,
+                         description=description,
+                         metadata=metadata, **kwargs)
 
-        pyc.CComponent.__init__(self, name)
-
+        self.system().comp[name] = self
+        
         self.flows_in = {}
         self.flows_out = {}
         self.flows_io = {}
@@ -43,9 +93,10 @@ class ObjFlow(pyc.CComponent):
         self.params = {}
         self.automata = {}
 
+        kwargs.update(metadata=metadata)
         self.add_flows(**kwargs)
         
-        self.set_flows()
+        self.set_flows(**kwargs)
 
 
     # def report_status(self):
@@ -77,19 +128,57 @@ class ObjFlow(pyc.CComponent):
         else:
             raise ValueError(f"Input/Output flow {flow_name} already exists")
 
-    def add_flow_out(self, **params):
-        flow_name = params.get("name")
+    def prepare_flow_out_params(self, **params):
+        var_prod_cond = params.get("var_prod_cond")
+        if var_prod_cond:
+            if isinstance(var_prod_cond, str):
+                var_prod_cond = [[var_prod_cond]]
+            elif isinstance(var_prod_cond, (list, set, tuple)):
+                # Prepare production condition structure in conjonctive way
+                # [(C11 or C12 or ... or C1_k1) and (C21 or ... C2_k2) and ...
+                # and (Cn1 or ... or Cn_kn)]
+                var_prod_cond_tiny = []
+                for flow_disj in var_prod_cond:
+                    # Get input flow associated to production conditions
+                    if isinstance(flow_disj, str):
+                        flow_disj_tiny = [self.flows_in[flow_disj]]
+                    elif isinstance(flow_disj, (list, set, tuple)):
+                        flow_disj_tiny = \
+                            [self.flows_in[flow_name] for
+                             flow_name in list(flow_disj)]
+                    else:
+                        raise ValueError(f"Bad format for production condition structure : {flow_disj}")
+                    var_prod_cond_tiny.append(flow_disj_tiny)
+            else:
+                raise ValueError(f"Bad format for main conjonctive format of production condition : {var_prod_cond}")
+                                    
+            params["var_prod_cond"] = var_prod_cond_tiny
 
-        if params.get("var_prod_cond"):
-            params["var_prod_cond"] = \
-                [[self.flows_in[flow_name] for flow_name in flow_conj]
-                 for flow_conj in params.get("var_prod_cond")]
+        return params
+        
+    def add_flow_out(self, **params):
+
+        params = self.prepare_flow_out_params(**params)
+
+        flow_name = params.get("name")
 
         if not (flow_name in self.flows_out):
             self.flows_out[flow_name] = FlowOut(**params)
         else:
             raise ValueError(f"Output flow {flow_name} already exists")
-        
+
+
+    def add_flow_out_tempo(self, **params):
+
+        params = self.prepare_flow_out_params(**params)
+
+        flow_name = params.get("name")
+
+        if not (flow_name in self.flows_out):
+            self.flows_out[flow_name] = FlowOutTempo(**params)
+        else:
+            raise ValueError(f"Output flow {flow_name} already exists")
+
         # if var_prod_logic:
         #     ipdb.set_trace()
         # sm_flow_prod_available_fun = \
@@ -114,20 +203,20 @@ class ObjFlow(pyc.CComponent):
     #     return [flow for flow in self.flows
     #             if isinstance(flows, class_list)]
         
-    def set_flows(self):
+    def set_flows(self, **kwargs):
 
         flow_list = list(self.flows_in.values()) + \
             list(self.flows_io.values()) + \
             list(self.flows_out.values())
         
         for flow in flow_list:
-            if flow.name == "pae_std":
-                ipdb.set_trace()
+            # if flow.name == "pae_std":
+            #     ipdb.set_trace()
             flow.add_variables(self)
             flow.add_mb(self)
             flow.update_sensitive_methods(self)
             flow.add_automata(self)
-
+    
     def pat_to_var_value(self, *pat_value_list):
 
         variables = self.getVariables()
@@ -141,6 +230,7 @@ class ObjFlow(pyc.CComponent):
 
             var_value_list.extend(var_list)
 
+        #ipdb.set_trace()
         return var_value_list
     
     def add_automaton_flow(self, aut):
