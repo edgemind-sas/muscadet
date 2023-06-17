@@ -412,7 +412,7 @@ class FlowOutOnTrigger(FlowOut):
     
     def add_variables(self, comp, **kwargs):
 
-        super().add_variables(comp, port="out", **kwargs)
+        super().add_variables(comp, **kwargs)
 
         self.var_trigger_in = \
             comp.addReference(f"{self.name}_trigger_in")
@@ -423,7 +423,7 @@ class FlowOutOnTrigger(FlowOut):
 
         comp.addMessageBox(f"{self.name}_trigger_in")
         comp.addMessageBoxImport(f"{self.name}_trigger_in",
-                                     self.var_trigger_in, self.name)
+                                 self.var_trigger_in, self.name)
 
     def add_automata(self, comp,
                      **kwargs):
@@ -436,12 +436,12 @@ class FlowOutOnTrigger(FlowOut):
                 states=["down", "up"],
                 init_state="down",
                 transitions=[
-                    {"name": "{self.name}_trigger_up",
+                    {"name": f"{self.name}_trigger_up",
                      "source": "down",
                      "target": "up",
                      "is_interruptible": True,
                      "occ_law": {"dist": "delay", "time": self.trigger_time_up}},
-                    {"name": "{self.name}_trigger_down",
+                    {"name": f"{self.name}_trigger_down",
                      "source": "up",
                      "target": "down",
                      "is_interruptible": True,
@@ -450,7 +450,7 @@ class FlowOutOnTrigger(FlowOut):
 
         aut.update_bkd(comp)
                        
-        trans_name = "trigger_down_up"
+        trans_name = f"{self.name}_trigger_up"
         cond_method_name = f"cond_{comp.name}_{aut.name}_{trans_name}"
         if self.trigger_logic == "and":
             def cond_method_12():
@@ -463,9 +463,8 @@ class FlowOutOnTrigger(FlowOut):
         
         aut.get_transition_by_name(trans_name).bkd.setCondition(
             cond_method_name, cond_method_12)
-
         
-        trans_name = "trigger_up_down"
+        trans_name = f"{self.name}_trigger_down"
         cond_method_name = f"cond_{comp.name}_{aut.name}_{trans_name}"
         if self.trigger_logic == "and":
             def cond_method_21():

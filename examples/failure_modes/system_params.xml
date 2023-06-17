@@ -1,0 +1,8 @@
+<PY_PARAM NAME="system" TMAX="100" SEQ_NB="1000" RNG="yarn5" RNG_S="0"> 
+    
+  <TRACE_TR NAME="#.*" LEVEL="1"/>
+  <TRACE_VAR NAME="#.*" LEVEL="1"/>
+
+  <MONIT_TR NAME="#.*"/>
+  
+</PY_PARAM> 

@@ -120,12 +120,13 @@ class System(pyctools.PycSystem):
                 try:
                     self.connect(source, f"{flow_out}{available_suffix}_out",
                                  target, f"{flow_out}{available_suffix}_in")
-                except RuntimeError as e:
+                except Exception as e:
                     if "existe" in str(e):
                         if not (logging is None):
                             logging.debug(f"!!! {source} -- {flow_out}{available_suffix} --> {target} already exists")
                     else:
-                        raise RuntimeError(e)
+                        raise e
+
                 else:
                     if not (logging is None):
                         logging.debug(f"{source} -- {flow_out}{available_suffix} --> {target}")
