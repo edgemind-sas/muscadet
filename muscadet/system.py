@@ -4,7 +4,9 @@ from .obj import ObjBase
 from .obj_logic import LogicOr
 import re
 import copy
-import logging
+import sys
+import io
+#import logging
 from pyvis.network import Network
 import graphviz
 import pkg_resources
@@ -66,17 +68,18 @@ class System(pyctools.PycSystem):
             
     def auto_connect(self, source, target,
                      available_connect=False,
+                     logger=None,
                      ):
 
         obj_source_list = [obj for obj in self.comp.keys()
                            if re.search(f"^({source})$", obj)]
 
         # if "?P" in target:
-        #     ipdb.set_trace()  
+        #     ipdb.set_trace()
 
         conn_list = []
         for src in obj_source_list:
-            
+
             conn_list += [{
                 "source": src,
                 "target": obj,
@@ -93,19 +96,29 @@ class System(pyctools.PycSystem):
         #     ipdb.set_trace()  
         # if source == "ReseauSTD": *)
         #     ipdb.set_trace() *)
+        connections_created = []
+
         for conn in conn_list:
             # Test to ensure source is different from target
             # Could happen with regex
             if conn["source"] != conn["target"]:
-                self.auto_connect_flows(source=conn["source"],
-                                        target=conn["target"],
-                                        available_connect=available_connect,
-                                        )
+                conn_created_cur = \
+                    self.auto_connect_flows(source=conn["source"],
+                                            target=conn["target"],
+                                            available_connect=available_connect,
+                                            logger=logger,
+                                            )
+                connections_created.extend(conn_created_cur)
+
+        return connections_created
             
     def auto_connect_flows(self, source, target,
                            available_connect=False,
+                           logger=None,
                            ):
 
+        connections_list = []
+        
         available_suffix = "_available" if available_connect else ""
 
         for flow_out in self.comp[source].flows_out:
@@ -117,19 +130,42 @@ class System(pyctools.PycSystem):
             #     ipdb.set_trace()  
 
             if flow_out in self.comp[target].flows_in:
-                try:
-                    self.connect(source, f"{flow_out}{available_suffix}_out",
-                                 target, f"{flow_out}{available_suffix}_in")
-                except Exception as e:
-                    if "existe" in str(e):
-                        if not (logging is None):
-                            logging.debug(f"!!! {source} -- {flow_out}{available_suffix} --> {target} already exists")
-                    else:
-                        raise e
-
+                flow_name = f"{flow_out}{available_suffix}"
+                if not self.comp[source]\
+                           .is_connected_to(target, flow_name):
+                    self.connect(source, f"{flow_name}_out",
+                                 target, f"{flow_name}_in")
+                    connections_list.append({
+                        "source": source,
+                        "flow": f"{flow_out}{available_suffix}",
+                        "target": target})
+                    if not (logger is None):
+                        logger.debug(f"{source} -- {flow_out}{available_suffix} --> {target}")
                 else:
-                    if not (logging is None):
-                        logging.debug(f"{source} -- {flow_out}{available_suffix} --> {target}")
+                    if not (logger is None):
+                        logger.debug(f"!!! {source} -- {flow_out}{available_suffix} --> {target} already exists")
+                
+                # try:
+                #     self.connect(source, f"{flow_out}{available_suffix}_out",
+                #                  target, f"{flow_out}{available_suffix}_in")
+                # except Exception as e:
+                #     ipdb.set_trace()
+
+                #     if "existe" in str(e):
+                #         if not (logger is None):
+                #             logger.debug(f"!!! {source} -- {flow_out}{available_suffix} --> {target} already exists")
+                #     else:
+                #         raise e
+
+                # else:
+                #     connections_list.append({
+                #         "source": source,
+                #         "flow": f"{flow_out}{available_suffix}",
+                #         "target": target})
+                #     if not (logger is None):
+                #         logger.debug(f"{source} -- {flow_out}{available_suffix} --> {target}")
+
+        return connections_list
 
     def clean_comp_flow_specs(self, comp_flow_specs):
         # Scan input components
@@ -242,7 +278,7 @@ class System(pyctools.PycSystem):
         for comp_name, comp in self.comp.items(): 
             for flow_name, flow in comp.flows_out.items(): 
                 
-                msg_box_out = comp.getMessageBox(f"{flow_name}_out") 
+                msg_box_out = comp.messageBox(f"{flow_name}_out") 
 
                 for cnx in range(msg_box_out.cnctCount()): 
                     

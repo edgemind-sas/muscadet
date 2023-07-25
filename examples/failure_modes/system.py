@@ -122,6 +122,8 @@ system.simulate(
     schedule=[{"start": 0, "end": 10, "nvalues": 10}]
 )
 
+ipdb.set_trace()
+
 analyser = pyc.CAnalyser(system)
 
 seq_path = os.path.join(".")

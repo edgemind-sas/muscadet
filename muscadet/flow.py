@@ -75,7 +75,7 @@ class FlowIn(FlowModel):
         pydantic.Field(None, description="Reference to collect external flow connections")
 
     var_in_default: typing.Any = \
-        pydantic.Field(None, description="Flow input value when not connected")
+        pydantic.Field(False, description="Flow input value when not connected")
 
     var_available_in_default: typing.Any = \
         pydantic.Field(True, description="Flow available input value when not connected")
@@ -148,7 +148,7 @@ class FlowOut(FlowModel):
     var_prod_cond: list = \
         pydantic.Field([], description="Flow production conditions in conjonctive way [(C11 or C12 or ... or C1_k1) and (C21 or ... C2_k2) and ... and (Cn1 or ... or Cn_kn)]")
     var_prod_default: typing.Any = \
-        pydantic.Field(None, description="Flow production default value")
+        pydantic.Field(False, description="Flow production default value")
     negate: bool = \
         pydantic.Field(False, description="Indicates if the flow output is negated")
     # var_out: typing.Any = \
@@ -247,11 +247,9 @@ class FlowOut(FlowModel):
     def create_sensitive_set_flow_prod_available(self):
 
         def sensitive_set_flow_prod_available_template():
-            
             val = all([
                 any([flow.var_fed.value() for flow in flow_disj])
                 for flow_disj in self.var_prod_cond])
-
             self.var_prod_available.setValue(val)
 
         return sensitive_set_flow_prod_available_template

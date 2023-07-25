@@ -98,6 +98,17 @@ class ObjFlow(ObjBase):
         
         self.set_flows(**kwargs)
 
+    def is_connected_to(self, target, flow):
+                        
+        msg_box_out = self.messageBox(f"{flow}_out")
+
+        for cnx in range(msg_box_out.cnctCount()):
+                
+            comp_target = msg_box_out.cnct(cnx).parent()
+            if target == comp_target.basename():
+                return True
+
+        return False
 
     # def report_status(self):
     #     sys = self.system()
@@ -219,7 +230,7 @@ class ObjFlow(ObjBase):
     
     def pat_to_var_value(self, *pat_value_list):
 
-        variables = self.getVariables()
+        variables = self.variables()
 
         var_value_list = []
 
@@ -251,7 +262,7 @@ class ObjFlow(ObjBase):
             effects_val = not effects.startswith("!")
             effects_bis = effects.replace("!", "")
             effects_tuplelist_cur = \
-                [(var.basename(), effects_val) for var in self.getVariables()
+                [(var.basename(), effects_val) for var in self.variables()
                  if re.search(effects_bis, var.basename())]
 
             effects_tuplelist += effects_tuplelist_cur
@@ -306,7 +317,7 @@ class ObjFlow(ObjBase):
 
         elif isinstance(cond_occ_12, str):
             aut.get_transition_by_name(trans_name_12).bkd.setCondition(
-                self.getVariable(cond_occ_12))
+                self.variable(cond_occ_12))
         else:
             raise ValueError(f"Condition '{cond_occ_12}' for transition {trans_name_12} not supported")
 
@@ -334,7 +345,7 @@ class ObjFlow(ObjBase):
 
         elif isinstance(cond_occ_21, str):
             aut.get_transition_by_name(trans_name_21).bkd.setCondition(
-                self.getVariable(cond_occ_21))
+                self.variable(cond_occ_21))
         else:
             raise ValueError(f"Condition '{cond_occ_21}' for transition {trans_name_21} not supported")
         # Effects
