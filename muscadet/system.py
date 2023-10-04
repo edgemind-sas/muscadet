@@ -209,9 +209,10 @@ class System(pyctools.PycSystem):
         # Set metadata from input comp if needed
         metadata = params.pop("metadata", {})
         if comp_in:
-            comp_1 = self.comp[comp_in[0]]
-            for key, val in comp_1.metadata.items():
-                metadata.setdefault(key, val)
+            for comp_in_name_cur in comp_in:
+                comp_in_cur = self.comp[comp_in_name_cur]
+                for key, val in comp_in_cur.metadata.items():
+                    metadata.setdefault(key, val)
 
         self.add_component(cls="LogicOr",
                            name=name,
@@ -232,9 +233,10 @@ class System(pyctools.PycSystem):
         # Set metadata from input comp if needed
         metadata = params.pop("metadata", {})
         if comp_in:
-            comp_1 = self.comp[comp_in[0]]
-            for key, val in comp_1.metadata.items():
-                metadata.setdefault(key, val)
+            for comp_in_name_cur in comp_in:
+                comp_in_cur = self.comp[comp_in_name_cur]
+                for key, val in comp_in_cur.metadata.items():
+                    metadata.setdefault(key, val)
 
         self.add_component(cls="LogicAnd",
                            name=name,
