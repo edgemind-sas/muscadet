@@ -2,7 +2,7 @@
 
 from setuptools import setup, find_packages
 
-VERSION = "0.0.5"
+VERSION = "0.0.6"
 
 setup(name='muscadet',
       version=VERSION,
@@ -37,11 +37,8 @@ setup(name='muscadet',
       platforms='ALL',
       python_requires='>=3.8',
       install_requires=[
-          "pydantic>=1.10.2",
-          "lxml",
-          "colored",
-          "pyvis",
-          "graphviz",
+          "pyctools @ git+https://github.com:edgemind-sas/pyctools.git@0.0.4#egg=pyctools",
+          "graphviz==0.20.1",
       ],
       zip_safe=False,
       # scripts=[

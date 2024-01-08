@@ -4,10 +4,8 @@ from .obj import ObjBase
 from .obj_logic import LogicOr
 import re
 import copy
-import sys
-import io
+import json
 #import logging
-from pyvis.network import Network
 import graphviz
 import pkg_resources
 installed_pkg = {pkg.key for pkg in pkg_resources.working_set}
@@ -309,7 +307,21 @@ class System(pyctools.PycSystem):
 
         return components_dict, flows_list
                     
+
+    def get_system_graph_specs_json(self,
+                                    filename="system.json",
+                                    config={}):
         
+        comp_specs_d, flow_specs_list = \
+            self.get_system_graph_specs(config=config)
+        
+        graph_specs = {
+            "components": list(comp_specs_d.values()),
+            "flows": flow_specs_list
+        }
+
+        with open(filename, 'w') as outfile:
+            json.dump(graph_specs, outfile, indent=4)
 
     def generate_system_graph(self,
                               filename="system.html",

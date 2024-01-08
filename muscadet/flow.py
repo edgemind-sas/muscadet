@@ -9,25 +9,27 @@ if 'ipdb' in installed_pkg:
     import ipdb  # noqa: F401
 
 
-    
 class FlowModel(pydantic.BaseModel):
 
     name: str = pydantic.Field(..., description="Flow name")
+
     var_type: str = pydantic.Field('bool', description="Flow type")
-    var_fed_default: typing.Any = pydantic.Field(None, description="Flow default value")
+
+    var_fed_default: typing.Any = \
+        pydantic.Field(None, description="Flow default value")
 
     var_fed: typing.Any = \
         pydantic.Field(None, description="Component flow fed")
+
     var_fed_available: typing.Any = \
         pydantic.Field(None, description="Flow available fed")
 
     sm_flow_fed_fun: typing.Any = \
         pydantic.Field(None, description="set flow sensitive method")
-    
+
     sm_flow_fed_name: typing.Any = \
         pydantic.Field(None, description="set flow sensitive method")
 
-    
     @classmethod
     def get_clsname(basecls, **specs):
         port_name = specs.pop("port")
