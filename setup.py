@@ -37,7 +37,7 @@ setup(name='muscadet',
       platforms='ALL',
       python_requires='>=3.8',
       install_requires=[
-          "pyctools @ git+https://github.com:edgemind-sas/pyctools.git@0.0.4#egg=pyctools",
+          "pyctools @ git+ssh://git@github.com:edgemind-sas/pyctools.git#egg=pyctools-0.0.4",
           "graphviz==0.20.1",
       ],
       zip_safe=False,
