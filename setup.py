@@ -2,7 +2,7 @@
 
 from setuptools import setup, find_packages
 
-VERSION = "0.0.7"
+VERSION = "0.0.8"
 
 setup(name='muscadet',
       version=VERSION,
@@ -37,7 +37,7 @@ setup(name='muscadet',
       platforms='ALL',
       python_requires='>=3.8',
       install_requires=[
-          "pyctools @ git+ssh://git@github.com:edgemind-sas/pyctools.git@0.0.4",
+          "pyctools @ git+ssh://git@github.com/edgemind-sas/pyctools.git@0.0.4",
           "graphviz==0.20.1",
       ],
       zip_safe=False,
