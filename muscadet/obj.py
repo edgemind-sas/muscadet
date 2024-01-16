@@ -1,6 +1,6 @@
 import Pycatshoo as pyc
 from .flow import FlowIn, FlowOut, FlowIO, FlowOutOnTrigger, FlowOutTempo
-import pyctools
+import cod3s
 import pkg_resources
 import copy
 import re
@@ -246,7 +246,7 @@ class ObjFlow(ObjBase):
     
     def add_automaton_flow(self, aut):
 
-        aut_bis = pyctools.PycAutomaton(**aut)
+        aut_bis = cod3s.PycAutomaton(**aut)
         aut_bis.update_bkd(self)
 
         self.automata[aut_bis.name] = aut_bis
@@ -275,11 +275,11 @@ class ObjFlow(ObjBase):
                        st2="present",
                        init_st2=False,
                        cond_occ_12=True,
-                       occ_law_12={"dist": "delay", "time":0},
+                       occ_law_12={"cls": "delay", "time":0},
                        occ_interruptible_12=True,
                        effects_12=[],
                        cond_occ_21=True,
-                       occ_law_21={"dist": "delay", "time":0},
+                       occ_law_21={"cls": "delay", "time":0},
                        occ_interruptible_21=True,
                        effects_21=[],
                        ):
@@ -288,7 +288,7 @@ class ObjFlow(ObjBase):
         st2_name = f"{name}_{st2}"
 
         aut = \
-            pyctools.PycAutomaton(
+            cod3s.PycAutomaton(
                 name=f"{self.name()}_{name}",
                 states=[st1_name, st2_name],
                 init_state=st2_name if init_st2 else st1_name,
@@ -398,11 +398,11 @@ class ObjFlow(ObjBase):
             st2="present",
             init_st2=False,
             cond_occ_12=failure_cond,
-            occ_law_12={"dist": "exp", "rate": self.params[failure_rate_name]},
+            occ_law_12={"cls": "exp", "rate": self.params[failure_rate_name]},
             occ_interruptible_12=True,
             effects_12=failure_effects,
             cond_occ_21=repair_cond,
-            occ_law_21={"dist": "exp", "rate": self.params[repair_rate_name]},
+            occ_law_21={"cls": "exp", "rate": self.params[repair_rate_name]},
             occ_interruptible_21=True,
             effects_21=repair_effects,
         )
@@ -438,11 +438,11 @@ class ObjFlow(ObjBase):
             st2="present",
             init_st2=False,
             cond_occ_12=failure_cond,
-            occ_law_12={"dist": "delay", "time": self.params[failure_time_name]},
+            occ_law_12={"cls": "delay", "time": self.params[failure_time_name]},
             occ_interruptible_12=True,
             effects_12=failure_effects,
             cond_occ_21=repair_cond,
-            occ_law_21={"dist": "delay", "time": self.params[repair_time_name]},
+            occ_law_21={"cls": "delay", "time": self.params[repair_time_name]},
             occ_interruptible_21=True,
             effects_21=repair_effects,
         )

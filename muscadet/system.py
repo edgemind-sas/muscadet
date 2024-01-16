@@ -1,4 +1,4 @@
-import pyctools
+import cod3s
 # import Pycatshoo as pyc
 from .obj import ObjBase
 from .obj_logic import LogicOr
@@ -14,7 +14,7 @@ if 'ipdb' in installed_pkg:
     import ipdb  # noqa: F401
 
 
-class System(pyctools.PycSystem):
+class System(cod3s.PycSystem):
     def __init__(self, name):
         super().__init__(name)
 

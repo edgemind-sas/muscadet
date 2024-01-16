@@ -1,0 +1,6 @@
+
+project_name: Test COD3S
+system_name: test
+system_filename: system.py
+system_class_name: MySystem
+viz_specs_filename: viz_specs.yaml

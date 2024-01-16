@@ -2,7 +2,7 @@ import Pycatshoo as pyc
 import typing
 import pydantic
 import pkg_resources
-import pyctools
+import cod3s
 from .common import get_pyc_type
 installed_pkg = {pkg.key for pkg in pkg_resources.working_set}
 if 'ipdb' in installed_pkg:
@@ -319,7 +319,7 @@ class FlowOutTempo(FlowOut):
         super().add_automata(comp, **kwargs)
 
         aut = \
-            pyctools.PycAutomaton(
+            cod3s.PycAutomaton(
                 name=f"{self.name}_flow_out",
                 states=["stop", "start"],
                 init_state=self.flow_init_state,
@@ -328,14 +328,13 @@ class FlowOutTempo(FlowOut):
                      "source": "stop",
                      "target": "start",
                      "is_interruptible": True,
-                     "occ_law": {"dist": "delay", "time": self.time_to_start_flow}},
+                     "occ_law": {"cls": "delay", "time": self.time_to_start_flow}},
                     {"name": f"{self.name}_stop",
                      "source": "start",
                      "target": "stop",
                      "is_interruptible": True,
-                     "occ_law": {"dist": "delay", "time": self.time_to_stop_flow}},
+                     "occ_law": {"cls": "delay", "time": self.time_to_stop_flow}},
                 ])
-
         aut.update_bkd(comp)
                        
         trans_name = f"{self.name}_start"
@@ -431,7 +430,7 @@ class FlowOutOnTrigger(FlowOut):
         super().add_automata(comp, **kwargs)
 
         aut = \
-            pyctools.PycAutomaton(
+            cod3s.PycAutomaton(
                 name=f"{self.name}_trigger",
                 states=["down", "up"],
                 init_state="down",

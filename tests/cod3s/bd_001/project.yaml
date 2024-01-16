@@ -1,0 +1,6 @@
+
+project_name: Test COD3S
+
+system_name: test
+system_filename: system.py
+system_class_name: MySystem
