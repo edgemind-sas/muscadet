@@ -156,10 +156,10 @@ class MySystem(muscadet.System):
         self.add_component(cls="Source",
                            name="S")
         
-        self.add_component(cls="Bloc",
+        self.add_component(cls="Block",
                            name="C1")
 
-        self.add_component(cls="Bloc",
+        self.add_component(cls="Block",
                            name="C2")
 
         self.auto_connect("S", "C.")
@@ -202,6 +202,7 @@ project_name: COD3S tutorial with MUSCADET Block diagram
 system_name: My first block diagram
 system_filename: system.py
 system_class_name: MySystem
+viz_specs_filename: viz_specs.yaml
 #+END_SRC
 - =project_name=: The name of the project, "COD3S tutorial with MUSCADET Block diagram"
 - =system_name=: The name of the system being modeled, "My first block diagram"

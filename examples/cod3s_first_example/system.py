@@ -8,10 +8,10 @@ class MySystem(muscadet.System):
         self.add_component(cls="Source",
                            name="S")
         
-        self.add_component(cls="Bloc",
+        self.add_component(cls="Block",
                            name="C1")
 
-        self.add_component(cls="Bloc",
+        self.add_component(cls="Block",
                            name="C2")
 
         self.auto_connect("S", "C.")

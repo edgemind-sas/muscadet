@@ -1,11 +1,4 @@
-import pkg_resources
 import muscadet
-
-installed_pkg = {pkg.key for pkg in pkg_resources.working_set}
-if 'ipdb' in installed_pkg:
-    import ipdb
-
-
 
 class Source(muscadet.ObjFlow):
 
@@ -17,7 +10,7 @@ class Source(muscadet.ObjFlow):
             name="flow",
         )
 
-class Bloc(muscadet.ObjFlow):
+class Block(muscadet.ObjFlow):
 
     def add_flows(self, **kwargs):
 
@@ -33,4 +26,3 @@ class Bloc(muscadet.ObjFlow):
                 "flow",
             ]
         )
-

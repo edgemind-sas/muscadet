@@ -15,7 +15,7 @@ components:
       flow_out: right
     
   bloc:
-    class_pattern: Bloc
+    class_pattern: Block
     ports:
       flow_in: left
       flow_out: right
