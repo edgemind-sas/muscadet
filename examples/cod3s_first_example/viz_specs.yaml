@@ -1,39 +1,71 @@
 components:
   all:
-    comp_pattern: ".*"
+    name: ".*"
     style:
       fontname: "monospace"
       fontsize: "10"
       shape: "box"
       style: "filled"
       fontcolor: "#1f416d"
-
+      color: "#c9d4e6"
+    ports:
+      - name: ".*"
+        color: "#ef7b26"
+    conditions:
+      - expr: "not {COMP}.variable('flow_fed_available_out').value()"
+        style:
+          color: "#FF0000"
+    #   variable:
+    #     name:
+    #     operator:
 
   source:
-    class_pattern: Source
+    type: Source
     ports:
-      flow_out: right
+      - name: flow_out
+        spot: right
+    conditions:
+      - expr: "not {COMP}.variable('flow_fed_available_out').value()"
+        style:
+          color: "#00FF00"
+
     
-  bloc:
-    class_pattern: Block
+  block:
+    type: Block
     ports:
-      flow_in: left
-      flow_out: right
-    
+      - name: flow_in
+        spot: left
+      - name: flow_out
+        spot: right
+
+  logic:
+    type: Logic
+    ports:
+      - name: "flow_.*_in"
+        spot: bottom
+      - name: "flow_.*_out"
+        spot: top
 
 connections:
 
+  ignore_in_out:
+    port_target: '(.+)_out$'
+    ignore: True
+  
   all:
-    name_pattern: ".*"
-    renaming:
-      - attr: "name"
-        pattern: '(.+)(_out|_in)$'
-        replace: '\g<1>'
+    # renaming:
+    #   - attr: "name"
+    #     pattern: '(.+)(_out|_in)$'
+    #     replace: '\g<1>'
     style:
-      color: "#1f416d"
+      stroke_color: "#1f416d"
+      to_arrow: Standard
 
   flow_available:
-    name_pattern: ".*available.*"
+    port_target: ".*available.*"
     style:
-      color: "#FF416d"
+      stroke_color: "#FF416d"
+      stroke_width: 2
+      to_arrow: Circle
+      
     
