@@ -1,6 +1,5 @@
 import cod3s
 # import Pycatshoo as pyc
-from .obj import ObjBase
 from .obj_logic import LogicOr
 import re
 import copy
@@ -15,54 +14,6 @@ if 'ipdb' in installed_pkg:
 
 
 class System(cod3s.PycSystem):
-    def __init__(self, name):
-        super().__init__(name)
-
-        self.comp = {}
-
-    def add_component(self, **comp_specs):
-
-        comp_name = comp_specs.get("name")
-        if comp_name in self.comp:
-            raise ValueError(f"Component {comp_name} already exists")
-        else:
-
-            # if "SPF" in comp_name:
-            #     ipdb.set_trace()
-
-            comp_new = ObjBase.from_dict(**comp_specs)
-                    
-        return comp_new
-
-    def get_components(self, pattern="^.*$"):
-        return {k: v for k, v in self.comp.items()
-                if re.search(f"^({pattern})$", k)}
-
-    # A INTEGRER ICI
-    # @staticmethod
-    # def prepare_connection(components_list,
-    #                        comp_source,
-    #                        mb_source,
-    #                        comp_target,
-    #                        mb_target):
-        
-    #     comp_source_list = [comp for comp in components_list
-    #                         if re.search(comp_source, comp)]
-
-    #     conn_list = []
-    #     for comp_src in comp_source_list:
-            
-    #         conn_list += [{
-    #             "comp_source": comp_src,
-    #             "mb_source": mb_source,
-    #             "comp_target": comp,
-    #             "mb_target": mb_target,
-    #         } for comp in components_list
-    #                       if re.search(comp_source + comp_target,
-    #                                    comp_src + comp)]
-
-    #     return conn_list
-
             
     def auto_connect(self, source, target,
                      available_connect=False,
@@ -71,9 +22,6 @@ class System(cod3s.PycSystem):
 
         obj_source_list = [obj for obj in self.comp.keys()
                            if re.search(f"^({source})$", obj)]
-
-        # if "?P" in target:
-        #     ipdb.set_trace()
 
         conn_list = []
         for src in obj_source_list:
@@ -85,15 +33,6 @@ class System(cod3s.PycSystem):
                           if re.search(f"^({source})({target})$",
                                        src + obj)]
 
-        # if "?P" in target:
-        #     ipdb.set_trace()  
-
-        # print(target) 
-        # if target == "PAS_01": 
-        #     print([(src, obj) for obj in self.comp.keys() if re.search(f"^({source})({target})$", src + obj)])  
-        #     ipdb.set_trace()  
-        # if source == "ReseauSTD": *)
-        #     ipdb.set_trace() *)
         connections_created = []
 
         for conn in conn_list:
@@ -120,12 +59,6 @@ class System(cod3s.PycSystem):
         available_suffix = "_available" if available_connect else ""
 
         for flow_out in self.comp[source].flows_out:
-            # if source == "ReseauSTD" and target == "PAS_ZA01_A": *)
-            #     ipdb.set_trace() *)
-
-            # if target == "PAS_01": 
-            #     print(source, target)
-            #     ipdb.set_trace()  
 
             if flow_out in self.comp[target].flows_in:
                 flow_name = f"{flow_out}{available_suffix}"
@@ -143,26 +76,6 @@ class System(cod3s.PycSystem):
                     if not (logger is None):
                         logger.debug(f"!!! {source} -- {flow_out}{available_suffix} --> {target} already exists")
                 
-                # try:
-                #     self.connect(source, f"{flow_out}{available_suffix}_out",
-                #                  target, f"{flow_out}{available_suffix}_in")
-                # except Exception as e:
-                #     ipdb.set_trace()
-
-                #     if "existe" in str(e):
-                #         if not (logger is None):
-                #             logger.debug(f"!!! {source} -- {flow_out}{available_suffix} --> {target} already exists")
-                #     else:
-                #         raise e
-
-                # else:
-                #     connections_list.append({
-                #         "source": source,
-                #         "flow": f"{flow_out}{available_suffix}",
-                #         "target": target})
-                #     if not (logger is None):
-                #         logger.debug(f"{source} -- {flow_out}{available_suffix} --> {target}")
-
         return connections_list
 
     def clean_comp_flow_specs(self, comp_flow_specs):

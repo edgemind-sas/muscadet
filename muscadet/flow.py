@@ -146,7 +146,7 @@ class FlowOut(FlowModel):
     var_prod: typing.Any = \
         pydantic.Field(None, description="Flow production")
     var_prod_available: typing.Any = \
-        pydantic.Field(None, description="Flow production available")
+        pydantic.Field(None, description="Indicates if the flow production condition are met")
     var_prod_cond: list = \
         pydantic.Field([], description="Flow production conditions in conjonctive way [(C11 or C12 or ... or C1_k1) and (C21 or ... C2_k2) and ... and (Cn1 or ... or Cn_kn)]")
     var_prod_default: typing.Any = \
@@ -183,7 +183,7 @@ class FlowOut(FlowModel):
 
         self.var_prod_available = \
             comp.addVariable(f"{self.name}_prod_available",
-                             pyc.TVarType.t_bool, True)
+                             pyc.TVarType.t_bool, self.var_prod_default)
 
         # TO DO NOT .setReinitialized(True)
         # BECAUSE var_prod_available is driven by tempo mecanisms
@@ -249,9 +249,19 @@ class FlowOut(FlowModel):
     def create_sensitive_set_flow_prod_available(self):
 
         def sensitive_set_flow_prod_available_template():
+
+            # DEBUG
+            # for flow_disj in self.var_prod_cond:
+            #     for flow in flow_disj:
+            #         comp = flow.var_fed.parent().basename()
+            #         flow_val = flow.var_fed.value()
+            #         print(f"{comp}: {flow.name}.var_fed = {flow_val}")
+            #         ipdb.set_trace()
+
             val = all([
                 any([flow.var_fed.value() for flow in flow_disj])
                 for flow_disj in self.var_prod_cond])
+
             self.var_prod_available.setValue(val)
 
         return sensitive_set_flow_prod_available_template
@@ -304,14 +314,24 @@ class FlowOut(FlowModel):
 
 
 class FlowOutTempo(FlowOut):
-    time_to_start_flow: float = \
-        pydantic.Field(0, description="Start flow out temporisation")
-    time_to_stop_flow: float = \
-        pydantic.Field(0, description="Stop flow out temporisation")
-    flow_init_state: str = \
-        pydantic.Field("start", description="Initial state flow")
-    flow_start: typing.Any = \
-        pydantic.Field(None, description="Flow start state")
+    occ_enable_flow: dict = \
+        pydantic.Field({"cls": "delay", "time": 0},
+                       description="Temporisation law to let flow out")
+    occ_disable_flow: dict = \
+        pydantic.Field({"cls": "delay", "time": 0},
+                       description="Temporisation law to block flow out")   
+    # time_to_start_flow: float = \
+    #     pydantic.Field(0, description="Start flow out temporisation")
+    # time_to_stop_flow: float = \
+    #     pydantic.Field(0, description="Stop flow out temporisation")
+    state_enable_name: str = \
+        pydantic.Field("enabled", description="Name of the enable state")
+    state_disable_name: str = \
+        pydantic.Field("disabled", description="Name of the disable state")
+    init_enable: bool = \
+        pydantic.Field(False, description="Indicates if flow init state is enabled or disabled (default disabled")
+    state_enable_bkd: typing.Any = \
+        pydantic.Field(None, description="Enable state backend")
 
     def add_automata(self, comp,
                      **kwargs):
@@ -320,39 +340,44 @@ class FlowOutTempo(FlowOut):
 
         aut = \
             cod3s.PycAutomaton(
-                name=f"{self.name}_flow_out",
-                states=["stop", "start"],
-                init_state=self.flow_init_state,
+                name=f"{self.name}_out_tempo",
+                states=[self.state_disable_name, self.state_enable_name],
+                init_state=self.state_enable_name
+                if self.init_enable else self.state_disable_name,
                 transitions=[
-                    {"name": f"{self.name}_start",
-                     "source": "stop",
-                     "target": "start",
-                     "is_interruptible": True,
-                     "occ_law": {"cls": "delay", "time": self.time_to_start_flow}},
-                    {"name": f"{self.name}_stop",
-                     "source": "start",
-                     "target": "stop",
-                     "is_interruptible": True,
-                     "occ_law": {"cls": "delay", "time": self.time_to_stop_flow}},
+                    {
+                        "name": f"{self.name}_enable",
+                        "source": self.state_disable_name,
+                        "target": self.state_enable_name,
+                        "is_interruptible": True,
+                        "occ_law": self.occ_enable_flow,
+                    },
+                    {
+                        "name": f"{self.name}_disable",
+                        "source": self.state_enable_name,
+                        "target": self.state_disable_name,
+                        "is_interruptible": True,
+                        "occ_law": self.occ_disable_flow,
+                    }
                 ])
         aut.update_bkd(comp)
-                       
-        trans_name = f"{self.name}_start"
+
+        trans_name = f"{self.name}_enable"
         cond_method_name = f"cond_{comp.name}_{aut.name}_{trans_name}"
         
-        def cond_method_start():
+        def cond_method_enable():
             return self.var_prod_available.value()
         
         aut.get_transition_by_name(trans_name).bkd.setCondition(
-            cond_method_name, cond_method_start)
+            cond_method_name, cond_method_enable)
 
-        trans_name = f"{self.name}_stop"
+        trans_name = f"{self.name}_disable"
         
-        def cond_method_stop():
+        def cond_method_disable():
             return not self.var_prod_available.value()
         
         aut.get_transition_by_name(trans_name).bkd.setCondition(
-            cond_method_name, cond_method_stop)
+            cond_method_name, cond_method_disable)
 
         # cond_method_name = f"cond_{comp.name}_{aut.name}_{trans_name}"
         # if self.trigger_logic == "and":
@@ -363,7 +388,7 @@ class FlowOutTempo(FlowOut):
         #         return self.var_trigger_in.orValue(False)
         # else:
         #     raise ValueError("trigger logic must be 'and' or 'or'")
-        self.flow_start = aut.get_state_by_name("start")
+        self.state_enable_bkd = aut.get_state_by_name(self.state_enable_name)
 
         aut.bkd.addSensitiveMethod(self.sm_flow_fed_name,
                                    self.sm_flow_fed_fun)
@@ -378,7 +403,7 @@ class FlowOutTempo(FlowOut):
                 # self.var_prod.setValue(
                 #     self.flow_start.bkd.isActive() and
                 #     self.var_prod_available.value())
-                self.var_prod.setValue(self.flow_start.bkd.isActive())
+                self.var_prod.setValue(self.state_enable_bkd.bkd.isActive())
 
                 self.var_fed.setValue(
                     self.var_prod.value() and
@@ -388,7 +413,7 @@ class FlowOutTempo(FlowOut):
                 # self.var_prod.setValue(
                 #     self.flow_start.bkd.isActive() and
                 #     self.var_prod_available.value())
-                self.var_prod.setValue(self.flow_start.bkd.isActive())
+                self.var_prod.setValue(self.state_enable_bkd.bkd.isActive())
 
                 self.var_fed.setValue(
                     not (self.var_prod.value() and
