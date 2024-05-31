@@ -152,7 +152,7 @@ class Target(muscadet.ObjFlow):
 ```
 `Target` component is just like a `Block` component without output.
 
-### First RBD
+### First RBD 
 
 ```mermaid
 graph TD;
