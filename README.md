@@ -287,7 +287,7 @@ fig_indics.show()
 ```
 Note that the method `indic_px_line` produces a Plotly graphic that can be displayed with the `show` method.
 
-The code for this example is available [here](system.py).
+The code for this example is available [here](examples/rbd_01/system.py).
 
 ## More Examples
 
