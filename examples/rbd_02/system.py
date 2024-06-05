@@ -86,11 +86,20 @@ my_rbd.connect("B2", "is_ok_out", "T", "is_ok_in")
 
 # Add indicators
 my_rbd.add_indicator_var(
-    component=".",
+    component="S",
     var="is_ok_fed_out",
     stats=["mean"],
 )
-
+my_rbd.add_indicator_var(
+    component="B1",
+    var="is_ok_fed_out",
+    stats=["mean"],
+)
+my_rbd.add_indicator_var(
+    component="B2",
+    var="is_ok_fed_out",
+    stats=["mean"],
+)
 my_rbd.add_indicator_var(
     component="T",
     var="is_ok_fed_in",
@@ -106,7 +115,7 @@ my_rbd.simulate(
     }
 )
 
-fig_indics = my_rbd.indic_px_line()
+fig_indics = my_rbd.indic_px_line(title="Flow monitoring in the RBD", facet_row="name")
 
 # Uncomment to save graphic on disk
 # fig_indics_filename = "indics.png"
