@@ -1,13 +1,7 @@
 import Pycatshoo as pyc
 from .flow import FlowIn, FlowOut, FlowIO, FlowOutOnTrigger, FlowOutTempo
 import cod3s
-import pkg_resources
-import copy
 import re
-installed_pkg = {pkg.key for pkg in pkg_resources.working_set}
-# ipdb is a debugger (pip install ipdb)
-if 'ipdb' in installed_pkg:
-    import ipdb  # noqa: F401
 
 
 # class TransitionEffect(BaseModel):
@@ -16,19 +10,15 @@ if 'ipdb' in installed_pkg:
 #     var_value: typing.Any = \
 #         pydantic.Field(..., description="Variable value to be affected")
 
-    
+
 class ObjFlow(cod3s.PycComponent):
 
-    def __init__(self, name,
-                 label=None,
-                 description=None,
-                 metadata={}, **kwargs):
+    def __init__(self, name, label=None, description=None, metadata={}, **kwargs):
 
-        super().__init__(name,
-                         label=label,
-                         description=description,
-                         metadata=metadata, **kwargs)
-        
+        super().__init__(
+            name, label=label, description=description, metadata=metadata, **kwargs
+        )
+
         self.flows_in = {}
         self.flows_out = {}
         self.flows_io = {}
@@ -39,15 +29,15 @@ class ObjFlow(cod3s.PycComponent):
         kwargs.update(metadata=metadata)
 
         self.add_flows(**kwargs)
-        
+
         self.set_flows(**kwargs)
 
     def is_connected_to(self, target, flow):
-                        
+
         msg_box_out = self.messageBox(f"{flow}_out")
 
         for cnx in range(msg_box_out.cnctCount()):
-                
+
             comp_target = msg_box_out.cnct(cnx).parent()
             if target == comp_target.basename():
                 return True
@@ -68,7 +58,7 @@ class ObjFlow(cod3s.PycComponent):
     def add_flows(self, **kwargs):
         # TO BE OVERLOADED
         pass
-    
+
     def add_flow_in(self, **params):
         flow_name = params.get("name")
         if not (flow_name in self.flows_in):
@@ -98,19 +88,23 @@ class ObjFlow(cod3s.PycComponent):
                     if isinstance(flow_disj, str):
                         flow_disj_tiny = [self.flows_in[flow_disj]]
                     elif isinstance(flow_disj, (list, set, tuple)):
-                        flow_disj_tiny = \
-                            [self.flows_in[flow_name] for
-                             flow_name in list(flow_disj)]
+                        flow_disj_tiny = [
+                            self.flows_in[flow_name] for flow_name in list(flow_disj)
+                        ]
                     else:
-                        raise ValueError(f"Bad format for production condition structure : {flow_disj}")
+                        raise ValueError(
+                            f"Bad format for production condition structure : {flow_disj}"
+                        )
                     var_prod_cond_tiny.append(flow_disj_tiny)
             else:
-                raise ValueError(f"Bad format for main conjonctive format of production condition : {var_prod_cond}")
-                                    
+                raise ValueError(
+                    f"Bad format for main conjonctive format of production condition : {var_prod_cond}"
+                )
+
             params["var_prod_cond"] = var_prod_cond_tiny
 
         return params
-        
+
     def add_flow_out(self, **params):
 
         params = self.prepare_flow_out_params(**params)
@@ -121,7 +115,6 @@ class ObjFlow(cod3s.PycComponent):
             self.flows_out[flow_name] = FlowOut(**params)
         else:
             raise ValueError(f"Output flow {flow_name} already exists")
-
 
     def add_flow_out_tempo(self, **params):
 
@@ -157,13 +150,15 @@ class ObjFlow(cod3s.PycComponent):
     #                   for suffix in cls]
     #     return [flow for flow in self.flows
     #             if isinstance(flows, class_list)]
-        
+
     def set_flows(self, **kwargs):
 
-        flow_list = list(self.flows_in.values()) + \
-            list(self.flows_io.values()) + \
-            list(self.flows_out.values())
-        
+        flow_list = (
+            list(self.flows_in.values())
+            + list(self.flows_io.values())
+            + list(self.flows_out.values())
+        )
+
         for flow in flow_list:
             # if flow.name == "pae_std":
             #     ipdb.set_trace()
@@ -171,7 +166,7 @@ class ObjFlow(cod3s.PycComponent):
             flow.add_mb(self)
             flow.update_sensitive_methods(self)
             flow.add_automata(self)
-    
+
     def pat_to_var_value(self, *pat_value_list):
 
         variables = self.variables()
@@ -180,14 +175,14 @@ class ObjFlow(cod3s.PycComponent):
 
         for pat, value in pat_value_list:
             var_list = [
-                (var, value) for var in variables
-                if re.search(pat, var.basename())]
+                (var, value) for var in variables if re.search(pat, var.basename())
+            ]
 
             var_value_list.extend(var_list)
 
-        #ipdb.set_trace()
+        # ipdb.set_trace()
         return var_value_list
-    
+
     def add_automaton_flow(self, aut):
 
         aut_bis = cod3s.PycAutomaton(**aut)
@@ -205,49 +200,56 @@ class ObjFlow(cod3s.PycComponent):
         for effects in effects_strlist:
             effects_val = not effects.startswith("!")
             effects_bis = effects.replace("!", "")
-            effects_tuplelist_cur = \
-                [(var.basename(), effects_val) for var in self.variables()
-                 if re.search(effects_bis, var.basename())]
+            effects_tuplelist_cur = [
+                (var.basename(), effects_val)
+                for var in self.variables()
+                if re.search(effects_bis, var.basename())
+            ]
 
             effects_tuplelist += effects_tuplelist_cur
 
         return effects_tuplelist
-            
 
-    def add_atm2states(self, name,
-                       st1="absent",
-                       st2="present",
-                       init_st2=False,
-                       cond_occ_12=True,
-                       occ_law_12={"cls": "delay", "time":0},
-                       occ_interruptible_12=True,
-                       effects_12=[],
-                       cond_occ_21=True,
-                       occ_law_21={"cls": "delay", "time":0},
-                       occ_interruptible_21=True,
-                       effects_21=[],
-                       ):
+    def add_atm2states(
+        self,
+        name,
+        st1="absent",
+        st2="present",
+        init_st2=False,
+        cond_occ_12=True,
+        occ_law_12={"cls": "delay", "time": 0},
+        occ_interruptible_12=True,
+        effects_12=[],
+        cond_occ_21=True,
+        occ_law_21={"cls": "delay", "time": 0},
+        occ_interruptible_21=True,
+        effects_21=[],
+    ):
 
         st1_name = f"{name}_{st1}"
         st2_name = f"{name}_{st2}"
 
-        aut = \
-            cod3s.PycAutomaton(
-                name=f"{self.name()}_{name}",
-                states=[st1_name, st2_name],
-                init_state=st2_name if init_st2 else st1_name,
-                transitions=[
-                    {"name": f"{name}_{st1}_{st2}",
-                     "source": f"{st1_name}",
-                     "target": f"{st2_name}",
-                     "is_interruptible": occ_interruptible_12,
-                     "occ_law": occ_law_12},
-                    {"name": f"{name}_{st2}_{st1}",
-                     "source": f"{st2_name}",
-                     "target": f"{st1_name}",
-                     "is_interruptible": occ_interruptible_21,
-                     "occ_law": occ_law_21},
-                ])
+        aut = cod3s.PycAutomaton(
+            name=f"{self.name()}_{name}",
+            states=[st1_name, st2_name],
+            init_state=st2_name if init_st2 else st1_name,
+            transitions=[
+                {
+                    "name": f"{name}_{st1}_{st2}",
+                    "source": f"{st1_name}",
+                    "target": f"{st2_name}",
+                    "is_interruptible": occ_interruptible_12,
+                    "occ_law": occ_law_12,
+                },
+                {
+                    "name": f"{name}_{st2}_{st1}",
+                    "source": f"{st2_name}",
+                    "target": f"{st1_name}",
+                    "is_interruptible": occ_interruptible_21,
+                    "occ_law": occ_law_21,
+                },
+            ],
+        )
 
         aut.update_bkd(self)
 
@@ -256,86 +258,93 @@ class ObjFlow(cod3s.PycComponent):
         # Conditions
         trans_name_12 = f"{name}_{st1}_{st2}"
         if isinstance(cond_occ_12, bool):
-            aut.get_transition_by_name(trans_name_12)\
-               .bkd.setCondition(cond_occ_12)
+            aut.get_transition_by_name(trans_name_12).bkd.setCondition(cond_occ_12)
 
         elif isinstance(cond_occ_12, str):
             aut.get_transition_by_name(trans_name_12).bkd.setCondition(
-                self.variable(cond_occ_12))
+                self.variable(cond_occ_12)
+            )
         else:
-            raise ValueError(f"Condition '{cond_occ_12}' for transition {trans_name_12} not supported")
+            raise ValueError(
+                f"Condition '{cond_occ_12}' for transition {trans_name_12} not supported"
+            )
 
         # Effects
         st2_bkd = aut.get_state_by_name(st2_name).bkd
         var_value_list_12 = self.pat_to_var_value(*effects_12)
         if len(var_value_list_12) > 0:
+
             def sensitive_method_12():
                 if st2_bkd.isActive():
                     [var.setValue(value) for var, value in var_value_list_12]
 
-            #setattr(comp.bkd, method_name, sensitive_method)
+            # setattr(comp.bkd, method_name, sensitive_method)
             method_name_12 = f"effect_{self.name()}_{trans_name_12}"
             aut.bkd.addSensitiveMethod(method_name_12, sensitive_method_12)
-            [var.addSensitiveMethod(method_name_12, sensitive_method_12)
-             for var, value in var_value_list_12]
-        
+            [
+                var.addSensitiveMethod(method_name_12, sensitive_method_12)
+                for var, value in var_value_list_12
+            ]
+
         # Jump 2 -> 1
         # -----------
         # Conditions
         trans_name_21 = f"{name}_{st2}_{st1}"
         if isinstance(cond_occ_21, bool):
-            aut.get_transition_by_name(trans_name_21)\
-               .bkd.setCondition(cond_occ_21)
+            aut.get_transition_by_name(trans_name_21).bkd.setCondition(cond_occ_21)
 
         elif isinstance(cond_occ_21, str):
             aut.get_transition_by_name(trans_name_21).bkd.setCondition(
-                self.variable(cond_occ_21))
+                self.variable(cond_occ_21)
+            )
         else:
-            raise ValueError(f"Condition '{cond_occ_21}' for transition {trans_name_21} not supported")
+            raise ValueError(
+                f"Condition '{cond_occ_21}' for transition {trans_name_21} not supported"
+            )
         # Effects
         st1_bkd = aut.get_state_by_name(st1_name).bkd
         var_value_list_21 = self.pat_to_var_value(*effects_21)
         if len(var_value_list_21) > 0:
+
             def sensitive_method_21():
                 if st1_bkd.isActive():
                     [var.setValue(value) for var, value in var_value_list_21]
 
-            #setattr(comp.bkd, method_name, sensitive_method)
+            # setattr(comp.bkd, method_name, sensitive_method)
             method_name_21 = f"effect_{self.name()}_{trans_name_21}"
             aut.bkd.addSensitiveMethod(method_name_21, sensitive_method_21)
-            [var.addSensitiveMethod(method_name_21, sensitive_method_21)
-             for var, value in var_value_list_21]
+            [
+                var.addSensitiveMethod(method_name_21, sensitive_method_21)
+                for var, value in var_value_list_21
+            ]
 
         # Update automata dict
         # --------------------
         self.automata[aut.name] = aut
 
-
     def add_exp_failure_mode(
-            self,
-            name,
-            failure_cond=True,
-            failure_rate=0,
-            failure_effects=[],
-            failure_param_name="lambda",
-            repair_cond=True,
-            repair_rate=0,
-            repair_effects=[],
-            repair_param_name="mu",
-            ):
+        self,
+        name,
+        failure_cond=True,
+        failure_rate=0,
+        failure_effects=[],
+        failure_param_name="lambda",
+        repair_cond=True,
+        repair_rate=0,
+        repair_effects=[],
+        repair_param_name="mu",
+    ):
 
         # Create lambda/mu parameter for failure mode name
         failure_rate_name = f"{name}_{failure_param_name}"
-        self.params[failure_rate_name] = \
-            self.addVariable(failure_rate_name,
-                             pyc.TVarType.t_double,
-                             failure_rate)
+        self.params[failure_rate_name] = self.addVariable(
+            failure_rate_name, pyc.TVarType.t_double, failure_rate
+        )
         repair_rate_name = f"{name}_{repair_param_name}"
-        self.params[repair_rate_name] = \
-            self.addVariable(repair_rate_name,
-                             pyc.TVarType.t_double,
-                             repair_rate)
-        
+        self.params[repair_rate_name] = self.addVariable(
+            repair_rate_name, pyc.TVarType.t_double, repair_rate
+        )
+
         self.add_atm2states(
             name=name,
             st1="absent",
@@ -352,30 +361,28 @@ class ObjFlow(cod3s.PycComponent):
         )
 
     def add_delay_failure_mode(
-            self,
-            name,
-            failure_cond=True,
-            failure_time=0,
-            failure_effects=[],
-            failure_param_name="ttf",
-            repair_cond=True,
-            repair_time=0,
-            repair_effects=[],
-            repair_param_name="ttr",
-            ):
+        self,
+        name,
+        failure_cond=True,
+        failure_time=0,
+        failure_effects=[],
+        failure_param_name="ttf",
+        repair_cond=True,
+        repair_time=0,
+        repair_effects=[],
+        repair_param_name="ttr",
+    ):
 
         # Create lambda/mu parameter for failure mode name
         failure_time_name = f"{name}_{failure_param_name}"
-        self.params[failure_time_name] = \
-            self.addVariable(failure_time_name,
-                             pyc.TVarType.t_double,
-                             failure_time)
+        self.params[failure_time_name] = self.addVariable(
+            failure_time_name, pyc.TVarType.t_double, failure_time
+        )
         repair_time_name = f"{name}_{repair_param_name}"
-        self.params[repair_time_name] = \
-            self.addVariable(repair_time_name,
-                             pyc.TVarType.t_double,
-                             repair_time)
-        
+        self.params[repair_time_name] = self.addVariable(
+            repair_time_name, pyc.TVarType.t_double, repair_time
+        )
+
         self.add_atm2states(
             name=name,
             st1="absent",
@@ -390,6 +397,3 @@ class ObjFlow(cod3s.PycComponent):
             occ_interruptible_21=True,
             effects_21=repair_effects,
         )
-
-            
-            
