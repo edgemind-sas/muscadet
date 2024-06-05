@@ -1,3 +1,10 @@
+"""
+This example demonstrates how to create a basic Reliability Block Diagram (RBD) using the MUSCADET framework.
+The RBD consists of a source component, two block components in parallel, and a target component.
+The source produces a functional flow, which is propagated through the blocks to the target.
+The example also includes the addition of indicators and running a simulation to observe flow propagation.
+"""
+
 import muscadet
 
 # Components classes
