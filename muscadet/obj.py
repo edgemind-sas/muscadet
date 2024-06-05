@@ -522,6 +522,17 @@ class ObjFlow(cod3s.PycComponent):
         self.automata[aut.name] = aut
 
     def add_exp_failure_mode(
+        self,
+        name,
+        failure_cond=True,
+        failure_rate=0,
+        failure_effects=[],
+        failure_param_name="lambda",
+        repair_cond=True,
+        repair_rate=0,
+        repair_effects=[],
+        repair_param_name="mu",
+    ):
         """
         Adds an exponential failure mode to the component.
 
@@ -546,17 +557,6 @@ class ObjFlow(cod3s.PycComponent):
         repair_param_name : str, optional
             The name of the repair parameter (default is "mu").
         """
-        self,
-        name,
-        failure_cond=True,
-        failure_rate=0,
-        failure_effects=[],
-        failure_param_name="lambda",
-        repair_cond=True,
-        repair_rate=0,
-        repair_effects=[],
-        repair_param_name="mu",
-    ):
 
         # Create lambda/mu parameter for failure mode name
         failure_rate_name = f"{name}_{failure_param_name}"
@@ -584,8 +584,19 @@ class ObjFlow(cod3s.PycComponent):
         )
 
     def add_delay_failure_mode(
+        self,
+        name,
+        failure_cond=True,
+        failure_time=0,
+        failure_effects=[],
+        failure_param_name="ttf",
+        repair_cond=True,
+        repair_time=0,
+        repair_effects=[],
+        repair_param_name="ttr",
+    ):
         """
-        Adds a delay failure mode to the component.
+        Add a delay failure mode to the component.
 
         Parameters
         ----------
@@ -608,17 +619,6 @@ class ObjFlow(cod3s.PycComponent):
         repair_param_name : str, optional
             The name of the repair parameter (default is "ttr").
         """
-        self,
-        name,
-        failure_cond=True,
-        failure_time=0,
-        failure_effects=[],
-        failure_param_name="ttf",
-        repair_cond=True,
-        repair_time=0,
-        repair_effects=[],
-        repair_param_name="ttr",
-    ):
 
         # Create lambda/mu parameter for failure mode name
         failure_time_name = f"{name}_{failure_param_name}"
