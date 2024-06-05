@@ -127,14 +127,17 @@ my_rbd.add_indicator_var(
 my_rbd.simulate(
     {
         "nb_runs": 1,
-        "schedule": [{"start": 0, "end": 24, "nvalues": 23}],
+        "schedule": [{"start": 0, "end": 24, "nvalues": 1000}],
     }
 )
 
-fig_indics = my_rbd.indic_px_line(title="Flow monitoring in the RBD", facet_row="name")
+fig_indics = my_rbd.indic_px_line(
+    markers=False, title="Flow monitoring in the RBD", facet_row="name"
+)
 
 # Uncomment to save graphic on disk
 # fig_indics_filename = "indics.png"
 # fig_indics.write_image(fig_indics_filename)
 
+# Uncomment to display graphic in browser
 # fig_indics.show()

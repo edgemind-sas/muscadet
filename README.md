@@ -287,7 +287,7 @@ fig_indics.show()
 ```
 Note that the method `indic_px_line` produces a Plotly graphic that can be displayed with the `show` method.
 
-The code for this example is available [here](examples/rbd_01/system.py).
+The code for this example is available [here](examples/rbd_01/rbd_01.py).
 
 ### Deterministic Failures
 
@@ -337,11 +337,13 @@ We can launch a simulation and show results as previously:
 my_rbd.simulate(
     {
         "nb_runs": 1,
-        "schedule": [{"start": 0, "end": 24, "nvalues": 23}],
+        "schedule": [{"start": 0, "end": 24, "nvalues": 1000}],
     }
 )
 
-my_rbd.indic_px_line(title="Flow monitoring in the RBD", facet_row="name").show()
+fig_indics = my_rbd.indic_px_line(
+    markers=False, title="Flow monitoring in the RBD", facet_row="name"
+).show()
 ```
 
 ![Results](./examples/rbd_02/indics.png)
@@ -349,7 +351,7 @@ my_rbd.indic_px_line(title="Flow monitoring in the RBD", facet_row="name").show(
 
 We observe that target `T` is correctly fed if we have flow propagation from both `B1` and `B2` simultaneously.
 
-The code for this example is available [here](examples/rbd_02/system.py).
+The code for this example is available [here](examples/rbd_02/rbd_02.py).
 
 
 ## More Examples
