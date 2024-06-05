@@ -77,4 +77,6 @@ my_rbd.simulate(
 
 
 fig_indics = my_rbd.indic_px_line()
-fig_indics.show()
+
+# Uncomment to display the graphic
+# fig_indics.show()
