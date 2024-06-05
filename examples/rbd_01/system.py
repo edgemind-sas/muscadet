@@ -69,7 +69,7 @@ my_rbd.connect("B2", "is_ok_out", "T", "is_ok_in")
 my_rbd.add_indicator_var(
     component="T",
     var="is_ok_fed_in",
-    stats=["mean", "stddev"],
+    stats=["mean"],
 )
 
 # System simulation

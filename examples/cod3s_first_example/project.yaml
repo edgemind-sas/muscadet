@@ -1,5 +1,0 @@
-project_name: COD3S tutorial with MUSCADET Block diagram
-system_name: My first block diagram
-system_filename: system.py
-system_class_name: MySystem
-viz_specs_filename: viz_specs.yaml
