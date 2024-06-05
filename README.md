@@ -356,11 +356,13 @@ my_rbd.simulate(
     }
 )
 
-my_rbd.indic_px_line().show()
+my_rbd.indic_px_line(title="Flow monitoring in the RBD", facet_row="name").show()
 ```
 
 ![Results](./examples/rbd_02/indics.png)
 
+
+We observe that target `T` is correctly fed if we have flow propagation of both `B1` and `B2` simultaneously.
 
 The code for this example is available [here](examples/rbd_02/system.py).
 
