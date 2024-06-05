@@ -289,20 +289,11 @@ Note that the method `indic_px_line` produces a Plotly graphic that can be displ
 
 The code for this example is available [here](examples/rbd_01/system.py).
 
-### Deterministic failures
+### Deterministic Failures
 
-Let's now add deterministic failure for both components `B1` and `B2`. A failure can be
-considered as an event that changes the state of a component. In our case, we suppose that a
-failure can happen if the component is fed by flow `is_ok`. Besides when a failure occurs, the
-component becomes unable to propagate the flow `is_ok` downstream, meaning
-`is_ok_fed_available_out` is `False`, so becomes `is_ok_fed_out`. In this first example, we
-considered deterministic failures that trigger after fixed delays (4 time units for `B1` and 8
-time units for `B2`), then a once the failure is present, a repair event occurs deterministic
-after 2 time units for flow `B1` and 3 time units `B2`.
+Let's now add deterministic failures for both components `B1` and `B2`. A failure can be considered an event that changes the state of a component. In our case, we suppose that a failure can happen if the component is fed by the flow `is_ok`. When a failure occurs, the component becomes unable to propagate the flow `is_ok` downstream, meaning `is_ok_fed_available_out` becomes `False`, and consequently, `is_ok_fed_out` also becomes `False`. In this first example, we consider deterministic failures that trigger after fixed delays (4 time units for `B1` and 8 time units for `B2`). Once the failure is present, a repair event occurs deterministically after 2 time units for `B1` and 3 time units for `B2`.
 
-The classic way to represent this kind of behaviour is to use a 2-state automaton in order to
-jump from absence of failure to presence of failure. To do that in MUSCADET, we can use the
-`add_atm2states` method like this :
+The classic way to represent this kind of behavior is to use a 2-state automaton to transition from the absence of failure to the presence of failure. To do that in MUSCADET, we can use the `add_atm2states` method like this:
 ```python
 my_rbd.comp["B1"].add_atm2states(
     name="failure_deterministic",
@@ -312,17 +303,14 @@ my_rbd.comp["B1"].add_atm2states(
     occ_law_21={"cls": "delay", "time": 2},
 )
 ```
-The parameters of this method are :
-- `name`: the name of the automaton
-- `cond_occ_12` : The condition to enable a transition from the first state to the second state.
-- `occ_law_12` : The occurrence law for the transition from the first state to the second
-        state, here we have a deterministic delay of 4 time units.
-- `effects_12` : The effects of the transition from the first state to the second state.
-- `occ_law_21` : The occurrence law for the transition from the second state to the first, here
-  we have a deterministic delay of 2 time units.
+The parameters of this method are:
+- `name`: The name of the automaton.
+- `cond_occ_12`: The condition to enable a transition from the first state to the second state.
+- `occ_law_12`: The occurrence law for the transition from the first state to the second state. Here, we have a deterministic delay of 4 time units.
+- `effects_12`: The effects of the transition from the first state to the second state.
+- `occ_law_21`: The occurrence law for the transition from the second state to the first state. Here, we have a deterministic delay of 2 time units.
 
-For `B2`, we use an equivalent approach that uses the high-level method
-`add_delay_failure_mode` to ease the automaton creation :
+For `B2`, we use an equivalent approach that utilizes the high-level method `add_delay_failure_mode` to simplify the automaton creation:
 ```python
 my_rbd.comp["B2"].add_delay_failure_mode(
     name="failure_deterministic",
@@ -332,10 +320,9 @@ my_rbd.comp["B2"].add_delay_failure_mode(
 	repair_time=3,
 )
 ```
-As we see here, failure/repair behaviour are specified more directly.
+As we see here, failure/repair behavior is specified more directly.
 
-It is now time to evaluate the RBD by launching a simulation but before let's first add indicators
-to monitor `is_ok` flow output status for components `S`, `B1` and `B2` :
+It is now time to evaluate the RBD by launching a simulation. But before that, let's first add indicators to monitor the `is_ok` flow output status for components `S`, `B1`, and `B2`:
 ```python
 my_rbd.add_indicator_var(
     component=".",
@@ -343,11 +330,9 @@ my_rbd.add_indicator_var(
     stats=["mean"],
 )
 ```
-Note that `component="."` parameter means that we want to create an indicator to monitor the
- `is_ok_fed_out` variable of each components. If a component has no `is_ok_fed_out` variable,
- no indicator is created.
+Note that the `component="."` parameter means that we want to create an indicator to monitor the `is_ok_fed_out` variable of each component. If a component has no `is_ok_fed_out` variable, no indicator is created.
 
-We can launch a simulation and show results as previously :
+We can launch a simulation and show results as previously:
 ```python
 my_rbd.simulate(
     {
@@ -362,7 +347,7 @@ my_rbd.indic_px_line(title="Flow monitoring in the RBD", facet_row="name").show(
 ![Results](./examples/rbd_02/indics.png)
 
 
-We observe that target `T` is correctly fed if we have flow propagation of both `B1` and `B2` simultaneously.
+We observe that target `T` is correctly fed if we have flow propagation from both `B1` and `B2` simultaneously.
 
 The code for this example is available [here](examples/rbd_02/system.py).
 
