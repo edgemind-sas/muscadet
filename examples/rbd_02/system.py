@@ -2,7 +2,23 @@
 This example demonstrates how to create a basic Reliability Block Diagram (RBD) using the MUSCADET framework.
 The RBD consists of a source component, two block components in parallel, and a target component.
 The source produces a functional flow, which is propagated through the blocks to the target.
-The example also includes the addition of indicators and running a simulation to observe flow propagation.
+The example also includes the addition of deterministic failure modes to the blocks, indicators, and running a simulation to observe flow propagation and the impact of failures.
+
+Components:
+- Source: Produces a functional flow named "is_ok".
+- Block: Receives and propagates the "is_ok" flow. Two blocks (B1 and B2) are used in parallel.
+- Target: Receives the "is_ok" flow from the blocks.
+
+Failure Modes:
+- Block B1: Fails deterministically after 4 time units and repairs after 2 time units.
+- Block B2: Fails deterministically after 8 time units and repairs after 3 time units.
+
+Indicators:
+- Monitors the "is_ok_fed_out" status for components S, B1, and B2.
+- Monitors the "is_ok_fed_in" status for component T.
+
+Simulation:
+- Runs a simulation for 24 time units to observe flow propagation and the impact of failures.
 """
 
 import muscadet
