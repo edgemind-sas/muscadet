@@ -1,3 +1,9 @@
+"""
+This module defines the ObjFlow class, which is used to model components in a discrete stochastic flow system.
+The ObjFlow class provides methods to add and manage input, output, and input/output flows, as well as to set up
+automata and failure modes for the components.
+"""
+
 import Pycatshoo as pyc
 from .flow import FlowIn, FlowOut, FlowIO, FlowOutOnTrigger, FlowOutTempo
 import cod3s
@@ -12,6 +18,51 @@ import re
 
 
 class ObjFlow(cod3s.PycComponent):
+    """
+    A class to represent a component in a discrete stochastic flow system.
+
+    Attributes
+    ----------
+    name : str
+        The name of the component.
+    label : str, optional
+        The label of the component.
+    description : str, optional
+        The description of the component.
+    metadata : dict, optional
+        Metadata associated with the component.
+
+    Methods
+    -------
+    is_connected_to(target, flow):
+        Checks if the component is connected to a target component via a specified flow.
+    add_flows(**kwargs):
+        Adds flows to the component. To be overloaded by subclasses.
+    add_flow_in(**params):
+        Adds an input flow to the component.
+    add_flow_io(**params):
+        Adds an input/output flow to the component.
+    add_flow_out(**params):
+        Adds an output flow to the component.
+    add_flow_out_tempo(**params):
+        Adds a temporized output flow to the component.
+    add_flow_out_on_trigger(**params):
+        Adds an output flow that is triggered by an input flow.
+    set_flows(**kwargs):
+        Sets up the flows for the component.
+    pat_to_var_value(*pat_value_list):
+        Converts pattern-value pairs to variable-value pairs.
+    add_automaton_flow(aut):
+        Adds an automaton to the component.
+    compute_effects_tuples(effects_str=None):
+        Computes the effects tuples from a string.
+    add_atm2states(name, st1="absent", st2="present", init_st2=False, cond_occ_12=True, occ_law_12={"cls": "delay", "time": 0}, occ_interruptible_12=True, effects_12=[], cond_occ_21=True, occ_law_21={"cls": "delay", "time": 0}, occ_interruptible_21=True, effects_21=[]):
+        Adds a two-state automaton to the component.
+    add_exp_failure_mode(name, failure_cond=True, failure_rate=0, failure_effects=[], failure_param_name="lambda", repair_cond=True, repair_rate=0, repair_effects=[], repair_param_name="mu"):
+        Adds an exponential failure mode to the component.
+    add_delay_failure_mode(name, failure_cond=True, failure_time=0, failure_effects=[], failure_param_name="ttf", repair_cond=True, repair_time=0, repair_effects=[], repair_param_name="ttr"):
+        Adds a delay failure mode to the component.
+    """
 
     def __init__(self, name, label=None, description=None, metadata={}, **kwargs):
 
@@ -33,6 +84,21 @@ class ObjFlow(cod3s.PycComponent):
         self.set_flows(**kwargs)
 
     def is_connected_to(self, target, flow):
+        """
+        Checks if the component is connected to a target component via a specified flow.
+
+        Parameters
+        ----------
+        target : str
+            The name of the target component.
+        flow : str
+            The name of the flow.
+
+        Returns
+        -------
+        bool
+            True if the component is connected to the target via the specified flow, False otherwise.
+        """
 
         msg_box_out = self.messageBox(f"{flow}_out")
 
@@ -56,10 +122,26 @@ class ObjFlow(cod3s.PycComponent):
     #     return comp_status_str
 
     def add_flows(self, **kwargs):
+        """
+        Adds flows to the component. To be overloaded by subclasses.
+
+        Parameters
+        ----------
+        **kwargs : dict
+            Additional parameters for adding flows.
+        """
         # TO BE OVERLOADED
         pass
 
     def add_flow_in(self, **params):
+        """
+        Adds an input flow to the component.
+
+        Parameters
+        ----------
+        **params : dict
+            Parameters for the input flow.
+        """
         flow_name = params.get("name")
         if not (flow_name in self.flows_in):
             self.flows_in[flow_name] = FlowIn(**params)
@@ -67,6 +149,14 @@ class ObjFlow(cod3s.PycComponent):
             raise ValueError(f"Input flow {flow_name} already exists")
 
     def add_flow_io(self, **params):
+        """
+        Adds an input/output flow to the component.
+
+        Parameters
+        ----------
+        **params : dict
+            Parameters for the input/output flow.
+        """
         flow_name = params.get("name")
         if not (flow_name in self.flows_io):
             self.flows_io[flow_name] = FlowIO(**params)
@@ -74,6 +164,19 @@ class ObjFlow(cod3s.PycComponent):
             raise ValueError(f"Input/Output flow {flow_name} already exists")
 
     def prepare_flow_out_params(self, **params):
+        """
+        Prepares the parameters for an output flow.
+
+        Parameters
+        ----------
+        **params : dict
+            Parameters for the output flow.
+
+        Returns
+        -------
+        dict
+            The prepared parameters for the output flow.
+        """
         var_prod_cond = params.get("var_prod_cond")
         if var_prod_cond:
             if isinstance(var_prod_cond, str):
@@ -106,6 +209,14 @@ class ObjFlow(cod3s.PycComponent):
         return params
 
     def add_flow_out(self, **params):
+        """
+        Adds an output flow to the component.
+
+        Parameters
+        ----------
+        **params : dict
+            Parameters for the output flow.
+        """
 
         params = self.prepare_flow_out_params(**params)
 
@@ -117,6 +228,14 @@ class ObjFlow(cod3s.PycComponent):
             raise ValueError(f"Output flow {flow_name} already exists")
 
     def add_flow_out_tempo(self, **params):
+        """
+        Adds a temporized output flow to the component.
+
+        Parameters
+        ----------
+        **params : dict
+            Parameters for the temporized output flow.
+        """
 
         params = self.prepare_flow_out_params(**params)
 
@@ -137,6 +256,14 @@ class ObjFlow(cod3s.PycComponent):
         #     sm_flow_fed_name, sm_flow_prod_available_fun)
 
     def add_flow_out_on_trigger(self, **params):
+        """
+        Adds an output flow that is triggered by an input flow.
+
+        Parameters
+        ----------
+        **params : dict
+            Parameters for the triggered output flow.
+        """
         flow_name = params.get("name")
 
         if not (flow_name in self.flows_out):
@@ -152,6 +279,14 @@ class ObjFlow(cod3s.PycComponent):
     #             if isinstance(flows, class_list)]
 
     def set_flows(self, **kwargs):
+        """
+        Sets up the flows for the component.
+
+        Parameters
+        ----------
+        **kwargs : dict
+            Additional parameters for setting up the flows.
+        """
 
         flow_list = (
             list(self.flows_in.values())
@@ -168,6 +303,19 @@ class ObjFlow(cod3s.PycComponent):
             flow.add_automata(self)
 
     def pat_to_var_value(self, *pat_value_list):
+        """
+        Converts pattern-value pairs to variable-value pairs.
+
+        Parameters
+        ----------
+        *pat_value_list : list of tuples
+            List of pattern-value pairs.
+
+        Returns
+        -------
+        list of tuples
+            List of variable-value pairs.
+        """
 
         variables = self.variables()
 
@@ -184,6 +332,14 @@ class ObjFlow(cod3s.PycComponent):
         return var_value_list
 
     def add_automaton_flow(self, aut):
+        """
+        Adds an automaton to the component.
+
+        Parameters
+        ----------
+        aut : dict
+            The automaton to add.
+        """
 
         aut_bis = cod3s.PycAutomaton(**aut)
         aut_bis.update_bkd(self)
@@ -191,6 +347,19 @@ class ObjFlow(cod3s.PycComponent):
         self.automata[aut_bis.name] = aut_bis
 
     def compute_effects_tuples(self, effects_str=None):
+        """
+        Computes the effects tuples from a string.
+
+        Parameters
+        ----------
+        effects_str : str, optional
+            The effects string.
+
+        Returns
+        -------
+        list of tuples
+            The effects tuples.
+        """
         if not effects_str:
             return []
 
@@ -323,6 +492,30 @@ class ObjFlow(cod3s.PycComponent):
         self.automata[aut.name] = aut
 
     def add_exp_failure_mode(
+        """
+        Adds an exponential failure mode to the component.
+
+        Parameters
+        ----------
+        name : str
+            The name of the failure mode.
+        failure_cond : bool, optional
+            The condition for the failure (default is True).
+        failure_rate : float, optional
+            The rate of failure (default is 0).
+        failure_effects : list of tuples, optional
+            The effects of the failure (default is []).
+        failure_param_name : str, optional
+            The name of the failure parameter (default is "lambda").
+        repair_cond : bool, optional
+            The condition for the repair (default is True).
+        repair_rate : float, optional
+            The rate of repair (default is 0).
+        repair_effects : list of tuples, optional
+            The effects of the repair (default is []).
+        repair_param_name : str, optional
+            The name of the repair parameter (default is "mu").
+        """
         self,
         name,
         failure_cond=True,
@@ -361,6 +554,30 @@ class ObjFlow(cod3s.PycComponent):
         )
 
     def add_delay_failure_mode(
+        """
+        Adds a delay failure mode to the component.
+
+        Parameters
+        ----------
+        name : str
+            The name of the failure mode.
+        failure_cond : bool, optional
+            The condition for the failure (default is True).
+        failure_time : float, optional
+            The time to failure (default is 0).
+        failure_effects : list of tuples, optional
+            The effects of the failure (default is []).
+        failure_param_name : str, optional
+            The name of the failure parameter (default is "ttf").
+        repair_cond : bool, optional
+            The condition for the repair (default is True).
+        repair_time : float, optional
+            The time to repair (default is 0).
+        repair_effects : list of tuples, optional
+            The effects of the repair (default is []).
+        repair_param_name : str, optional
+            The name of the repair parameter (default is "ttr").
+        """
         self,
         name,
         failure_cond=True,
