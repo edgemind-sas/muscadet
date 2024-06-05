@@ -394,6 +394,36 @@ class ObjFlow(cod3s.PycComponent):
         occ_interruptible_21=True,
         effects_21=[],
     ):
+        """
+        Adds a two-state automaton to the component.
+
+        Parameters
+        ----------
+        name : str
+            The name of the automaton.
+        st1 : str, optional
+            The name of the first state (default is "absent").
+        st2 : str, optional
+            The name of the second state (default is "present").
+        init_st2 : bool, optional
+            Indicates if the initial state is the second state (default is False).
+        cond_occ_12 : bool or str, optional
+            The condition for the transition from the first state to the second state (default is True).
+        occ_law_12 : dict, optional
+            The occurrence law for the transition from the first state to the second state (default is {"cls": "delay", "time": 0}).
+        occ_interruptible_12 : bool, optional
+            Indicates if the transition from the first state to the second state is interruptible (default is True).
+        effects_12 : list of tuples, optional
+            The effects of the transition from the first state to the second state (default is []).
+        cond_occ_21 : bool or str, optional
+            The condition for the transition from the second state to the first state (default is True).
+        occ_law_21 : dict, optional
+            The occurrence law for the transition from the second state to the first state (default is {"cls": "delay", "time": 0}).
+        occ_interruptible_21 : bool, optional
+            Indicates if the transition from the second state to the first state is interruptible (default is True).
+        effects_21 : list of tuples, optional
+            The effects of the transition from the second state to the first state (default is []).
+        """
 
         st1_name = f"{name}_{st1}"
         st2_name = f"{name}_{st2}"
