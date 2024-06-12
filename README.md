@@ -353,6 +353,18 @@ We observe that target `T` is correctly fed if we have flow propagation from bot
 
 The code for this example is available [here](examples/rbd_02/rbd_02.py).
 
+### Stochastic Failures
+
+```python
+my_rbd.comp["B3"].add_exp_failure_mode(
+    name="failure_stochastic",
+    failure_cond="is_ok_fed_out",
+    failure_rate=1/8,
+    failure_effects=[("is_ok_fed_available_out", False)],
+    repair_rate=1/3,
+)
+```
+10 000 nb runs
 
 ## More Examples
 

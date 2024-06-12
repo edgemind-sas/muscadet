@@ -23,16 +23,18 @@ Simulation:
 
 import muscadet
 
+# Global attributes
+# ==================
+flow1 = "is_ok"
+
 # Components classes
 # ==================
-
-
 class Source(muscadet.ObjFlow):
     def add_flows(self, **kwargs):
         super().add_flows(**kwargs)
 
         self.add_flow_out(
-            name="is_ok",
+            name=flow1,
             var_prod_default=True,
         )
 
@@ -42,13 +44,13 @@ class Block(muscadet.ObjFlow):
         super().add_flows(**kwargs)
 
         self.add_flow_in(
-            name="is_ok",
+            name=flow1,
         )
 
         self.add_flow_out(
-            name="is_ok",
+            name=flow1,
             var_prod_cond=[
-                "is_ok",
+                flow1,
             ],
         )
 
@@ -58,7 +60,7 @@ class Target(muscadet.ObjFlow):
         super().add_flows(**kwargs)
 
         self.add_flow_in(
-            name="is_ok",
+            name=flow1,
             logic="and",
         )
 
@@ -73,6 +75,7 @@ my_rbd = muscadet.System(name="My first RBD")
 my_rbd.add_component(cls="Source", name="S")
 my_rbd.add_component(cls="Block", name="B1")
 my_rbd.add_component(cls="Block", name="B2")
+my_rbd.add_component(cls="Block", name="B3")
 my_rbd.add_component(cls="Target", name="T")
 
 # Add deterministic failure mode to block B1
@@ -93,32 +96,47 @@ my_rbd.comp["B2"].add_delay_failure_mode(
     repair_time=3,
 )
 
+# Add stochastic failure mode to block B3
+my_rbd.comp["B3"].add_exp_failure_mode(
+    name="failure_stochastic",
+    failure_cond="is_ok_fed_out",
+    failure_rate=1/8,
+    failure_effects=[("is_ok_fed_available_out", False)],
+    repair_rate=1/3,
+)
+
 # Connect components
-my_rbd.connect("S", "is_ok_out", "B1", "is_ok_in")
-my_rbd.connect("S", "is_ok_out", "B2", "is_ok_in")
-my_rbd.connect("B1", "is_ok_out", "T", "is_ok_in")
-my_rbd.connect("B2", "is_ok_out", "T", "is_ok_in")
+my_rbd.auto_connect("S", "B1")
+my_rbd.auto_connect("S", "B2")
+my_rbd.auto_connect("S", "B3")
+my_rbd.auto_connect("B1", "T")
+my_rbd.auto_connect("B2", "T")
+my_rbd.auto_connect("B3", "T")
 
-
-# Add indicators
+# Add indicator
 my_rbd.add_indicator_var(
     component="S",
-    var="is_ok_fed_out",
+    var=".*fed_out",
     stats=["mean"],
 )
 my_rbd.add_indicator_var(
     component="B1",
-    var="is_ok_fed_out",
+    var=".*fed_out",
     stats=["mean"],
 )
 my_rbd.add_indicator_var(
     component="B2",
-    var="is_ok_fed_out",
+    var=".*fed_out",
+    stats=["mean"],
+)
+my_rbd.add_indicator_var(
+    component="B3",
+    var=".*fed_out",
     stats=["mean"],
 )
 my_rbd.add_indicator_var(
     component="T",
-    var="is_ok_fed_in",
+    var=".*fed_in",
     stats=["mean"],
 )
 
@@ -126,8 +144,8 @@ my_rbd.add_indicator_var(
 # =================
 my_rbd.simulate(
     {
-        "nb_runs": 1,
-        "schedule": [{"start": 0, "end": 24, "nvalues": 1000}],
+        "nb_runs": 10000,
+        "schedule": [{"start": 0, "end": 24, "nvalues": 100}],
     }
 )
 
@@ -140,4 +158,4 @@ fig_indics = my_rbd.indic_px_line(
 # fig_indics.write_image(fig_indics_filename)
 
 # Uncomment to display graphic in browser
-# fig_indics.show()
+fig_indics.show()
