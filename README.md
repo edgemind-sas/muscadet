@@ -408,6 +408,95 @@ We observe that target `T` is correctly fed if we have flow propagation from bot
 
 The code for this example is available [here](examples/rbd_03/rbd_03.py).
 
+### Source Triggered on condition
+
+A source can produce and propagate a flow to the connected target as long
+as it is not in failure state. However, a source with an "out_on_trigger" flow will only propagate
+its flow if a triggering condition is true.
+
+In this example, there are two sources: the first will propagate its flow by default, while the second source
+will only propagate its flow if the main source cannot propagate its flow because of a failure.
+
+```python
+# Components classes
+# ==================
+class Source(muscadet.ObjFlow):
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+
+        self.add_flow_out(
+            name=flow1,
+            var_prod_default=True,
+        )
+		
+class SourceTrigger(muscadet.ObjFlow):
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+
+        self.add_flow_out_on_trigger(
+            name=flow1,
+            trigger_time_up=1,
+            trigger_time_down=0,
+            trigger_logic="and",
+            var_prod_default=True,
+        )
+		
+class Target(muscadet.ObjFlow):
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+
+        self.add_flow_in(
+            name=flow1,
+            logic="or",
+        )
+```
+
+The specific parameters of the method `add_flow_out_on_trigger` are:
+- `trigger_logic`: The logic applied on the condition to trigger the flow. Can be `and` or `or`.
+- `trigger_time_up`: The transition time from the waiting state to the run state. In this
+  case, the transition occurs after 1 time units.
+- `trigger_time_down`: The transition time from the run state to the waiting state. In this case, the transition occurs after 0 time units. 
+
+To activate the second source when the main source is unavailable, they must be connected as below.
+
+```python
+my_rbd.add_component(cls="Source", name="S1")
+my_rbd.add_component(cls="SourceTrigger", name="S2")
+
+my_rbd.connect_trigger("S1", "S2", flow1)
+```
+
+Here the flow to connect is `flow1` with `S1` as the main source and `S2` as the triggered source.
+
+A classic way to represent this behavior is to use a 2-state automaton to transition between the absence and presence of a failure. In MUSCADET, this can be achieved using the `add_delay_failure_mode` method as shown below:
+```python
+my_rbd.comp["S1"].add_delay_failure_mode(
+    name="failure_deterministic",
+    failure_cond="is_ok_fed_out",
+    failure_time=6,
+    failure_effects=[("is_ok_fed_available_out", False)],
+    repair_time=6,
+)
+```
+
+The parameters of this method are:
+- `name`: The name of the automaton.
+- `flow_name`: The flow to stop if the component is not available.
+- `failure_cond`: The condition to enable a transition from the current state to the sefailure state.
+- `failure_time`: The transition time from the available state to the failure state. In this
+  case, the transition occurs after 6 time units.
+- `failure_effects`: The effects that occur during the transition from the available state to the failure state.
+- `repair_time`: The transition time from the failure state to the repair state. In this case, the transition occurs after 6 time units.
+
+Now we can launch a simulation and display the results for all the `fed_out` flow. 
+
+
+![Results](./examples/rbd_04/indics.png)
+
+
+We observe that target `T` is correctly fed if we have flow propagation from `S1` or `S2`.
+
+The code for this example is available [here](examples/rbd_04/rbd_04.py).
 
 ## More Examples
 
