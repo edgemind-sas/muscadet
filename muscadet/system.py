@@ -77,7 +77,7 @@ class System(cod3s.PycSystem):
         Returns:
             list: A list of connections created.
         """
-        
+
         connections_list = []
 
         available_suffix = "_available" if available_connect else ""
@@ -87,24 +87,21 @@ class System(cod3s.PycSystem):
             if flow_out in self.comp[target].flows_in:
                 flow_name = f"{flow_out}{available_suffix}"
 
-                connection = self.auto_connect_io(
-                    source=source,
-                    target=target,
-                    flow_name=flow_name,
-                    logger=logger
+                connection = self.connect_flow(
+                    source=source, target=target, flow_name=flow_name, logger=logger
                 )
                 if not (connection is None):
                     connections_list.append(connection)
         return connections_list
 
-    def auto_connect_flow(
-            self,
-            source,
-            target,
-            flow_name,
-            source_flow,
-            target_flow,
-            logger=None,
+    def connect_flow(
+        self,
+        source,
+        target,
+        flow_name,
+        out_suffix="_out",
+        in_suffix="_in",
+        logger=None,
     ):
         """
         Connects a specific flow between a source and target component.
@@ -120,55 +117,31 @@ class System(cod3s.PycSystem):
         Returns:
             dict or None: The connection details if created, otherwise None.
         """
-        connection=None
+        connection = None
         if not self.comp[source].is_connected_to(target, flow_name):
-            self.connect(source, source_flow, target, target_flow)
+            self.connect(
+                source, f"{flow_name}{out_suffix}", target, f"{flow_name}{in_suffix}"
+            )
             connection = {
                 "source": source,
                 "flow": flow_name,
                 "target": target,
             }
-            
+
             if not (logger is None):
                 logger.debug(f"{source} -- {flow_name} --> {target}")
         else:
             if not (logger is None):
-                logger.debug(
-                        f"!!! {source} -- {flow_name} --> {target} already exists"
-                    )
+                logger.debug(f"!!! {source} -- {flow_name} --> {target} already exists")
         if not (connection is None):
             return connection
 
-    def auto_connect_io(
-            self,
-            source,
-            target,
-            flow_name,
-            logger=None,
-    ):
-        """
-        Connects input/output flows between source and target components.
-
-        Args:
-            source (str): The source component.
-            target (str): The target component.
-            flow_name (str): The name of the flow to connect.
-            logger (logging.Logger, optional): Logger for debug messages. Defaults to None.
-        """
-        self.auto_connect_flow(
-            source=source,
-            target=target,
-            flow_name=flow_name,
-            source_flow=flow_name + "_out",
-            target_flow=flow_name + "_in",
-        )
-
-    def auto_connect_trigger(
-            self,
-            source,
-            target,
-            flow_name,
-            logger=None,
+    def connect_trigger(
+        self,
+        source,
+        target,
+        flow_name,
+        logger=None,
     ):
         """
         Connects output flow from the source component to the trigger_in flow of the target component.
@@ -179,14 +152,14 @@ class System(cod3s.PycSystem):
             flow_name (str): The name of the flow to connect.
             logger (logging.Logger, optional): Logger for debug messages. Defaults to None.
         """
-        self.auto_connect_flow(
+        self.connect_flow(
             source=source,
             target=target,
             flow_name=flow_name,
-            source_flow=flow_name + "_out",
-            target_flow=flow_name + "_trigger_in",
+            out_suffix="_out",
+            in_suffix="_trigger_in",
         )
-        
+
     def clean_comp_flow_specs(self, comp_flow_specs):
         # Scan input components
         comp_flow_specs_clean = copy.deepcopy(comp_flow_specs)
