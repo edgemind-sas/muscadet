@@ -28,6 +28,7 @@ import muscadet
 # ==================
 flow1 = "is_ok"
 
+
 # Components classes
 # ==================
 class Source(muscadet.ObjFlow):
@@ -101,9 +102,9 @@ my_rbd.comp["B2"].add_delay_failure_mode(
 my_rbd.comp["B3"].add_exp_failure_mode(
     name="failure_stochastic",
     failure_cond="is_ok_fed_out",
-    failure_rate=1/8,
+    failure_rate=1 / 8,
     failure_effects=[("is_ok_fed_available_out", False)],
-    repair_rate=1/4,
+    repair_rate=1 / 4,
 )
 
 # Connect components
@@ -147,6 +148,7 @@ my_rbd.simulate(
     {
         "nb_runs": 10000,
         "schedule": [{"start": 0, "end": 24, "nvalues": 1000}],
+        "seed": 2024,
     }
 )
 
@@ -159,4 +161,4 @@ fig_indics = my_rbd.indic_px_line(
 # fig_indics.write_image(fig_indics_filename)
 
 # Uncomment to display graphic in browser
-fig_indics.show()
+# fig_indics.show()

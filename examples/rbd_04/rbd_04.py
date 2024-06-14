@@ -22,7 +22,6 @@ Simulation:
 """
 
 import muscadet
-import muscadet.utils.common as util
 
 # Global attributes
 # ==================
@@ -48,25 +47,9 @@ class SourceTrigger(muscadet.ObjFlow):
         self.add_flow_out_on_trigger(
             name=flow1,
             trigger_time_up=1,
-            trigger_time_down=1,
+            trigger_time_down=0,
             trigger_logic="and",
             var_prod_default=True,
-        )
-
-
-class Block(muscadet.ObjFlow):
-    def add_flows(self, **kwargs):
-        super().add_flows(**kwargs)
-
-        self.add_flow_in(
-            name=flow1,
-        )
-
-        self.add_flow_out(
-            name=flow1,
-            var_prod_cond=[
-                flow1,
-            ],
         )
 
 
@@ -76,7 +59,7 @@ class Target(muscadet.ObjFlow):
 
         self.add_flow_in(
             name=flow1,
-            logic="and",
+            logic="or",
         )
 
 
@@ -89,36 +72,52 @@ my_rbd = muscadet.System(name="My first RBD")
 # Add components
 my_rbd.add_component(cls="Source", name="S1")
 my_rbd.add_component(cls="SourceTrigger", name="S2")
-my_rbd.add_component(cls="Block", name="B")
 my_rbd.add_component(cls="Target", name="T")
 
-# Add deterministic failure mode to block B1
-util.add_flow_delay(
-    my_rbd.comp["S1"],
+# Add deterministic failure mode to source S1
+my_rbd.comp["S1"].add_delay_failure_mode(
     name="failure_deterministic",
-    flow_name=flow1,
+    failure_cond="is_ok_fed_out",
     failure_time=6,
+    failure_effects=[("is_ok_fed_available_out", False)],
     repair_time=6,
 )
 
 # Connect components
-# my_rbd.connect("S1", flow1 + "_out", "S2", flow1 + "_trigger_in")
-my_rbd.auto_connect_trigger("S1", "S2", flow1)
-my_rbd.auto_connect("S1", "B")
-my_rbd.auto_connect("S2", "B")
-# my_rbd.auto_connect_io("S2", "B", flow1)
-my_rbd.auto_connect("B", "T")
+my_rbd.connect_trigger("S1", "S2", flow1)
+my_rbd.auto_connect("S1", "T")
+my_rbd.connect_flow("S2", "T", flow1)
 
 # System simulation
 # =================
-# util.show_all_indicators_of_component(
-#    sys=my_rbd,
-#    comp=my_rbd.comp["T"],
-#    nb_run=1000,
-# )
-
-util.show_all_indicators_of_system(
-    sys=my_rbd,
-    var=".*_fed_out",
-    nb_run=1000,
+my_rbd.add_indicator_var(
+    component=".*",
+    var=".*fed_out",
+    stats=["mean"],
 )
+
+my_rbd.add_indicator_var(
+    component="T",
+    var="is_ok_fed_in",
+    stats=["mean"],
+)
+
+# System simulation
+# =================
+my_rbd.simulate(
+    {
+        "nb_runs": 1,
+        "schedule": [{"start": 0, "end": 24, "nvalues": 1000}],
+    }
+)
+
+fig_indics = my_rbd.indic_px_line(
+    markers=False, title="Flow monitoring in the RBD", facet_row="name"
+)
+
+# Uncomment to save graphic on disk
+# fig_indics_filename = "indics.png"
+# fig_indics.write_image(fig_indics_filename)
+
+# Display graphic in browser
+# fig_indics.show()
