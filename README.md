@@ -355,16 +355,59 @@ The code for this example is available [here](examples/rbd_02/rbd_02.py).
 
 ### Stochastic Failures
 
+Stochastic failures and their associated variables are similar to deterministic failures, with the key difference being that stochastic failures occur randomly based on failure and repair rates. In this example, we consider stochastic failures for component B3, which can be triggered approximately every 8 time units. Once a failure occurs, a repair event can occur approximately every 4 time units for B3.
+
+A classic way to represent this behavior is to use a 2-state automaton to transition between the absence and presence of a failure. In MUSCADET, this can be achieved using the `add_exp_failure_mode` method as shown below:
 ```python
 my_rbd.comp["B3"].add_exp_failure_mode(
     name="failure_stochastic",
     failure_cond="is_ok_fed_out",
     failure_rate=1/8,
     failure_effects=[("is_ok_fed_available_out", False)],
-    repair_rate=1/3,
+    repair_rate=1/4,
 )
 ```
-10 000 nb runs
+
+The parameters of this method are:
+- `name`: The name of the automaton.
+- `failure_cond`: The condition to enable a transition from the current state to the sefailure state.
+- `failure_rate`: The transition rate from the available state to the failure state. In this case, the transition occurs approximately every 8 time units.
+- `failure_effects`: The effects that occur during the transition from the available state to the failure state.
+- `repair_rate`: The transition rate from the failure state back to the available state. Here, the repair occurs approximately every 4 time units.
+
+Before lauching a simulation, we add indicators to monitor the `is_ok` flow output status for components `B3`:
+```python
+my_rbd.add_indicator_var(
+    component="B3",
+    var="is_ok_fed_out",
+    stats=["mean"],
+)
+```
+Note that the `component="."` parameter means that we want to create an indicator to monitor
+the `is_ok_fed_out` variable of each component. If a component has no `is_ok_fed_out` variable,
+no indicator is created. You can replace "B3" by "." to create the indication for each block.
+
+We can launch a simulation and display the results. For stochastic simulations, it is advisable to use a high number of runs to average out the randomness (e.g., nb_runs = 10 000):
+```python
+my_rbd.simulate(
+    {
+        "nb_runs": 10000,
+        "schedule": [{"start": 0, "end": 24, "nvalues": 1000}],
+    }
+)
+
+fig_indics = my_rbd.indic_px_line(
+    markers=False, title="Flow monitoring in the RBD", facet_row="name"
+).show()
+```
+
+![Results](./examples/rbd_03/indics.png)
+
+
+We observe that target `T` is correctly fed if we have flow propagation from both `B1`, `B2` and `B3` simultaneously.
+
+The code for this example is available [here](examples/rbd_03/rbd_03.py).
+
 
 ## More Examples
 
