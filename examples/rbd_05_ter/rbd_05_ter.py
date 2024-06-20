@@ -52,7 +52,21 @@ class SourceTrigger(muscadet.ObjFlow):
             var_prod_default=True,
         )
 
+class Block(muscadet.ObjFlow):
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
 
+        self.add_flow_in(
+            name=flow1,
+        )
+
+        self.add_flow_out(
+            name=flow1,
+            var_prod_cond=[
+                flow1,
+            ],
+        )
+        
 class Target(muscadet.ObjFlow):
     def add_flows(self, **kwargs):
         super().add_flows(**kwargs)
@@ -72,13 +86,15 @@ my_rbd = muscadet.System(name="My first RBD")
 # Add components
 my_rbd.add_component(cls="Source", name="S1")
 my_rbd.add_component(cls="SourceTrigger", name="S2")
+my_rbd.add_component(cls="Block", name="B1")
+my_rbd.add_component(cls="Block", name="B2")
 my_rbd.add_component(cls="Target", name="T")
 
 # Add deterministic failure mode to source S1
 my_rbd.comp["S1"].add_exp_failure_mode(
     name="failure_deterministic",
     failure_cond="is_ok_fed_out",
-    failure_rate=1 / 6,
+    failure_rate=1 / 24,
     failure_effects=[("is_ok_fed_available_out", False)],
     repair_rate=1 / 2,
 )
@@ -86,16 +102,35 @@ my_rbd.comp["S1"].add_exp_failure_mode(
 my_rbd.comp["S2"].add_exp_failure_mode(
     name="failure_deterministic",
     failure_cond="is_ok_fed_out",
-    failure_rate=1 / 3,
+    failure_rate=1 / 24,
     failure_effects=[("is_ok_fed_available_out", False)],
     repair_rate=1 / 2,
 )
 
+my_rbd.comp["B1"].add_exp_failure_mode(
+    name="failure_deterministic",
+    failure_cond="is_ok_fed_out",
+    failure_rate=1 / 10,
+    failure_effects=[("is_ok_fed_available_out", False)],
+    repair_rate=1 / 24,
+)
+
+my_rbd.comp["B2"].add_exp_failure_mode(
+    name="failure_deterministic",
+    failure_cond="is_ok_fed_out",
+    failure_rate=1 / 10,
+    failure_effects=[("is_ok_fed_available_out", False)],
+    repair_rate=1 / 24,
+)
 
 # Connect components
 my_rbd.connect_trigger("S1", "S2", flow1)
-my_rbd.auto_connect("S1", "T")
-my_rbd.auto_connect("S2", "T")
+my_rbd.auto_connect("S1", "B1")
+my_rbd.auto_connect("S2", "B1")
+my_rbd.auto_connect("S1", "B2")
+my_rbd.auto_connect("S2", "B2")
+my_rbd.auto_connect("B1", "T")
+my_rbd.auto_connect("B2", "T")
 
 # Configure sequences
 # -------------------
@@ -103,16 +138,41 @@ my_rbd.addTarget("top_event", "T.is_ok_fed_in", "VAR", "!=", 1)
 my_rbd.monitorTransition("#.*")
 # my_rbd.setKeepFilteredSeqForInd(False)
 
-__import__("ipdb").set_trace()
+my_rbd.add_indicator_var(
+    component="S.*",
+    var="is_ok_fed_out",
+    stats=["mean"],
+)
+
+my_rbd.add_indicator_var(
+    component="B1",
+    var="is_ok_fed_out",
+    stats=["mean"],
+)
+my_rbd.add_indicator_var(
+    component="T",
+    var="is_ok_fed_in",
+    stats=["mean"],
+)
+
+#__import__("ipdb").set_trace()
 
 # System simulation
 # =================
 my_rbd.simulate(
     {
-        "nb_runs": 1,
+        "nb_runs": 10,
         "schedule": [{"start": 0, "end": 24, "nvalues": 1000}],
+        "seed": 2024,
     }
 )
+
+fig_indics = my_rbd.indic_px_line(
+    markers=False, title="Flow monitoring in the RBD", facet_row="name"
+)
+
+# Uncomment to display graphic in browser
+fig_indics.show()
 
 import Pycatshoo as pyc
 
@@ -120,3 +180,4 @@ analyser = pyc.CAnalyser(my_rbd)
 analyser.keepFilteredSeq(True)
 
 analyser.printFilteredSeq(100, "sequences.xml", "PySeq.xsl")
+
