@@ -30,14 +30,10 @@ import Pycatshoo as Pyc
 # ==================
 flow1 = "is_ok"
 
-
-def my_sequence_filter(sequence):
-    target_is_ok = Pyc.CSystem.glSystem().getMonitoredElt("T.is_ok_fed_in", "VAR")
-    return (sequence.value(target_is_ok, 24) == 0)
-            
             
 # System building
 # ===============
+
 # System init
 my_rbd = muscadet.System(name="My first RBD")
 
@@ -93,23 +89,21 @@ my_rbd.auto_connect("S2", "B2")
 my_rbd.connect_flow("B1", "T", flow1)
 my_rbd.connect_flow("B2", "T", flow1)
     
+# Configure sequences
+# -------------------
+my_rbd.addTarget("top_event", "T.is_ok_fed_in", "VAR", "!=", 1)
+my_rbd.monitorTransition("#.*")
+
 # System simulation
 # =================
-my_rbd.add_indicator_var(
-    component="T",
-    var="is_ok_fed_in",
-    stats=["mean"],
-)
-    
-#my_rbd.setResultFileName("result/result.xml", True)
-    
 my_rbd.simulate(
     {
-        "nb_runs": 10000,
+        "nb_runs": 10,
         "schedule": [{"start": 0, "end": 24, "nvalues": 1000}],
         "seed": 2024,
     }
 )
 
 analyser = Pyc.CAnalyser(my_rbd)
-analyser.printFilteredSeq(100., "result/result.xml", "PySeq.xsl")
+analyser.keepFilteredSeq(True)
+analyser.printFilteredSeq(100, "sequence.xml", "PySeq.xsl")

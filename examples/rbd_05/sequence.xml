@@ -1,0 +1,17 @@
+<PYCRS NS="10" NSF="10">
+	<SEQ N="4" P="0.4" C="top_event">
+		<BR T="0.442781">
+			<TR NAME="B1.failure_stochastic_absent_present" ST="failure_stochastic_present" I="0" TT="1" TD="exp"/>
+		</BR>
+	</SEQ>
+	<SEQ N="3" P="0.3" C="top_event">
+		<BR T="0.4832">
+			<TR NAME="S1.failure_stochastic_absent_present" ST="failure_stochastic_present" I="0" TT="1" TD="exp"/>
+		</BR>
+	</SEQ>
+	<SEQ N="3" P="0.3" C="top_event">
+		<BR T="2.40926">
+			<TR NAME="B2.failure_stochastic_absent_present" ST="failure_stochastic_present" I="0" TT="1" TD="exp"/>
+		</BR>
+	</SEQ>
+</PYCRS>
