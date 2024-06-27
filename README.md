@@ -498,6 +498,95 @@ We observe that target `T` is correctly fed if we have flow propagation from `S1
 
 The code for this example is available [here](examples/rbd_04/rbd_04.py).
 
+
+### Knowledge base classes
+
+Some generic classes can be import from the knowledge base "kb".
+The generic classes present in kb are:
+- Source
+- SourceTrigger
+- Block
+- Target
+
+The **Sources** components are capable of producing a functional flow
+The **SourceTrigger** components are capable of producing a functional flow depending on a triggering condition
+The **Blocks** components can receive and propagate flows
+The **Targets** components that receive the flows
+
+There are 2 methods to create a component of a Class from the knowledge base.
+
+```python
+import muscadet.kb.rbd as rbd
+
+# Components classes
+# ==================
+# Add components
+my_rbd.add_component(cls="Source", name="S1")
+s1 = rbd.Source("S1")
+```
+The method "add_component(cls=className, name=componentName)" can find the className in the imported file. (Source is available in muscadet.kb.rbd)
+The second method is "rbd.Source(name)", Source is accessible from the rbd.
+
+```python
+import muscadet.kb.rbd as rbd
+
+# Components classes
+# ==================
+# Add components
+my_rbd.add_component(cls="Source", name="S1")
+my_rbd.add_component(cls="SourceTrigger", name="S2")
+my_rbd.add_component(cls="Block", name="B1")
+my_rbd.add_component(cls="Block", name="B2")
+my_rbd.add_component(cls="Target", name="T")
+```
+The code for this example is available [here](examples/rbd_05/rbd_05/rbd_05.py).
+
+### Sequences analysis
+
+Pycatshoo can analyze for each simulation the list of transitions that have been triggered and obtain the list of all sequences obtained after all simulations.
+To do this, the list of transitions to observe msut be monitored. The transitions to monitor can be filtered to display only the transitions of a specific component, for example.
+Here, using the pattern "#.*" allows to monitor all transitions to be exhaustive.
+
+To analyze all the sequences that lead to a particular state of an element, the method "setTarget" must be used. Thus, each simulation will stop as soon as the target is reached.
+
+```python
+# Configure sequences
+# -------------------
+my_rbd.addTarget("top_event", "T.is_ok_fed_in", "VAR", "!=", 1)
+my_rbd.monitorTransition("#.*")
+```
+
+The parameters of the target method are:
+- `name`: The name of the target, "top_event".
+- `variable`: the name of the target event, "T.is_ok_fed_in".
+- `target type`: The type of the transition to reach. Should be a variable "VAR" or a "STATE"
+- `condition`: The condition to stop, var != 1 for example.
+
+```python
+# System simulation
+# =================
+my_rbd.simulate(
+    {
+        "nb_runs": 10,
+        "schedule": [{"start": 0, "end": 24, "nvalues": 1000}],
+    }
+)
+```
+
+To use the Analyser and export the sequences in HTML and XML result files, some methods from Pycatshoo library must be imported.
+The method `printFilteredSeq` will create an XML file with all the explored sequences, and then an HTML file will be created if a Java application is installed. 
+
+```python
+import Pycatshoo as pyc
+
+analyser = pyc.CAnalyser(my_rbd)
+analyser.keepFilteredSeq(True)
+
+analyser.printFilteredSeq(100, "sequences.xml", "PySeq.xsl")
+```
+
+The code for this example is available [here](examples/rbd_05/rbd_05_bis/rbd_05_bis.py).
+
 ## More Examples
 
 ## Documentation
