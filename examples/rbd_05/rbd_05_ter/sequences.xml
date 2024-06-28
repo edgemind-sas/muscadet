@@ -1,7 +1,0 @@
-<PYCRS NS="1" NSF="1">
-	<SEQ N="1" P="1" C="top_event">
-		<BR T="3">
-			<TR NAME="S1.failure_deterministic_absent_present" ST="failure_deterministic_present" I="0" TT="1" TD="delay"/>
-		</BR>
-	</SEQ>
-</PYCRS>

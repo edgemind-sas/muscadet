@@ -501,19 +501,19 @@ The code for this example is available [here](examples/rbd_04/rbd_04.py).
 
 ### Knowledge base classes
 
-Some generic classes can be import from the knowledge base "kb".
-The generic classes present in kb are:
+Some generic classes can be import from the knowledge base `kb`.
+These classes are:
 - Source
 - SourceTrigger
 - Block
 - Target
 
-The **Sources** components are capable of producing a functional flow
-The **SourceTrigger** components are capable of producing a functional flow depending on a triggering condition
-The **Blocks** components can receive and propagate flows
-The **Targets** components that receive the flows
+**Sources** are components capable of producing a functional flow
+**SourceTrigger** are components capable of producing a functional flow depending on a triggering condition
+**Blocks** components can receive and propagate flows
+**Targets** are components that receive the flows
 
-There are 2 methods to create a component of a Class from the knowledge base.
+There are 2 methods to create a component of a class from the knowledge base.
 
 ```python
 import muscadet.kb.rbd as rbd
@@ -524,8 +524,9 @@ import muscadet.kb.rbd as rbd
 my_rbd.add_component(cls="Source", name="S1")
 s1 = rbd.Source("S1")
 ```
-The method "add_component(cls=className, name=componentName)" can find the className in the imported file. (Source is available in muscadet.kb.rbd)
-The second method is "rbd.Source(name)", Source is accessible from the rbd.
+
+The method `add_component(cls=className, name=componentName)` can find the `className` in the imported file. (Source is available in muscadet.kb.rbd)
+The second method is `rbd.Source(name)`, where `Source` is accessible from the `rbd`.
 
 ```python
 import muscadet.kb.rbd as rbd
@@ -539,15 +540,18 @@ my_rbd.add_component(cls="Block", name="B1")
 my_rbd.add_component(cls="Block", name="B2")
 my_rbd.add_component(cls="Target", name="T")
 ```
-The code for this example is available [here](examples/rbd_05/rbd_05/rbd_05.py).
+The code for this example is available [here](examples/rbd_05/rbd_05.py).
 
 ### Sequences analysis
 
-Pycatshoo can analyze for each simulation the list of transitions that have been triggered and obtain the list of all sequences obtained after all simulations.
-To do this, the list of transitions to observe msut be monitored. The transitions to monitor can be filtered to display only the transitions of a specific component, for example.
-Here, using the pattern "#.*" allows to monitor all transitions to be exhaustive.
+Pycatshoo can analyze for each simulation the list of transitions that have been triggered and
+obtain the sequences of all transitions obtained after all simulations.
+To do this, the list of transitions to observe msut be monitored. The transitions to monitor
+can be filtered to display only specific component transitions.
+Here, using the pattern `#.*` allows monitoring all transitions exhaustively.
 
-To analyze all the sequences that lead to a particular state of an element, the method "setTarget" must be used. Thus, each simulation will stop as soon as the target is reached.
+To analyze all sequences leading to a particular state of an element, use the
+`addTarget` method. Thus, each simulation will stop as soon as the target is reached.
 
 ```python
 # Configure sequences
@@ -556,11 +560,12 @@ my_rbd.addTarget("top_event", "T.is_ok_fed_in", "VAR", "!=", 1)
 my_rbd.monitorTransition("#.*")
 ```
 
-The parameters of the target method are:
-- `name`: The name of the target, "top_event".
-- `variable`: the name of the target event, "T.is_ok_fed_in".
-- `target type`: The type of the transition to reach. Should be a variable "VAR" or a "STATE"
-- `condition`: The condition to stop, var != 1 for example.
+The parameters of the `addTarget` method are:
+- `name`: The name of the target (e.g., `top_event`).
+- `elementName`: the name of the target event (e.g., `T.is_ok_fed_in`).
+- `elementType`: The type of the target event. Should be a variable `VAR`, `ST`, `AUT`,or `NULL`
+- `op`: The operation of the condition (e.g., can be != or ==).
+- `value`: The condition value to stop (e.g., a state or a value of a variable).
 
 ```python
 # System simulation
@@ -573,8 +578,10 @@ my_rbd.simulate(
 )
 ```
 
-To use the Analyser and export the sequences in HTML and XML result files, some methods from Pycatshoo library must be imported.
-The method `printFilteredSeq` will create an XML file with all the explored sequences, and then an HTML file will be created if a Java application is installed. 
+To use the Analyser and export the sequences in HTML and XML result files, some methods from
+the Pycatshoo library must be imported.
+The method `printFilteredSeq` will create an XML file with all the explored sequences, followed
+by an HTML file if the Java application is installed. 
 
 ```python
 import Pycatshoo as pyc
@@ -585,8 +592,10 @@ analyser.keepFilteredSeq(True)
 analyser.printFilteredSeq(100, "sequences.xml", "PySeq.xsl")
 ```
 
-The code for this example is available [here](examples/rbd_05/rbd_05_bis/rbd_05_bis.py).
+The code for this example is available [here](examples/rbd_06/rbd_06.py).
 
 ## More Examples
 
-## Documentation
+[here](examples/datacenter/README.md).
+
+

@@ -25,9 +25,29 @@ Simulation:
 import muscadet
 import muscadet.kb.datacenter as dc
 
-# Global attributes
-# ==================
-            
+# Global Class
+# ===============
+class AirConditioning(muscadet.ObjFlow):
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+
+        self.add_flow_in(
+            name="elec",
+        )
+        
+        self.add_flow_in(
+            name="hydr",
+        )
+
+        self.add_flow_out(
+            name="hydr_hot",
+            var_prod_cond=[
+                "elec",
+                "hydr",
+            ],
+        )
+         
+         
 # System building
 # ===============
 # System init
@@ -35,41 +55,30 @@ my_rbd = muscadet.System(name="Server RBD")
 
 # Add components
 my_rbd.add_component(cls="Generator", name="S1")
-my_rbd.add_component(cls="Generator", name="S2")
-my_rbd.add_component(cls="TableauElectrique", name="TabElec")
-my_rbd.add_component(cls="Batterie", name="Server")
+my_rbd.add_component(cls="Pump", name="P1")
+my_rbd.add_component(cls="AirConditioning", name="air")
 
-# Add stochastic failure mode to block S1
-my_rbd.comp["S1"].add_exp_failure_mode(
-    name="failure_stochastic",
+# Add deterministic failure mode to Generator S1
+my_rbd.comp["S1"].add_delay_failure_mode(
+    name="failure_deterministic",
     failure_cond="elec_fed_out",
-    failure_rate=1 / 4,
+    failure_time=6,
     failure_effects=[("elec_fed_available_out", False)],
-    repair_rate=1 / 4,
+    repair_time=3,
 )
 
-# Add stochastic failure mode to block S2
-my_rbd.comp["S2"].add_exp_failure_mode(
-    name="failure_stochastic",
-    failure_cond="elec_fed_out",
-    failure_rate=1 / 4,
-    failure_effects=[("elec_fed_available_out", False)],
-    repair_rate=1 / 4,
-)
-
-# Add stochastic failure mode to block TabElec
-my_rbd.comp["TabElec"].add_exp_failure_mode(
-    name="failure_stochastic",
-    failure_cond="elec_fed_out",
-    failure_rate=1 / 4,
-    failure_effects=[("elec_fed_available_out", False)],
-    repair_rate=1 / 4,
+# Add deterministic failure mode to Pump P1
+my_rbd.comp["P1"].add_delay_failure_mode(
+    name="failure_deterministic",
+    failure_cond="hydr_fed_out",
+    failure_time=4,
+    failure_effects=[("hydr_fed_available_out", False)],
+    repair_time=3,
 )
 
 # Connect components
-my_rbd.auto_connect("S1", "TabElec")
-my_rbd.auto_connect("S2", "TabElec")
-my_rbd.auto_connect("TabElec", "Server")
+my_rbd.auto_connect("S1", "air")
+my_rbd.auto_connect("P1", "air")
 
 # System simulation
 # =================
@@ -79,15 +88,9 @@ my_rbd.add_indicator_var(
     stats=["mean"],
 )
 
-my_rbd.add_indicator_var(
-    component="Server",
-    var="elec_fed_in",
-    stats=["mean"],
-)
-
 my_rbd.simulate(
     {
-        "nb_runs": 10000,
+        "nb_runs": 1,
         "schedule": [{"start": 0, "end": 24, "nvalues": 1000}],
         "seed": 2024,
     }
@@ -98,8 +101,8 @@ fig_indics = my_rbd.indic_px_line(
 )
 
 # Uncomment to save graphic on disk
-# fig_indics_filename = "indics.png"
-# fig_indics.write_image(fig_indics_filename)
+fig_indics_filename = "datacenter_02.png"
+fig_indics.write_image(fig_indics_filename)
 
 # Display graphic in browser
 fig_indics.show()

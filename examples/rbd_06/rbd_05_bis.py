@@ -3,6 +3,7 @@ This example demonstrates how to create a basic Reliability Block Diagram (RBD) 
 The RBD consists of two source components in parallel, the second will start only if the first one is KO, two block component in parallel and a target component.
 The sources produce a functional flow, which is propagated through the blocks to the target.
 The example also includes the addition of stochastics failures modes to the main source, indicators, and running a simulation to observe flow propagation and the impact of failures.
+The first source will stop at 3 then the second source will stop at 8. The simulation should end at 8 with the sequence "S1 and S2".
 
 In this example, the target "T.is_ok_fed_in" is set into the system "my_rbd". Each simulation must end the first time the target is triggered.
 All transitions are monitored, and the sequences leading to the target are stored in XML and html files.
@@ -27,7 +28,6 @@ Simulation:
 
 import muscadet
 import muscadet.kb.rbd as rbd
-import Pycatshoo as Pyc
 
 # Global attributes
 # ==================
@@ -36,7 +36,6 @@ flow1 = "is_ok"
             
 # System building
 # ===============
-
 # System init
 my_rbd = muscadet.System(name="My first RBD")
 
@@ -106,6 +105,11 @@ my_rbd.simulate(
         "seed": 2024,
     }
 )
+
+# Uncomment to display graphic in browser
+# fig_indics.show()
+
+import Pycatshoo as pyc
 
 analyser = Pyc.CAnalyser(my_rbd)
 analyser.keepFilteredSeq(True)

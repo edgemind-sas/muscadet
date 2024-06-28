@@ -41,15 +41,3 @@ class DipoleHydr(muscadet.ObjFlow):
                 flow_name,
             ],
         )
-        
-        
-# Components classes
-# ==================
-class Pump(SourceHydr):
-    def add_flows(self, **kwargs):
-        super().add_flows(**kwargs)
-        
-        
-class Valve(UserHydr):
-    def add_flows(self, **kwargs):
-        super().add_flows(**kwargs)
