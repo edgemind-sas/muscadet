@@ -1,16 +1,12 @@
 import Pycatshoo as pyc
 import typing
 import pydantic
-import pkg_resources
+
 import cod3s
 from .common import get_pyc_type
 
-installed_pkg = {pkg.key for pkg in pkg_resources.working_set}
-if "ipdb" in installed_pkg:
-    import ipdb  # noqa: F401
 
-
-class FlowModel(pydantic.BaseModel):
+class FlowModel(cod3s.ObjCOD3S):
 
     name: str = pydantic.Field(..., description="Flow name")
 
@@ -338,6 +334,10 @@ class FlowOutTempo(FlowOut):
     state_enable_name: str = pydantic.Field(
         "enabled", description="Name of the enable state"
     )
+    state_enabling_name: str = pydantic.Field(
+        "enabling", description="Name of the enable state"
+    )
+
     state_disable_name: str = pydantic.Field(
         "disabled", description="Name of the disable state"
     )

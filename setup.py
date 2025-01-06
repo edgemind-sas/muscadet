@@ -3,7 +3,13 @@
 from setuptools import setup, find_packages
 
 VERSION = "0.0.14"
+COD3S_VERSION = "@0.0.31"
+COD3S_VERSION = ""
 
+# Specify local cod3s path directly
+COD3S_REQUIREMENT = (
+    f"cod3s @ git+https://github.com/edgemind-sas/cod3s.git{COD3S_VERSION}"
+)
 setup(
     name="muscadet",
     version=VERSION,
@@ -38,7 +44,8 @@ setup(
     platforms="ALL",
     python_requires=">=3.8",
     install_requires=[
-        "cod3s @ git+https://github.com/edgemind-sas/cod3s.git",
+        # f"cod3s @ git+https://github.com/edgemind-sas/cod3s.git{COD3S_VERSION}",
+        COD3S_REQUIREMENT,
         "graphviz==0.20.1",
     ],
     zip_safe=False,

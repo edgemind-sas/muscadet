@@ -8,7 +8,8 @@ import Pycatshoo as pyc
 from .flow import FlowIn, FlowOut, FlowIO, FlowOutOnTrigger, FlowOutTempo
 import cod3s
 import re
-
+import warnings
+import copy
 
 # class TransitionEffect(BaseModel):
 #     var_name: str = \
@@ -64,7 +65,15 @@ class ObjFlow(cod3s.PycComponent):
         Adds a delay failure mode to the component.
     """
 
-    def __init__(self, name, label=None, description=None, metadata={}, **kwargs):
+    def __init__(
+        self,
+        name,
+        label=None,
+        description=None,
+        partial_init=False,
+        metadata={},
+        **kwargs,
+    ):
 
         super().__init__(
             name, label=label, description=description, metadata=metadata, **kwargs
@@ -77,11 +86,17 @@ class ObjFlow(cod3s.PycComponent):
         self.params = {}
         self.automata = {}
 
-        kwargs.update(metadata=metadata)
+        if partial_init:
+            # In this cas you need to explicitly call add_flow and set_flows to
+            # Create complete the object creation
+            pass
+        else:
+            # TOREMOVE?: WHAT IS THE POINT TO PASS METADATA HERE SINCE IT IS ALREADY AN ATTRIBUTE ?
+            kwargs.update(metadata=metadata)
 
-        self.add_flows(**kwargs)
+            self.add_flows(**kwargs)
 
-        self.set_flows(**kwargs)
+            self.set_flows(**kwargs)
 
     def is_connected_to(self, target, flow):
         """
@@ -133,6 +148,120 @@ class ObjFlow(cod3s.PycComponent):
         # TO BE OVERLOADED
         pass
 
+    # def add_flow_in(self, flow_specs):
+    #     """
+    #     Adds an input flow to the component.
+
+    #     Parameters
+    #     ----------
+    #     **params : dict
+    #         Parameters for the input flow.
+    #     """
+    #     if isinstance(flow_specs, FlowIn):
+    #         flow_name = flow_specs.name
+    #     else:
+    #         flow_name = flow_specs.get("name")
+    #     if not (flow_name in self.flows_in):
+    #         self.flows_in[flow_name] = (
+    #             flow_specs if isinstance(flow_specs, FlowIn) else FlowIn(**flow_specs)
+    #         )
+    #     else:
+    #         raise ValueError(f"Input flow {flow_name} already exists")
+
+    def postprocess_flow_specs(self, flow_specs):
+        """
+        Processes and prepares flow specifications, particularly handling production conditions.
+
+        This method processes the var_prod_cond parameter in flow specifications to convert
+        string or list-based production conditions into the internal format required by the system.
+        It handles single conditions, conjunctive conditions (AND), and disjunctive conditions (OR).
+
+        Parameters
+        ----------
+        flow_specs : dict
+            Flow specifications dictionary containing parameters for the flow.
+            The var_prod_cond key can contain:
+            - A single string (flow name)
+            - A list of strings (OR condition)
+            - A list of lists (AND of ORs condition)
+
+        Returns
+        -------
+        dict
+            A copy of the input flow_specs with processed var_prod_cond if present.
+            The var_prod_cond is converted into a list of lists format where:
+            - Outer list represents AND conditions
+            - Inner lists represent OR conditions
+            - Each condition references the actual flow object instead of its name
+        """
+        flow_specs = copy.deepcopy(flow_specs)
+
+        # Postprocess : var_prod_cond
+        if var_prod_cond := flow_specs.get("var_prod_cond"):
+            if isinstance(var_prod_cond, str):
+                var_prod_cond = [[var_prod_cond]]
+            elif isinstance(var_prod_cond, (list, set, tuple)):
+                # Prepare production condition structure in conjonctive way
+                # [(C11 or C12 or ... or C1_k1) and (C21 or ... C2_k2) and ...
+                # and (Cn1 or ... or Cn_kn)]
+                var_prod_cond_tiny = []
+                for flow_disj in var_prod_cond:
+                    # Get input flow associated to production conditions
+                    if isinstance(flow_disj, str):
+                        if fin := self.flows_in[flow_disj]:
+                            flow_disj_tiny = [fin]
+                        else:
+                            raise ValueError(
+                                f"Input flow {flow_disj} does not exist (you must create it before using it in a FlowOut condition"
+                            )
+                    elif isinstance(flow_disj, (list, set, tuple)):
+                        flow_disj_tiny = []
+                        for flow_name in list(flow_disj):
+                            if fin := self.flows_in[flow_name]:
+                                flow_disj_tiny.append(fin)
+                            else:
+                                raise ValueError(
+                                    f"Input flow {flow_name} does not exist (you must create it before using it in a FlowOut condition"
+                                )
+
+                    else:
+                        raise ValueError(
+                            f"Bad format for production condition structure : {flow_disj}"
+                        )
+                    var_prod_cond_tiny.append(flow_disj_tiny)
+            else:
+                raise ValueError(
+                    f"Bad format for main conjonctive format of production condition : {var_prod_cond}"
+                )
+
+            flow_specs["var_prod_cond"] = var_prod_cond_tiny
+
+        # Postprocess : other attributes...
+
+        return flow_specs
+
+    def add_flow(self, flow_specs):
+
+        if "cls" not in flow_specs:
+            raise ValueError(
+                "Please add provide a cls attribute to indicate the class of the flow to be added"
+            )
+        flow_specs = self.postprocess_flow_specs(flow_specs)
+        flow = cod3s.ObjCOD3S.from_dict(flow_specs)
+
+        if isinstance(flow, FlowIn):
+            if flow.name in self.flows_in:
+                raise ValueError(f"Input flow {flow.name} already exists")
+            else:
+                self.flows_in[flow.name] = flow
+        elif isinstance(flow, FlowOut):
+            if flow.name in self.flows_out:
+                raise ValueError(f"Output flow {flow.name} already exists")
+            else:
+                self.flows_out[flow.name] = flow
+        else:
+            raise ValueError(f"Flow of type {type(flow)} unsupported")
+
     def add_flow_in(self, **params):
         """
         Adds an input flow to the component.
@@ -163,6 +292,7 @@ class ObjFlow(cod3s.PycComponent):
         else:
             raise ValueError(f"Input/Output flow {flow_name} already exists")
 
+    # DEPRACATED
     def prepare_flow_out_params(self, **params):
         """
         Prepares the parameters for an output flow.
@@ -177,6 +307,11 @@ class ObjFlow(cod3s.PycComponent):
         dict
             The prepared parameters for the output flow.
         """
+        warnings.warn(
+            "prepare_flow_out_params() is deprecated and will be removed in a future version",
+            DeprecationWarning,
+            stacklevel=2,
+        )
         var_prod_cond = params.get("var_prod_cond")
         if var_prod_cond:
             if isinstance(var_prod_cond, str):
