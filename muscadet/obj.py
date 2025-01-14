@@ -71,6 +71,7 @@ class ObjFlow(cod3s.PycComponent):
         label=None,
         description=None,
         partial_init=False,
+        create_default_out_automata=False,
         metadata={},
         **kwargs,
     ):
@@ -85,6 +86,7 @@ class ObjFlow(cod3s.PycComponent):
 
         self.params = {}
         self.automata = {}
+        self.has_default_out_automata = create_default_out_automata
 
         if partial_init:
             # In this cas you need to explicitly call add_flow and set_flows to
@@ -237,6 +239,13 @@ class ObjFlow(cod3s.PycComponent):
             flow_specs["var_prod_cond"] = var_prod_cond_tiny
 
         # Postprocess : other attributes...
+        if occ_enable_flow := flow_specs.get("occ_enable_flow"):
+            occ_clsname = occ_enable_flow.get("cls")
+            if "OccDistribution" not in occ_clsname:
+                occ_clsname = occ_clsname.capitalize() + "OccDistribution"
+                occ_enable_flow["cls"] = occ_clsname
+
+            flow_specs["occ_enable_flow"] = occ_enable_flow
 
         return flow_specs
 
@@ -259,6 +268,23 @@ class ObjFlow(cod3s.PycComponent):
                 raise ValueError(f"Output flow {flow.name} already exists")
             else:
                 self.flows_out[flow.name] = flow
+
+            if self.has_default_out_automata:
+                self.add_atm2states(
+                    flow.name,
+                    st1="ok",
+                    st2="nok",
+                    init_st2=False,
+                    cond_occ_12=True,
+                    occ_law_12={"cls": "exp", "rate": 1e-100},
+                    occ_interruptible_12=True,
+                    effects_12=[(".*_available_out", False)],
+                    cond_occ_21=True,
+                    occ_law_21={"cls": "exp", "rate": 1e-100},
+                    occ_interruptible_21=True,
+                    effects_21=[],
+                )
+
         else:
             raise ValueError(f"Flow of type {type(flow)} unsupported")
 
@@ -352,7 +378,6 @@ class ObjFlow(cod3s.PycComponent):
         **params : dict
             Parameters for the output flow.
         """
-
         params = self.prepare_flow_out_params(**params)
 
         flow_name = params.get("name")

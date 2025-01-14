@@ -2,8 +2,8 @@
 
 from setuptools import setup, find_packages
 
-VERSION = "0.0.15"
-COD3S_VERSION = "@0.0.31"
+VERSION = "0.0.16"
+COD3S_VERSION = "@0.0.32"
 COD3S_VERSION = ""
 
 # Specify local cod3s path directly

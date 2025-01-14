@@ -321,8 +321,10 @@ class FlowOut(FlowModel):
 
 
 class FlowOutTempo(FlowOut):
-    occ_enable_flow: dict = pydantic.Field(
-        {"cls": "delay", "time": 0}, description="Temporisation law to let flow out"
+    occ_enable_flow: typing.Union[dict | cod3s.OccurrenceDistributionModel] = (
+        pydantic.Field(
+            {"cls": "delay", "time": 0}, description="Temporisation law to let flow out"
+        )
     )
     occ_disable_flow: dict = pydantic.Field(
         {"cls": "delay", "time": 0}, description="Temporisation law to block flow out"

@@ -1,47 +1,72 @@
 import muscadet
 
 
-class Start(muscadet.ObjFlow):
+class ObjProject(muscadet.ObjFlow):
+
+    def __init__(self, name, create_default_out_automata=True, **kwargs):
+        super().__init__(
+            name, create_default_out_automata=create_default_out_automata, **kwargs
+        )
+
+
+class Start(ObjProject):
 
     def add_flows(self, **kwargs):
 
         super().add_flows(**kwargs)
 
-        self.add_flow_out(
-            name="flow",
-            var_prod_default=True,
+        self.add_flow(
+            dict(
+                cls="FlowOut",
+                name="flow",
+                var_prod_default=True,
+            )
         )
 
 
-class Task(muscadet.ObjFlow):
+class Task(ObjProject):
 
-    def add_flows(self, duration_min=0, duration_max=0, **kwargs):
+    def add_flows(self, duration_mean=0, **kwargs):
 
         super().add_flows(**kwargs)
 
-        self.add_flow_in(
-            name="flow",
-            logic="and",
+        self.add_flow(
+            dict(
+                cls="FlowIn",
+                name="flow",
+                logic="and",
+            )
         )
 
-        self.add_flow_out_tempo(
-            name="flow",
-            var_prod_cond=[
-                "flow",
-            ],
-            state_enable_name="Done",
-            state_disable_name="Waiting",
-            occ_enable_flow=dict(cls="exp", rate=2 / (duration_min + duration_max)),
+        if duration_mean > 0:
+            occ_law = dict(cls="exp", rate=1 / (duration_mean))
+        else:
+            occ_law = dict(cls="delay", time=0)
+
+        self.add_flow(
+            dict(
+                cls="FlowOutTempo",
+                name="flow",
+                var_prod_cond=[
+                    "flow",
+                ],
+                state_enable_name="Done",
+                state_disable_name="Waiting",
+                occ_enable_flow=occ_law,
+            )
         )
 
 
-class End(muscadet.ObjFlow):
+class End(ObjProject):
 
     def add_flows(self, **kwargs):
 
         super().add_flows(**kwargs)
 
-        self.add_flow_in(
-            name="flow",
-            logic="and",
+        self.add_flow(
+            dict(
+                cls="FlowIn",
+                name="flow",
+                logic="and",
+            )
         )
