@@ -268,23 +268,6 @@ class ObjFlow(cod3s.PycComponent):
                 raise ValueError(f"Output flow {flow.name} already exists")
             else:
                 self.flows_out[flow.name] = flow
-
-            if self.has_default_out_automata:
-                self.add_atm2states(
-                    flow.name,
-                    st1="ok",
-                    st2="nok",
-                    init_st2=False,
-                    cond_occ_12=True,
-                    occ_law_12={"cls": "exp", "rate": 1e-100},
-                    occ_interruptible_12=True,
-                    effects_12=[(".*_available_out", False)],
-                    cond_occ_21=True,
-                    occ_law_21={"cls": "exp", "rate": 1e-100},
-                    occ_interruptible_21=True,
-                    effects_21=[],
-                )
-
         else:
             raise ValueError(f"Flow of type {type(flow)} unsupported")
 
@@ -462,6 +445,22 @@ class ObjFlow(cod3s.PycComponent):
             flow.update_sensitive_methods(self)
             flow.add_automata(self)
 
+            if self.has_default_out_automata and isinstance(flow, FlowOut):
+                self.add_atm2states(
+                    flow.name,
+                    st1="ok",
+                    st2="nok",
+                    init_st2=False,
+                    cond_occ_12=True,
+                    occ_law_12={"cls": "exp", "rate": 1e-100},
+                    occ_interruptible_12=True,
+                    effects_12=[(".*_available_out", False)],
+                    cond_occ_21=True,
+                    occ_law_21={"cls": "exp", "rate": 1e-100},
+                    occ_interruptible_21=True,
+                    effects_21=[],
+                )
+
     def pat_to_var_value(self, *pat_value_list):
         """
         Converts pattern-value pairs to variable-value pairs.
@@ -485,10 +484,8 @@ class ObjFlow(cod3s.PycComponent):
             var_list = [
                 (var, value) for var in variables if re.search(pat, var.basename())
             ]
-
             var_value_list.extend(var_list)
 
-        # ipdb.set_trace()
         return var_value_list
 
     def add_automaton_flow(self, aut):
