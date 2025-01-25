@@ -210,20 +210,20 @@ class ObjFlow(cod3s.PycComponent):
                 for flow_disj in var_prod_cond:
                     # Get input flow associated to production conditions
                     if isinstance(flow_disj, str):
-                        if fin := self.flows_in[flow_disj]:
+                        if fin := self.flows_in.get(flow_disj):
                             flow_disj_tiny = [fin]
                         else:
                             raise ValueError(
-                                f"Input flow {flow_disj} does not exist (you must create it before using it in a FlowOut condition"
+                                f"Object {self.name()}: Input flow {flow_disj} does not exist (you must create it before using it in a FlowOut condition"
                             )
                     elif isinstance(flow_disj, (list, set, tuple)):
                         flow_disj_tiny = []
                         for flow_name in list(flow_disj):
-                            if fin := self.flows_in[flow_name]:
+                            if fin := self.flows_in.get(flow_name):
                                 flow_disj_tiny.append(fin)
                             else:
                                 raise ValueError(
-                                    f"Input flow {flow_name} does not exist (you must create it before using it in a FlowOut condition"
+                                    f"Object {self.name()}: Input flow {flow_name} does not exist (you must create it before using it in a FlowOut condition"
                                 )
 
                     else:
@@ -317,7 +317,7 @@ class ObjFlow(cod3s.PycComponent):
             The prepared parameters for the output flow.
         """
         warnings.warn(
-            "prepare_flow_out_params() is deprecated and will be removed in a future version",
+            "prepare_flow_out_params() is deprecated and will be removed in a future version, use add_flow method instead",
             DeprecationWarning,
             stacklevel=2,
         )
