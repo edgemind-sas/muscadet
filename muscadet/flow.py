@@ -142,15 +142,20 @@ class FlowIn(FlowModel):
 
 
 class FlowOut(FlowModel):
-
+    # AI? Based on the modification on attribute var_prod_cond description and var_prod_cond_inner_mode description, do see what changes to make in FlowOut class
     var_prod: typing.Any = pydantic.Field(None, description="Flow production")
     var_prod_available: typing.Any = pydantic.Field(
         None, description="Indicates if the flow production condition are met"
     )
     var_prod_cond: list = pydantic.Field(
         [],
-        description="Flow production conditions in conjonctive way [(C11 or C12 or ... or C1_k1) and (C21 or ... C2_k2) and ... and (Cn1 or ... or Cn_kn)]",
+        description="Flow production condition [(C11 <BoolOpeA> C12 <BoolOpeA> ... <BoolOpeA> C1_k1) <BoolOpeB> (C21 <BoolOpeA> ... <BoolOpeA> C2_k2) <BoolOpeB> ... <BoolOpeB> (Cn1 <BoolOpeA> ... <BoolOpeA> Cn_kn)] where both <BoolOpeA> and <BoolOpeB> are boolean operators set by attribute 'var_prod_cond_inner_mode'",
     )
+    var_prod_cond_inner_mode: str = pydantic.Field(
+        "or",
+        description="Flow production condition expression mode: 'or' means var_prod is evaluated like [(C11 or C12 or ... or C1_k1) and (C21 or ... C2_k2) and ... and (Cn1 or ... or Cn_kn)], 'and' means evaluation like [(C11 and C12 and ... and C1_k1) or (C21 and ... and C2_k2) or ... or (Cn1 and ... and Cn_kn)]",
+    )
+
     var_prod_default: typing.Any = pydantic.Field(
         False, description="Flow production default value"
     )
@@ -252,24 +257,42 @@ class FlowOut(FlowModel):
 
     def create_sensitive_set_flow_prod_available(self):
 
-        def sensitive_set_flow_prod_available_template():
+        if self.var_prod_cond_inner_mode == "or":
 
-            # DEBUG
-            # for flow_disj in self.var_prod_cond:
-            #     for flow in flow_disj:
-            #         comp = flow.var_fed.parent().basename()
-            #         flow_val = flow.var_fed.value()
-            #         print(f"{comp}: {flow.name}.var_fed = {flow_val}")
-            #         ipdb.set_trace()
+            def sensitive_set_flow_prod_available_template():
+                # for flow_disj in self.var_prod_cond:
+                #     for flow in flow_disj:
+                #         comp = flow.var_fed.parent().basename()
+                #         flow_val = flow.var_fed.value()
+                #         print(f"{comp}: {flow.name}.var_fed = {flow_val}")
+                #         ipdb.set_trace()
 
-            val = all(
-                [
-                    any([flow.var_fed.value() for flow in flow_disj])
-                    for flow_disj in self.var_prod_cond
-                ]
-            )
+                # [(C11 or C12 or ... or C1_k1) and (C21 or ... C2_k2) and ... and (Cn1 or ... or Cn_kn)]
+                val = all(
+                    [
+                        any([flow_inner.var_fed.value() for flow_inner in flow_outer])
+                        for flow_outer in self.var_prod_cond
+                    ]
+                )
 
-            self.var_prod_available.setValue(val)
+                self.var_prod_available.setValue(val)
+
+        elif self.var_prod_cond_inner_mode == "and":
+
+            def sensitive_set_flow_prod_available_template():
+
+                # [(C11 and C12 and ... and C1_k1) or (C21 and ... and C2_k2) or ... or (Cn1 and ... and Cn_kn)]
+                val = any(
+                    [
+                        all([flow_inner.var_fed.value() for flow_inner in flow_outer])
+                        for flow_outer in self.var_prod_cond
+                    ]
+                )
+
+                self.var_prod_available.setValue(val)
+
+        else:
+            raise ValueError("var_prod_cond_inner_mode must be 'and' or 'or'")
 
         return sensitive_set_flow_prod_available_template
 
@@ -312,10 +335,10 @@ class FlowOut(FlowModel):
         sm_flow_prod_available_name = f"set_{self.name}_prod_available"
 
         # Add prod available update method to be sensitive to input changes
-        for flow_disj in self.var_prod_cond:
-            for flow in flow_disj:
+        for flow_outer in self.var_prod_cond:
+            for flow_inner in flow_outer:
                 # ipdb.set_trace()
-                flow.var_fed.addSensitiveMethod(
+                flow_inner.var_fed.addSensitiveMethod(
                     sm_flow_prod_available_name, sm_flow_prod_available_fun
                 )
 
