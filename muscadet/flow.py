@@ -344,13 +344,17 @@ class FlowOut(FlowModel):
 
 
 class FlowOutTempo(FlowOut):
+
     occ_enable_flow: typing.Union[dict | cod3s.OccurrenceDistributionModel] = (
         pydantic.Field(
             {"cls": "delay", "time": 0}, description="Temporisation law to let flow out"
         )
     )
-    occ_disable_flow: dict = pydantic.Field(
-        {"cls": "delay", "time": 0}, description="Temporisation law to block flow out"
+    occ_disable_flow: typing.Union[dict | cod3s.OccurrenceDistributionModel] = (
+        pydantic.Field(
+            {"cls": "delay", "time": 0},
+            description="Temporisation law to block flow out",
+        )
     )
     # time_to_start_flow: float = \
     #     pydantic.Field(0, description="Start flow out temporisation")
@@ -359,8 +363,13 @@ class FlowOutTempo(FlowOut):
     state_enable_name: str = pydantic.Field(
         "enabled", description="Name of the enable state"
     )
+    # TO IMPLEMENT
     state_enabling_name: str = pydantic.Field(
-        "enabling", description="Name of the enable state"
+        "enabling", description="Name of the enabling state"
+    )
+    # TO IMPLEMENT
+    state_enabling_name: str = pydantic.Field(
+        "disabling", description="Name of the disabling state"
     )
 
     state_disable_name: str = pydantic.Field(
@@ -435,7 +444,7 @@ class FlowOutTempo(FlowOut):
 
         aut.bkd.addSensitiveMethod(self.sm_flow_fed_name, self.sm_flow_fed_fun)
 
-        comp.automata[aut.name] = aut
+        comp.automata_d[aut.name] = aut
 
     # Overloaded from class FlowOut
     def create_sensitive_set_flow_fed_out(self):
@@ -567,7 +576,7 @@ class FlowOutOnTrigger(FlowOut):
 
         aut.bkd.addSensitiveMethod(self.sm_flow_fed_name, self.sm_flow_fed_fun)
 
-        comp.automata[aut.name] = aut
+        comp.automata_d[aut.name] = aut
 
     # Overloaded from class FlowOut
     def create_sensitive_set_flow_fed_out(self):

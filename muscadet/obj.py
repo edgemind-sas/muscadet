@@ -85,7 +85,7 @@ class ObjFlow(cod3s.PycComponent):
         self.flows_io = {}
 
         self.params = {}
-        self.automata = {}
+        # self.automata = {} Already initialize in COD3S PycComponent
         self.has_default_out_automata = create_default_out_automata
 
         if partial_init:
@@ -446,6 +446,7 @@ class ObjFlow(cod3s.PycComponent):
             flow.add_automata(self)
 
             if self.has_default_out_automata and isinstance(flow, FlowOut):
+
                 self.add_atm2states(
                     flow.name,
                     st1="ok",
@@ -454,7 +455,7 @@ class ObjFlow(cod3s.PycComponent):
                     cond_occ_12=True,
                     occ_law_12={"cls": "exp", "rate": 1e-100},
                     occ_interruptible_12=True,
-                    effects_12=[(".*_available_out", False)],
+                    effects_12=[(flow.var_fed_available.basename(), False)],
                     cond_occ_21=True,
                     occ_law_21={"cls": "exp", "rate": 1e-100},
                     occ_interruptible_21=True,
@@ -501,7 +502,7 @@ class ObjFlow(cod3s.PycComponent):
         aut_bis = cod3s.PycAutomaton(**aut)
         aut_bis.update_bkd(self)
 
-        self.automata[aut_bis.name] = aut_bis
+        self.automata_d[aut_bis.name] = aut_bis
 
     def compute_effects_tuples(self, effects_str=None):
         """
@@ -676,7 +677,7 @@ class ObjFlow(cod3s.PycComponent):
 
         # Update automata dict
         # --------------------
-        self.automata[aut.name] = aut
+        self.automata_d[aut.name] = aut
 
     def add_exp_failure_mode(
         self,
