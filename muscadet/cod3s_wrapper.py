@@ -57,5 +57,50 @@ class KBMuscadet(cod3s.KB):
     )
 
 
-class ObjFlowInstance(ObjFlowClass):
-    pass
+class ObjFlowInstance(ObjFlowClass, cod3s.ComponentInstance):
+
+    def to_bkd_pycatshoo(self):
+
+        cls_name = self.class_name_bkd.get("pycatshoo")
+        if not cls_name:
+            raise ValueError("No Pycatshoo backend class is specified in the template.")
+
+        # # Get the class from its name
+        # if not hasattr(pyc, cls_name):
+        #     raise ValueError(
+        #         f"The class '{cls_name}' doesn't exist in the Pycatshoo package."
+        #     )
+
+        __import__("ipdb").set_trace()
+
+        cls = getattr(pyc, cls_name)
+
+        try:
+            comp = cls(self.name, **self.init_parameters)
+        except Exception as e:
+            raise ValueError(
+                f"Pycatshoo component instanciation failed: {e}. Please check if a PyCATSHOO system is instanciated ?"
+            )
+
+        self.check_bkd_pycatshoo()
+
+        class_name = comp_specs.class_name or "ObjSGE"
+
+        comp = self.add_component(
+            cls=class_name,
+            name=instance_name,
+            comp_type=comp_specs.name,
+            description=comp_specs.description,
+            partial_init=True,
+            **params,
+        )
+
+        for fin in comp_specs.flow_in:
+            comp.add_flow(fin)
+
+        for fout in comp_specs.flow_out:
+            comp.add_flow(fout)
+
+        comp.set_flows()
+        # Instantiate the component with the initialization parameters
+        return comp

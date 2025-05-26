@@ -8,12 +8,6 @@ import json
 
 # import logging
 import graphviz
-import pkg_resources
-
-installed_pkg = {pkg.key for pkg in pkg_resources.working_set}
-# ipdb is a debugger (pip install ipdb)
-if "ipdb" in installed_pkg:
-    import ipdb  # noqa: F401
 
 
 class System(cod3s.PycSystem):
