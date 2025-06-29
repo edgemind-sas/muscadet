@@ -142,7 +142,6 @@ class FlowIn(FlowModel):
 
 
 class FlowOut(FlowModel):
-    # AI? Based on the modification on attribute var_prod_cond description and var_prod_cond_inner_mode description, do see what changes to make in FlowOut class
     var_prod: typing.Any = pydantic.Field(None, description="Flow production")
     var_prod_available: typing.Any = pydantic.Field(
         None, description="Indicates if the flow production condition are met"

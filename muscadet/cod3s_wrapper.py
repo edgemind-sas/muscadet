@@ -1,6 +1,7 @@
 from pydantic import BaseModel, Field, field_validator, model_validator
 from typing import Optional, List, Dict, Any, Union, Literal
 import cod3s
+from .flow import FlowIn, FlowOut
 
 
 class InterfaceMuscadetTemplate(cod3s.InterfaceTemplate):
@@ -12,6 +13,13 @@ class InterfaceFlowIn(InterfaceMuscadetTemplate):
     logic: str = Field(
         "or", description="Flow input logic 'and' ; 'or' (default) ; 'k/n'"
     )
+
+    def to_bkd_pycatshoo(self):
+
+        return FlowIn(
+            name=self.name,
+            logic=self.logic,
+        )
 
 
 class InterfaceFlowOut(InterfaceMuscadetTemplate):
@@ -27,6 +35,15 @@ class InterfaceFlowOut(InterfaceMuscadetTemplate):
     )
 
     negate: bool = Field(False, description="Indicates if the flow output is negated")
+
+    def to_bkd_pycatshoo(self):
+
+        return FlowOut(
+            name=self.name,
+            var_prod_cond=self.logic,
+            var_prod_cond_inner_mode=self.logic_inner_mode,
+            negate=self.nagate,
+        )
 
 
 class ComponentMuscadetClass(cod3s.ComponentClass):
@@ -61,9 +78,11 @@ class ObjFlowInstance(ObjFlowClass, cod3s.ComponentInstance):
 
     def to_bkd_pycatshoo(self):
 
-        cls_name = self.class_name_bkd.get("pycatshoo")
-        if not cls_name:
-            raise ValueError("No Pycatshoo backend class is specified in the template.")
+        comp = super().to_bkd_pycatshoo(partial_init=True)
+
+        # cls_name = self.class_name_bkd.get("pycatshoo")
+        # if not cls_name:
+        #     raise ValueError("No Pycatshoo backend class is specified in the template.")
 
         # # Get the class from its name
         # if not hasattr(pyc, cls_name):
@@ -71,36 +90,63 @@ class ObjFlowInstance(ObjFlowClass, cod3s.ComponentInstance):
         #         f"The class '{cls_name}' doesn't exist in the Pycatshoo package."
         #     )
 
-        __import__("ipdb").set_trace()
+        for ifce in self.interfaces:
 
-        cls = getattr(pyc, cls_name)
+            if ifce.port_type == "input":
+                __import__("ipdb").set_trace()
 
-        try:
-            comp = cls(self.name, **self.init_parameters)
-        except Exception as e:
-            raise ValueError(
-                f"Pycatshoo component instanciation failed: {e}. Please check if a PyCATSHOO system is instanciated ?"
-            )
+                comp.add_flow(ifce.to_bkd_pycatshoo())
 
-        self.check_bkd_pycatshoo()
+        # for ifce in self.interfaces:
+        #     if ifce.port_type == "output":
+        #         comp.add_flow(ifce)
 
-        class_name = comp_specs.class_name or "ObjSGE"
+        # cls = getattr(pyc, cls_name)
 
-        comp = self.add_component(
-            cls=class_name,
-            name=instance_name,
-            comp_type=comp_specs.name,
-            description=comp_specs.description,
-            partial_init=True,
-            **params,
-        )
+        # try:
+        #     comp = cls(self.name, **self.init_parameters)
+        # except Exception as e:
+        #     raise ValueError(
+        #         f"Pycatshoo component instanciation failed: {e}. Please check if a PyCATSHOO system is instanciated ?"
+        #     )
 
-        for fin in comp_specs.flow_in:
-            comp.add_flow(fin)
+        # self.check_bkd_pycatshoo()
 
-        for fout in comp_specs.flow_out:
-            comp.add_flow(fout)
+        # class_name = comp_specs.class_name or "ObjSGE"
 
-        comp.set_flows()
+        # comp = self.add_component(
+        #     cls=class_name,
+        #     name=instance_name,
+        #     comp_type=comp_specs.name,
+        #     description=comp_specs.description,
+        #     partial_init=True,
+        #     **params,
+        # )
+
+        # comp.set_flows()
         # Instantiate the component with the initialization parameters
+        comp.system().comp[self.name] = self
+
         return comp
+
+
+class SystemMuscadet(cod3s.System):
+
+    class_name_bkd: Optional[Dict[str, str]] = Field(
+        {"pycatshoo": "muscadet.System"},
+        description="Class name used to instanciate a system with the backend analysis tool",
+    )
+
+    # def to_bkd_pycatshoo(self):
+    #     # try:
+    #     #     from muscadet import System as PycSystemMuscadet
+    #     # except ImportError:
+    #     #     raise ImportError(
+    #     #         "The Pycatshoo package is not installed. Please install it to use this functionality."
+    #     #     )
+
+    #     cls = self.get_class_bkd("pycatshoo")
+
+    #     system = cls(self.name, **self.init_parameters)
+
+    #     __import__("ipdb").set_trace()
