@@ -682,10 +682,12 @@ class ObjFlow(cod3s.PycComponent):
     def add_exp_failure_mode(
         self,
         name,
+        failure_state="occ",
         failure_cond=True,
         failure_rate=0,
         failure_effects=[],
         failure_param_name="lambda",
+        repair_state="rep",
         repair_cond=True,
         repair_rate=0,
         repair_effects=[],
@@ -728,8 +730,8 @@ class ObjFlow(cod3s.PycComponent):
 
         self.add_atm2states(
             name=name,
-            st1="absent",
-            st2="present",
+            st1=failure_state,
+            st2=repair_state,
             init_st2=False,
             cond_occ_12=failure_cond,
             occ_law_12={"cls": "exp", "rate": self.params[failure_rate_name]},
@@ -744,10 +746,12 @@ class ObjFlow(cod3s.PycComponent):
     def add_delay_failure_mode(
         self,
         name,
+        failure_state="occ",
         failure_cond=True,
         failure_time=0,
         failure_effects=[],
         failure_param_name="ttf",
+        repair_state="rep",
         repair_cond=True,
         repair_time=0,
         repair_effects=[],
@@ -790,8 +794,8 @@ class ObjFlow(cod3s.PycComponent):
 
         self.add_atm2states(
             name=name,
-            st1="absent",
-            st2="present",
+            st1=failure_state,
+            st2=repair_state,
             init_st2=False,
             cond_occ_12=failure_cond,
             occ_law_12={"cls": "delay", "time": self.params[failure_time_name]},
