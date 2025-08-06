@@ -4,7 +4,7 @@ from setuptools import setup, find_packages
 import importlib.util
 
 # Charger le module version
-spec = importlib.util.spec_from_file_location("version", "cod3s/version.py")
+spec = importlib.util.spec_from_file_location("version", "muscadet/version.py")
 version_module = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(version_module)
 VERSION = version_module.__version__
