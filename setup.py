@@ -2,7 +2,7 @@
 
 from setuptools import setup, find_packages
 
-VERSION = "0.0.24"
+VERSION = "0.0.25"
 COD3S_VERSION = "@0.1.0"
 COD3S_VERSION = ""
 

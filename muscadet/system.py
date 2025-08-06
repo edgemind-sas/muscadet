@@ -7,7 +7,7 @@ import copy
 import json
 
 # import logging
-import graphviz
+# import graphviz
 
 
 class System(cod3s.PycSystem):
@@ -240,207 +240,208 @@ class System(cod3s.PycSystem):
         for comp in comp_in_specs:
             self.auto_connect(comp, name, available_connect=on_available)
 
-    def get_system_graph_specs(self, config={}):
 
-        config_copy = copy.deepcopy(config)
+#     def get_system_graph_specs(self, config={}):
 
-        components_dict = {}
-        for comp_name, comp in self.comp.items():
+#         config_copy = copy.deepcopy(config)
 
-            comp_specs = {
-                "name": comp.basename(),
-                "label": comp.basename(),
-            }
+#         components_dict = {}
+#         for comp_name, comp in self.comp.items():
 
-            for comp_style_id, comp_style in config_copy.get("components", {}).items():
+#             comp_specs = {
+#                 "name": comp.basename(),
+#                 "label": comp.basename(),
+#             }
 
-                comp_pattern = comp_style.get("pattern", None)
+#             for comp_style_id, comp_style in config_copy.get("components", {}).items():
 
-                # if comp_name.startswith("PAS"): *)
-                #     ipdb.set_trace() *)
+#                 comp_pattern = comp_style.get("pattern", None)
 
-                if comp_pattern:
-                    if re.search(comp_pattern, comp_name):
-                        comp_specs.update(comp_style)
+#                 # if comp_name.startswith("PAS"): *)
+#                 #     ipdb.set_trace() *)
 
-            components_dict[comp_name] = comp_specs
-            # sys_graph.add_node(comp.basename(), **comp_style_cur)
-            # sys_graph.node(comp.basename())
+#                 if comp_pattern:
+#                     if re.search(comp_pattern, comp_name):
+#                         comp_specs.update(comp_style)
 
-        flows_list = []
-        for comp_name, comp in self.comp.items():
-            for flow_name, flow in comp.flows_out.items():
+#             components_dict[comp_name] = comp_specs
+#             # sys_graph.add_node(comp.basename(), **comp_style_cur)
+#             # sys_graph.node(comp.basename())
 
-                msg_box_out = comp.messageBox(f"{flow_name}_out")
+#         flows_list = []
+#         for comp_name, comp in self.comp.items():
+#             for flow_name, flow in comp.flows_out.items():
 
-                for cnx in range(msg_box_out.cnctCount()):
+#                 msg_box_out = comp.messageBox(f"{flow_name}_out")
 
-                    comp_target = msg_box_out.cnct(cnx).parent()
+#                 for cnx in range(msg_box_out.cnctCount()):
 
-                    comp_source_name = comp_name
-                    comp_target_name = comp_target.basename()
+#                     comp_target = msg_box_out.cnct(cnx).parent()
 
-                    flow_specs = {
-                        "source": comp_source_name,
-                        "target": comp_target_name,
-                        "flow_name": flow_name,
-                    }
+#                     comp_source_name = comp_name
+#                     comp_target_name = comp_target.basename()
 
-                    for flow_style_id, flow_style in config_copy.get(
-                        "flows", {}
-                    ).items():
-                        comp_source_pattern = flow_style.get("source_pattern", ".*")
-                        comp_target_pattern = flow_style.get("target_pattern", ".*")
-                        flow_pattern = flow_style.get("flow_pattern", ".*")
+#                     flow_specs = {
+#                         "source": comp_source_name,
+#                         "target": comp_target_name,
+#                         "flow_name": flow_name,
+#                     }
 
-                        if (
-                            re.search(comp_source_pattern, comp_source_name)
-                            and re.search(comp_target_pattern, comp_target_name)
-                            and re.search(flow_pattern, flow_name)
-                        ):
-                            flow_specs.update(flow_style)
+#                     for flow_style_id, flow_style in config_copy.get(
+#                         "flows", {}
+#                     ).items():
+#                         comp_source_pattern = flow_style.get("source_pattern", ".*")
+#                         comp_target_pattern = flow_style.get("target_pattern", ".*")
+#                         flow_pattern = flow_style.get("flow_pattern", ".*")
 
-                    flows_list.append(flow_specs)
+#                         if (
+#                             re.search(comp_source_pattern, comp_source_name)
+#                             and re.search(comp_target_pattern, comp_target_name)
+#                             and re.search(flow_pattern, flow_name)
+#                         ):
+#                             flow_specs.update(flow_style)
 
-        return components_dict, flows_list
+#                     flows_list.append(flow_specs)
 
-    def get_system_graph_specs_json(self, filename="system.json", config={}):
+#         return components_dict, flows_list
 
-        comp_specs_d, flow_specs_list = self.get_system_graph_specs(config=config)
+#     def get_system_graph_specs_json(self, filename="system.json", config={}):
 
-        graph_specs = {
-            "components": list(comp_specs_d.values()),
-            "flows": flow_specs_list,
-        }
+#         comp_specs_d, flow_specs_list = self.get_system_graph_specs(config=config)
 
-        with open(filename, "w") as outfile:
-            json.dump(graph_specs, outfile, indent=4)
+#         graph_specs = {
+#             "components": list(comp_specs_d.values()),
+#             "flows": flow_specs_list,
+#         }
 
-    def generate_system_graph(self, filename="system.html", config={}):
+#         with open(filename, "w") as outfile:
+#             json.dump(graph_specs, outfile, indent=4)
 
-        sys_graph = graphviz.Digraph(engine="neato")
-        sys_graph.attr(
-            label=self.name(),
-            splines="true",
-            overlap="false",
-            concentrate="true",
-        )
-        sys_graph.edge_attr.update(
-            arrowhead="dot",
-            arrowsize="1",
-        )
+#     def generate_system_graph(self, filename="system.html", config={}):
 
-        sys_subgraphes_d = {}
-        for sg, sg_specs in config.get("subgraphes", {}).items():
+#         sys_graph = graphviz.Digraph(engine="neato")
+#         sys_graph.attr(
+#             label=self.name(),
+#             splines="true",
+#             overlap="false",
+#             concentrate="true",
+#         )
+#         sys_graph.edge_attr.update(
+#             arrowhead="dot",
+#             arrowsize="1",
+#         )
 
-            sys_subgraphes_d[sg] = graphviz.Digraph(engine="neato")
-            sys_subgraphes_d[sg].attr(
-                label=sg_specs.get("name", sg),
-                splines="true",
-                overlap="false",
-            )
+#         sys_subgraphes_d = {}
+#         for sg, sg_specs in config.get("subgraphes", {}).items():
 
-        comp_specs_d, flow_specs_list = self.get_system_graph_specs(config=config)
+#             sys_subgraphes_d[sg] = graphviz.Digraph(engine="neato")
+#             sys_subgraphes_d[sg].attr(
+#                 label=sg_specs.get("name", sg),
+#                 splines="true",
+#                 overlap="false",
+#             )
 
-        for flow_specs in flow_specs_list:
+#         comp_specs_d, flow_specs_list = self.get_system_graph_specs(config=config)
 
-            flow_specs_cur = copy.deepcopy(flow_specs)
+#         for flow_specs in flow_specs_list:
 
-            # Check if the flow has to be ignored
-            if flow_specs_cur.pop("ignore", False):
-                continue
+#             flow_specs_cur = copy.deepcopy(flow_specs)
 
-            # Then check if source and target have to been drawn
-            node_source_name = flow_specs_cur.pop("source")
-            node_target_name = flow_specs_cur.pop("target")
+#             # Check if the flow has to be ignored
+#             if flow_specs_cur.pop("ignore", False):
+#                 continue
 
-            comp_specs_source = copy.deepcopy(comp_specs_d[node_source_name])
-            comp_specs_target = copy.deepcopy(comp_specs_d[node_target_name])
+#             # Then check if source and target have to been drawn
+#             node_source_name = flow_specs_cur.pop("source")
+#             node_target_name = flow_specs_cur.pop("target")
 
-            comp_source_ignore = comp_specs_source.pop("ignore", False)
-            comp_target_ignore = comp_specs_target.pop("ignore", False)
+#             comp_specs_source = copy.deepcopy(comp_specs_d[node_source_name])
+#             comp_specs_target = copy.deepcopy(comp_specs_d[node_target_name])
 
-            if comp_source_ignore and comp_target_ignore:
-                continue
-            else:
-                comp_specs_source_name = comp_specs_source.pop("name")
-                comp_specs_source_label = comp_specs_source.pop("label")
+#             comp_source_ignore = comp_specs_source.pop("ignore", False)
+#             comp_target_ignore = comp_specs_target.pop("ignore", False)
 
-                source_sg = None
-                for sg, sg_specs in config.get("subgraphes", {}).items():
-                    comp_pattern = sg_specs.get("comp_pattern")
-                    if comp_pattern and re.search(comp_pattern, comp_specs_source_name):
-                        sys_subgraphes_d[sg].node(
-                            comp_specs_source_name,
-                            comp_specs_source_label,
-                            **comp_specs_source,
-                        )
-                        source_sg = sg
-                        break
+#             if comp_source_ignore and comp_target_ignore:
+#                 continue
+#             else:
+#                 comp_specs_source_name = comp_specs_source.pop("name")
+#                 comp_specs_source_label = comp_specs_source.pop("label")
 
-                if not source_sg:
-                    sys_graph.node(
-                        comp_specs_source_name,
-                        comp_specs_source_label,
-                        **comp_specs_source,
-                    )
+#                 source_sg = None
+#                 for sg, sg_specs in config.get("subgraphes", {}).items():
+#                     comp_pattern = sg_specs.get("comp_pattern")
+#                     if comp_pattern and re.search(comp_pattern, comp_specs_source_name):
+#                         sys_subgraphes_d[sg].node(
+#                             comp_specs_source_name,
+#                             comp_specs_source_label,
+#                             **comp_specs_source,
+#                         )
+#                         source_sg = sg
+#                         break
 
-                comp_specs_target_name = comp_specs_target.pop("name")
-                comp_specs_target_label = comp_specs_target.pop("label")
+#                 if not source_sg:
+#                     sys_graph.node(
+#                         comp_specs_source_name,
+#                         comp_specs_source_label,
+#                         **comp_specs_source,
+#                     )
 
-                target_sg = None
-                for sg, sg_specs in config.get("subgraphes", {}).items():
-                    comp_pattern = sg_specs.get("comp_pattern")
-                    if comp_pattern and re.search(comp_pattern, comp_specs_target_name):
-                        sys_subgraphes_d[sg].node(
-                            comp_specs_target_name,
-                            comp_specs_target_label,
-                            **comp_specs_target,
-                        )
-                        target_sg = sg
-                        break
+#                 comp_specs_target_name = comp_specs_target.pop("name")
+#                 comp_specs_target_label = comp_specs_target.pop("label")
 
-                if not target_sg:
-                    sys_graph.node(
-                        comp_specs_target_name,
-                        comp_specs_target_label,
-                        **comp_specs_target,
-                    )
+#                 target_sg = None
+#                 for sg, sg_specs in config.get("subgraphes", {}).items():
+#                     comp_pattern = sg_specs.get("comp_pattern")
+#                     if comp_pattern and re.search(comp_pattern, comp_specs_target_name):
+#                         sys_subgraphes_d[sg].node(
+#                             comp_specs_target_name,
+#                             comp_specs_target_label,
+#                             **comp_specs_target,
+#                         )
+#                         target_sg = sg
+#                         break
 
-                # sys_graph.node(comp_specs_target.pop("name"), *)
-                #                comp_specs_target.pop("label"), *)
-                #                **comp_specs_target) *)
+#                 if not target_sg:
+#                     sys_graph.node(
+#                         comp_specs_target_name,
+#                         comp_specs_target_label,
+#                         **comp_specs_target,
+#                     )
 
-                # Draw edges
-                if source_sg and target_sg and (source_sg == target_sg):
-                    sys_subgraphes_d[source_sg].edge(
-                        node_source_name,
-                        node_target_name,
-                        **flow_specs_cur,
-                    )
-                else:
-                    sys_graph.edge(
-                        node_source_name,
-                        node_target_name,
-                        **flow_specs_cur,
-                    )
+#                 # sys_graph.node(comp_specs_target.pop("name"), *)
+#                 #                comp_specs_target.pop("label"), *)
+#                 #                **comp_specs_target) *)
 
-        [sys_graph.subgraph(sg) for sg in sys_subgraphes_d.values()]
-        # Sauvegardez le graphe dans un fichier HTML
-        # ipdb.set_trace()
-        svg_data = sys_graph.pipe(format="svg").decode("utf-8")
-        html_code = f"""
-<!DOCTYPE html>
-<html>
-<head>
-    <title>{self.name()}</title>
-</head>
-<body>
-    {svg_data}
-</body>
-</html>
-"""
+#                 # Draw edges
+#                 if source_sg and target_sg and (source_sg == target_sg):
+#                     sys_subgraphes_d[source_sg].edge(
+#                         node_source_name,
+#                         node_target_name,
+#                         **flow_specs_cur,
+#                     )
+#                 else:
+#                     sys_graph.edge(
+#                         node_source_name,
+#                         node_target_name,
+#                         **flow_specs_cur,
+#                     )
 
-        with open(filename, "w") as f:
-            f.write(html_code)
-        # sys_graph.generate_html(name=filename)
+#         [sys_graph.subgraph(sg) for sg in sys_subgraphes_d.values()]
+#         # Sauvegardez le graphe dans un fichier HTML
+#         # ipdb.set_trace()
+#         svg_data = sys_graph.pipe(format="svg").decode("utf-8")
+#         html_code = f"""
+# <!DOCTYPE html>
+# <html>
+# <head>
+#     <title>{self.name()}</title>
+# </head>
+# <body>
+#     {svg_data}
+# </body>
+# </html>
+# """
+
+#         with open(filename, "w") as f:
+#             f.write(html_code)
+#         # sys_graph.generate_html(name=filename)

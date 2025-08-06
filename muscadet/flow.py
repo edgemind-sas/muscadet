@@ -1,6 +1,7 @@
 import Pycatshoo as pyc
 import typing
 import pydantic
+from colored import fg, attr
 
 import cod3s
 from .common import get_pyc_type
@@ -67,6 +68,84 @@ class FlowModel(cod3s.ObjCOD3S):
     def add_automata(self, comp):
         pass
 
+    def get_flow_type_color(self) -> str:
+        """Return the color formatting for flow type. Can be overridden in subclasses."""
+        return f"{attr('bold')}{fg('white')}"
+
+    @classmethod
+    def get_format_class_name(cls) -> str:
+        """Return the color formatting for this flow class name. Can be overridden in subclasses."""
+        return f"{attr('bold')}{fg('white')}"
+
+    def format_boolean_value(self, value) -> str:
+        """Format boolean values with appropriate colors."""
+        if isinstance(value, bool):
+            if value:
+                return f"{fg('green')}{value}{attr('reset')}"
+            else:
+                return f"{fg('yellow')}{value}{attr('reset')}"
+        return str(value)
+
+    def get_var_fed_available(self):
+        return self.var_fed_available.value()
+
+    def format_var_fed_available(self, is_available) -> str:
+        """Format var_fed_available value with appropriate colors. Can be overridden in subclasses."""
+        availability_symbol = (
+            f"{fg('green')}✓{attr('reset')}"
+            if is_available
+            else f"{fg('red')}✗{attr('reset')}"
+        )
+        return availability_symbol
+
+    def __str__(self) -> str:
+        flow_type = self.__class__.__name__
+
+        # Get values safely, handling cases where variables might not be initialized
+
+        var_fed = self.var_fed.value()
+        var_fed_default = self.var_fed_default
+
+        # Format values with appropriate colors
+        formatted_var_fed = self.format_boolean_value(var_fed)
+        formatted_var_fed_default = self.format_boolean_value(var_fed_default)
+        availability_symbol = self.format_var_fed_available(
+            self.get_var_fed_available()
+        )
+
+        lines = [
+            f"{self.get_flow_type_color()}{flow_type}{attr('reset')} {fg('blue')}{self.name}{attr('reset')}",
+            f"  {fg('white')}Type{attr('reset')}: {self.var_type}",
+            f"  {fg('white')}Fed{attr('reset')}: {formatted_var_fed}",
+            f"  {fg('white')}Default{attr('reset')}: {formatted_var_fed_default}",
+            f"  {fg('white')}Available{attr('reset')}: {availability_symbol}",
+        ]
+        return "\n".join(lines)
+
+    def __repr__(self) -> str:
+        flow_type = self.__class__.__name__
+
+        # Get values safely, handling cases where variables might not be initialized
+        var_fed = self.var_fed.value() if self.var_fed else "N/A"
+        var_fed_default = (
+            self.var_fed_default if hasattr(self, "var_fed_default") else "N/A"
+        )
+
+        # Format values with appropriate colors
+        formatted_var_fed = self.format_boolean_value(var_fed)
+        formatted_var_fed_default = self.format_boolean_value(var_fed_default)
+        availability_symbol = self.format_var_fed_available(
+            self.get_var_fed_available()
+        )
+
+        return (
+            f"{self.get_flow_type_color()}{flow_type}{attr('reset')} "
+            f"{fg('blue')}{self.name}{attr('reset')} "
+            f"[{self.var_type}] = {formatted_var_fed} "
+            f"[{formatted_var_fed_default}] "
+            f"{availability_symbol}"
+        )
+
 
 class FlowIn(FlowModel):
 
@@ -83,6 +162,77 @@ class FlowIn(FlowModel):
     )
 
     logic: str = pydantic.Field("or", description="Flow input logic and ; or ; k/n")
+
+    def get_flow_type_color(self) -> str:
+        """Return the color formatting for FlowIn type in orange."""
+        return f"{attr('bold')}{fg('orange_1')}"
+
+    @classmethod
+    def get_format_class_name(cls) -> str:
+        """Return the color formatting for FlowIn class name."""
+        return f"{fg('orange_1')}"
+
+    def get_var_fed_available(self):
+        if self.logic == "and":
+            return self.var_fed_available.andValue(self.var_available_in_default)
+        elif self.logic == "or":
+            return self.var_fed_available.orValue(self.var_available_in_default)
+        else:
+            raise ValueError("FlowIn logic must be 'and' or 'or'")
+
+    def get_logic_color(self) -> str:
+        """Return the color formatting for logic type."""
+        if self.logic == "and":
+            return f"{fg('magenta')}{self.logic}{attr('reset')}"
+        elif self.logic == "or":
+            return f"{fg('cyan')}{self.logic}{attr('reset')}"
+        else:
+            return f"{fg('red')}{self.logic}{attr('reset')}"
+
+    def __repr__(self) -> str:
+        base_str = super().__repr__()
+
+        # Get var_in value safely
+        try:
+            if self.logic == "and":
+                var_in_value = self.var_in.andValue(self.var_in_default)
+            elif self.logic == "or":
+                var_in_value = self.var_in.orValue(self.var_in_default)
+            else:
+                raise ValueError("FlowIn logic must be 'and' or 'or'")
+
+        except:
+            var_in_value = "N/A"
+
+        # Format var_in value with appropriate colors
+        formatted_var_in = self.format_boolean_value(var_in_value)
+
+        return f"{base_str} | in ({self.get_logic_color()}): {formatted_var_in}"
+
+    def __str__(self) -> str:
+        base_repr = super().__str__()
+
+        # Get var_in value safely
+        try:
+            if self.logic == "and":
+                var_in_value = self.var_in.andValue(self.var_in_default)
+            elif self.logic == "or":
+                var_in_value = self.var_in.orValue(self.var_in_default)
+            else:
+                raise ValueError("FlowIn logic must be 'and' or 'or'")
+
+        except:
+            var_in_value = "N/A"
+
+        # Format var_in value with appropriate colors
+        formatted_var_in = self.format_boolean_value(var_in_value)
+
+        # Add var_in and logic information to the base representation
+        additional_lines = [
+            f"  {fg('white')}Input{attr('reset')}: {formatted_var_in}",
+            f"  {fg('white')}Logic{attr('reset')}: {self.get_logic_color()}",
+        ]
+        return f"{base_repr}\n" + "\n".join(additional_lines)
 
     def add_variables(self, comp, **kwargs):
 
@@ -154,6 +304,10 @@ class FlowOut(FlowModel):
         "or",
         description="Flow production condition expression mode: 'or' means var_prod is evaluated like [(C11 or C12 or ... or C1_k1) and (C21 or ... C2_k2) and ... and (Cn1 or ... or Cn_kn)], 'and' means evaluation like [(C11 and C12 and ... and C1_k1) or (C21 and ... and C2_k2) or ... or (Cn1 and ... and Cn_kn)]",
     )
+    # var_fed_control: typing.Any = pydantic.Field(
+    #     None,
+    #     description="Input available control to make flow controllable by external component",
+    # )
 
     var_prod_default: typing.Any = pydantic.Field(
         False, description="Flow production default value"
@@ -193,6 +347,8 @@ class FlowOut(FlowModel):
             f"{self.name}_prod_available", pyc.TVarType.t_bool, self.var_prod_default
         )
 
+        # self.var_fed_control = comp.addReference(f"{self.name}_fed_control")
+
         # TO DO NOT .setReinitialized(True)
         # BECAUSE var_prod_available is driven by tempo mecanisms
         # self.var_prod_available.setReinitialized(True)
@@ -205,11 +361,82 @@ class FlowOut(FlowModel):
         #     comp.addVariable(f"{self.name}_out_available",
         #                      pyc.TVarType.t_bool, True)
 
+    def get_flow_type_color(self) -> str:
+        """Return the color formatting for FlowOut type in green."""
+        return f"{attr('bold')}{fg('steel_blue_1a')}"
+
+    @classmethod
+    def get_format_class_name(cls) -> str:
+        """Return the color formatting for FlowOut class name."""
+        return f"{fg('steel_blue_1a')}"
+
+    def __repr__(self) -> str:
+        base_str = super().__repr__()
+
+        # Get production condition information
+        if self.var_prod_cond_inner_mode == "or":
+            ope_inner = " or "
+            ope_outer = " and "
+        else:
+            ope_inner = " and "
+            ope_outer = " or "
+
+        if self.var_prod_cond:
+            cond_info = f"cond := {ope_outer.join([ope_inner.join([flow.name for flow in flow_inner]) for flow_inner in self.var_prod_cond])}"
+        else:
+            cond_info = "no cond"
+
+        # Get production value safel
+        prod_value = self.var_prod.value()
+
+        formatted_prod = self.format_boolean_value(prod_value)
+
+        return f"{base_str} | prod: {formatted_prod} | {cond_info}"
+
+    def __str__(self) -> str:
+        base_repr = super().__str__()
+
+        # Get production condition information
+        if self.var_prod_cond_inner_mode == "or":
+            ope_inner = " or "
+            ope_outer = " and "
+        else:
+            ope_inner = " and "
+            ope_outer = " or "
+
+        if self.var_prod_cond:
+            cond_info = f"{ope_outer.join([ope_inner.join([flow.name for flow in flow_inner]) for flow_inner in self.var_prod_cond])}"
+        else:
+            cond_info = "No conditions"
+
+        # Get production value safely
+        prod_value = self.var_prod.value()
+        formatted_prod = self.format_boolean_value(prod_value)
+
+        # Add production and condition information to the base representation
+        additional_lines = [
+            f"  {fg('white')}Production{attr('reset')}: {formatted_prod}",
+            f"  {fg('white')}Conditions{attr('reset')}: {cond_info}",
+        ]
+
+        if self.negate:
+            additional_lines.append(
+                f"  {fg('white')}Negated{attr('reset')}: {fg('red')}Yes{attr('reset')}"
+            )
+
+        return f"{base_repr}\n" + "\n".join(additional_lines)
+
     def add_mb(self, comp, **kwargs):
 
         comp.addMessageBox(f"{self.name}_out")
         comp.addMessageBoxExport(f"{self.name}_out", self.var_fed, self.name)
 
+        # comp.addMessageBox(f"{self.name}_fed_control_in")
+        # comp.addMessageBoxImport(
+        #     f"{self.name}_fed_control_in",
+        #     self.var_fed_control,
+        #     f"{self.name}_fed_control",
+        # )
         comp.addMessageBox(f"{self.name}_available_out")
         comp.addMessageBoxExport(
             f"{self.name}_available_out",
@@ -224,7 +451,9 @@ class FlowOut(FlowModel):
             def sensitive_set_flow_template():
                 self.var_prod.setValue(self.var_prod_available.value())
                 self.var_fed.setValue(
-                    self.var_prod.value() and self.var_fed_available.value()
+                    self.var_prod.value()
+                    and self.var_fed_available.value()
+                    #                    and self.var_fed_control.andValue(True)
                 )
 
         else:
@@ -232,7 +461,11 @@ class FlowOut(FlowModel):
             def sensitive_set_flow_template():
                 self.var_prod.setValue(self.var_prod_available.value())
                 self.var_fed.setValue(
-                    not (self.var_prod.value() and self.var_fed_available.value())
+                    not (
+                        self.var_prod.value()
+                        and self.var_fed_available.value()
+                        #                        and self.var_fed_control.andValue(True)
+                    )
                 )
 
         return sensitive_set_flow_template
@@ -309,6 +542,9 @@ class FlowOut(FlowModel):
         self.var_prod_available.addSensitiveMethod(
             self.sm_flow_fed_name, self.sm_flow_fed_fun
         )
+        # self.var_fed_control.addSensitiveMethod(
+        #     self.sm_flow_fed_name, self.sm_flow_fed_fun
+        # )
 
         # Start method
         comp.addStartMethod(self.sm_flow_fed_name, self.sm_flow_fed_fun)
@@ -457,7 +693,9 @@ class FlowOutTempo(FlowOut):
                 self.var_prod.setValue(self.state_enable_bkd.bkd.isActive())
 
                 self.var_fed.setValue(
-                    self.var_prod.value() and self.var_fed_available.value()
+                    self.var_prod.value()
+                    and self.var_fed_available.value()
+                    #                    and self.var_fed_control.andValue(True)
                 )
 
         else:
@@ -469,7 +707,11 @@ class FlowOutTempo(FlowOut):
                 self.var_prod.setValue(self.state_enable_bkd.bkd.isActive())
 
                 self.var_fed.setValue(
-                    not (self.var_prod.value() and self.var_fed_available.value())
+                    not (
+                        self.var_prod.value()
+                        and self.var_fed_available.value()
+                        #                        and self.var_fed_control.andValue(True)
+                    )
                 )
 
         return sensitive_set_flow_template
@@ -587,7 +829,9 @@ class FlowOutOnTrigger(FlowOut):
                 )
 
                 self.var_fed.setValue(
-                    self.var_prod.value() and self.var_fed_available.value()
+                    self.var_prod.value()
+                    and self.var_fed_available.value()
+                    #                    and self.var_fed_control.andValue(True)
                 )
             else:
                 self.var_prod.setValue(
@@ -595,88 +839,92 @@ class FlowOutOnTrigger(FlowOut):
                 )
 
                 self.var_fed.setValue(
-                    not (self.var_prod.value() and self.var_fed_available.value())
+                    not (
+                        self.var_prod.value()
+                        and self.var_fed_available.value()
+                        #                        and self.var_fed_control.andValue(True)
+                    )
                 )
 
         return sensitive_set_flow_template
 
 
-# TO BE UPDATED : MAKE IT INHERITING FROM IN AND OUT
-# With automatic out conditions ???
-class FlowIO(FlowModel):
+# # TO BE UPDATED : MAKE IT INHERITING FROM IN AND OUT
+# # With automatic out conditions ???
+# class FlowIO(FlowModel):
 
-    var_in: typing.Any = pydantic.Field(None, description="Flow input")
-    var_out: typing.Any = pydantic.Field(None, description="Flow output")
-    var_out_available: typing.Any = pydantic.Field(
-        None, description="Flow available out"
-    )
-    logic: str = pydantic.Field("or", description="Flow input logic and ; or ; k/n")
+#     var_in: typing.Any = pydantic.Field(None, description="Flow input")
+#     var_out: typing.Any = pydantic.Field(None, description="Flow output")
+#     var_out_available: typing.Any = pydantic.Field(
+#         None, description="Flow available out"
+#     )
+#     logic: str = pydantic.Field("or", description="Flow input logic and ; or ; k/n")
 
-    def add_variables(self, comp, **kwargs):
+#     def add_variables(self, comp, **kwargs):
 
-        super().add_variables(comp, **kwargs)
+#         super().add_variables(comp, **kwargs)
 
-        py_type, pyc_type = get_pyc_type(self.var_type)
+#         py_type, pyc_type = get_pyc_type(self.var_type)
 
-        self.var_in = comp.addReference(f"{self.name}_in")
+#         self.var_in = comp.addReference(f"{self.name}_in")
 
-        self.var_out = comp.addVariable(f"{self.name}_out", pyc_type, py_type())
+#         self.var_out = comp.addVariable(f"{self.name}_out", pyc_type, py_type())
 
-        self.var_out_available = comp.addVariable(
-            f"{self.name}_out_available", pyc.TVarType.t_bool, True
-        )
+#         self.var_out_available = comp.addVariable(
+#             f"{self.name}_out_available", pyc.TVarType.t_bool, True
+#         )
 
-    def add_mb(self, comp, **kwargs):
+#     def add_mb(self, comp, **kwargs):
 
-        comp.addMessageBox(f"{self.name}_in")
-        comp.addMessageBoxImport(f"{self.name}_in", self.var_in, self.name)
-        comp.addMessageBox(f"{self.name}_out")
-        comp.addMessageBoxExport(f"{self.name}_out", self.var_out, self.name)
+#         comp.addMessageBox(f"{self.name}_in")
+#         comp.addMessageBoxImport(f"{self.name}_in", self.var_in, self.name)
+#         comp.addMessageBox(f"{self.name}_out")
+#         comp.addMessageBoxExport(f"{self.name}_out", self.var_out, self.name)
 
-    def create_sensitive_set_flow_fed_in(self):
+#     def create_sensitive_set_flow_fed_in(self):
 
-        def sensitive_set_flow_template():
-            # Reminder the value pass in andValue and orValue is
-            # the returned value in the case of no connection
-            if self.logic == "and":
-                self.var_fed.setValue(
-                    self.var_in.andValue(self.var_fed_default)
-                    and self.var_fed_available.value()
-                )
-            elif self.logic == "or":
-                self.var_fed.setValue(
-                    self.var_in.orValue(self.var_fed_default)
-                    and self.var_fed_available.value()
-                )
-            else:
-                raise ValueError("FlowIn logic must be 'and' or 'or'")
+#         def sensitive_set_flow_template():
+#             # Reminder the value pass in andValue and orValue is
+#             # the returned value in the case of no connection
+#             if self.logic == "and":
+#                 self.var_fed.setValue(
+#                     self.var_in.andValue(self.var_fed_default)
+#                     and self.var_fed_available.value()
+#                 )
+#             elif self.logic == "or":
+#                 self.var_fed.setValue(
+#                     self.var_in.orValue(self.var_fed_default)
+#                     and self.var_fed_available.value()
+#                 )
+#             else:
+#                 raise ValueError("FlowIn logic must be 'and' or 'or'")
 
-        return sensitive_set_flow_template
+#         return sensitive_set_flow_template
 
-    def create_sensitive_set_flow_out(self):
+#     def create_sensitive_set_flow_out(self):
 
-        def sensitive_set_flow_template():
-            self.var_out.setValue(
-                self.var_fed.value() and self.var_out_available.value()
-            )
+#         def sensitive_set_flow_template():
+#             self.var_out.setValue(
+#                 self.var_fed.value() and self.var_out_available.value()
+#             )
 
-        return sensitive_set_flow_template
+#         return sensitive_set_flow_template
 
-    def update_sensitive_methods(self, comp):
-        self.sm_flow_fed_fun = self.create_sensitive_set_flow_fed_in()
-        self.sm_flow_fed_name = f"set_{self.name}_fed"
-        self.var_in.addSensitiveMethod(self.sm_flow_fed_name, self.sm_flow_fed_fun)
+#     def update_sensitive_methods(self, comp):
+#         self.sm_flow_fed_fun = self.create_sensitive_set_flow_fed_in()
+#         self.sm_flow_fed_name = f"set_{self.name}_fed"
+#         self.var_in.addSensitiveMethod(self.sm_flow_fed_name, self.sm_flow_fed_fun)
 
-        self.var_fed_available.addSensitiveMethod(
-            self.sm_flow_fed_name, self.sm_flow_fed_fun
-        )
+#         self.var_fed_available.addSensitiveMethod(
+#             self.sm_flow_fed_name, self.sm_flow_fed_fun
+#         )
 
-        comp.addStartMethod(self.sm_flow_fed_name, self.sm_flow_fed_fun)
+#         comp.addStartMethod(self.sm_flow_fed_name, self.sm_flow_fed_fun)
 
-        sens_meth_flow_out = self.create_sensitive_set_flow_out()
-        sens_meth_flow_out_name = f"set_{self.name}_out"
+#         sens_meth_flow_out = self.create_sensitive_set_flow_out()
+#         sens_meth_flow_out_name = f"set_{self.name}_out"
 
-        self.var_fed.addSensitiveMethod(sens_meth_flow_out_name, sens_meth_flow_out)
-        self.var_out_available.addSensitiveMethod(
-            sens_meth_flow_out_name, sens_meth_flow_out
-        )
+#         self.var_fed.addSensitiveMethod(sens_meth_flow_out_name, sens_meth_flow_out)
+#         self.var_out_available.addSensitiveMethod(
+#             sens_meth_flow_out_name, sens_meth_flow_out
+#         )
