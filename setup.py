@@ -1,8 +1,14 @@
 """MUSCADET Setup"""
 
 from setuptools import setup, find_packages
+import importlib.util
 
-VERSION = "0.0.25"
+# Charger le module version
+spec = importlib.util.spec_from_file_location("version", "cod3s/version.py")
+version_module = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(version_module)
+VERSION = version_module.__version__
+
 COD3S_VERSION = "@0.1.0"
 COD3S_VERSION = ""
 
