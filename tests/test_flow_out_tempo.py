@@ -108,3 +108,4 @@ def test_system(the_system):
 
 def test_delete(the_system):
     the_system.deleteSys()
+    cod3s.terminate_session()
