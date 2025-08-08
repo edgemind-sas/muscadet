@@ -314,20 +314,24 @@ class ObjFlow(cod3s.PycComponent):
                 for flow_disj in var_prod_cond:
                     # Get input flow associated to production conditions
                     if isinstance(flow_disj, str):
-                        if fin := self.flows_in.get(flow_disj):
-                            flow_disj_tiny = [fin]
+                        if fcond := self.flows_in.get(flow_disj):
+                            flow_disj_tiny = [fcond]
+                        elif fcond := self.flows_out.get(flow_disj):
+                            flow_disj_tiny = [fcond]
                         else:
                             raise ValueError(
-                                f"Object {self.name()}: Input flow {flow_disj} does not exist (you must create it before using it in a FlowOut condition"
+                                f"Object {self.name()}: Flow {flow_disj} does not exist as input nor output flow (you must create it before using it in a FlowOut condition)"
                             )
                     elif isinstance(flow_disj, (list, set, tuple)):
                         flow_disj_tiny = []
                         for flow_name in list(flow_disj):
-                            if fin := self.flows_in.get(flow_name):
-                                flow_disj_tiny.append(fin)
+                            if fcond := self.flows_in.get(flow_name):
+                                flow_disj_tiny.append(fcond)
+                            elif fcond := self.flows_out.get(flow_name):
+                                flow_disj_tiny.append(fcond)
                             else:
                                 raise ValueError(
-                                    f"Object {self.name()}: Input flow {flow_name} does not exist (you must create it before using it in a FlowOut condition"
+                                    f"Object {self.name()}: Flows {flow_name} does not as input nor output flow (you must create it before using it in a FlowOut condition)"
                                 )
 
                     else:
@@ -907,37 +911,45 @@ class ObjFailureMode(cod3s.PycComponent):
         step=None,
         **kwargs,
     ):
+        # __import__("ipdb").set_trace()
 
         self.fm_name = fm_name
         self.targets = [targets] if isinstance(targets, str) else targets
+        if target_name is None and len(self.targets) == 1:
+            target_name = self.targets[0]
         self.target_name = target_name or self._factorize_target_names(targets)
 
         comp_name = f"{self.target_name}__{self.fm_name}"
 
         super().__init__(comp_name, **kwargs)
+        # if self.system().name() == "003":
+        #     __import__("ipdb").set_trace()
 
         order_max = len(self.targets)
 
-        self.failure_cond = failure_cond
-        self.repair_cond = repair_cond
+        self.failure_cond = copy.deepcopy(failure_cond)
+        self.repair_cond = copy.deepcopy(repair_cond)
 
         self.failure_state = failure_state
         self.repair_state = repair_state
 
         self.step = step
         self.var_params = {}
-        self.failure_effects = failure_effects
-        self.repair_effects = repair_effects
+        self.failure_effects = copy.deepcopy(failure_effects)
+        self.repair_effects = copy.deepcopy(repair_effects)
         self.failure_param_name = (
             [failure_param_name]
             if isinstance(failure_param_name, str)
-            else failure_param_name
+            else copy.deepcopy(failure_param_name)
         )
+        self.set_default_failure_param_name()
+
         self.repair_param_name = (
             [repair_param_name]
             if isinstance(repair_param_name, str)
-            else repair_param_name
+            else copy.deepcopy(repair_param_name)
         )
+        self.set_default_repair_param_name()
 
         self.param_name_order_prefix = param_name_order_prefix
         self.trans_name_prefix = trans_name_prefix
@@ -980,7 +992,9 @@ class ObjFailureMode(cod3s.PycComponent):
         #         )
 
         self.failure_param = (
-            [failure_param] if not isinstance(failure_param, list) else failure_param
+            [failure_param]
+            if not isinstance(failure_param, list)
+            else copy.deepcopy(failure_param)
         )
         failure_param_diff = len(self.targets) - len(self.failure_param)
         if failure_param_diff > 0:
@@ -991,9 +1005,10 @@ class ObjFailureMode(cod3s.PycComponent):
             )
 
         self.repair_param = (
-            [repair_param] if not isinstance(repair_param, list) else repair_param
+            [repair_param]
+            if not isinstance(repair_param, list)
+            else copy.deepcopy(repair_param)
         )
-
         repair_param_diff = len(self.targets) - len(self.repair_param)
         if repair_param_diff > 0:
             self.set_default_repair_param()
@@ -1058,6 +1073,7 @@ class ObjFailureMode(cod3s.PycComponent):
                 #     for target_idx in target_set_idx
                 #     for flow_name, val in failure_effects.items()
                 # }
+                # __import__("ipdb").set_trace()
                 failure_effects_cur = [
                     {
                         "var": self.system()
@@ -1067,7 +1083,7 @@ class ObjFailureMode(cod3s.PycComponent):
                         "value": val,
                     }
                     for target_idx in target_set_idx
-                    for flow_name, val in failure_effects.items()
+                    for flow_name, val in self.failure_effects.items()
                 ]
                 # __import__("ipdb").set_trace()
 
@@ -1085,7 +1101,7 @@ class ObjFailureMode(cod3s.PycComponent):
                         "value": val,
                     }
                     for target_idx in target_set_idx
-                    for flow_name, val in repair_effects.items()
+                    for flow_name, val in self.repair_effects.items()
                 ]
 
                 fm_name_cur = fm_name
@@ -1162,6 +1178,14 @@ class ObjFailureMode(cod3s.PycComponent):
 
         # __import__("ipdb").set_trace()
 
+    # TO BE OVERLOADED IF NEEDED
+    def set_default_failure_param_name(self):
+        pass
+
+    # TO BE OVERLOADED IF NEEDED
+    def set_default_repair_param_name(self):
+        pass
+
     @staticmethod
     def _factorize_target_names(
         targets: list[str], rep_char="X", ignored_char=["_"], concat_char=["__"]
@@ -1195,6 +1219,30 @@ class ObjFailureMode(cod3s.PycComponent):
 
 class ObjFailureModeExp(ObjFailureMode):
 
+    # def __init__(
+    #     self,
+    #     fm_name,
+    #     failure_param_name="lambda",
+    #     repair_param_name="mu",
+    #     repair_param=[],
+    #     **kwargs,
+    # ):
+    #     # AI? Is that the correct syntax to call the parent class constructor ?
+    #     super().__init__(
+    #         fm_name,
+    #         failure_param_name=failure_param_name,
+    #         repair_param_name=repair_param_name,
+    #         **kwargs,
+    #     )
+
+    def set_default_failure_param_name(self):
+        if not self.failure_param_name:
+            self.failure_param_name = ["lambda"]
+
+    def set_default_repair_param_name(self):
+        if not self.repair_param_name:
+            self.repair_param_name = ["mu"]
+
     def set_default_failure_param(self):
         failure_param_diff = len(self.targets) - len(self.failure_param)
         if failure_param_diff > 0:
@@ -1211,23 +1259,28 @@ class ObjFailureModeExp(ObjFailureMode):
     def set_occ_law_repair(self, params):
         return {"cls": "exp", "rate": params[self.repair_param_name[0]]}
 
-    def __init__(
-        self,
-        fm_name,
-        failure_param_name="lambda",
-        repair_param_name="mu",
-        **kwargs,
-    ):
-
-        super().__init__(
-            fm_name,
-            failure_param_name=failure_param_name,
-            repair_param_name=repair_param_name,
-            **kwargs,
-        )
-
 
 class ObjFailureModeDelay(ObjFailureMode):
+
+    # def __init__(
+    #     self,
+    #     fm_name,
+    #     failure_param_name="ttf",
+    #     repair_param_name="ttr",
+    #     **kwargs,
+    # ):
+
+    #     super().__init__(
+    #         fm_name,
+    #         failure_param_name=failure_param_name,
+    #         repair_param_name=repair_param_name,
+    #         **kwargs,
+    #     )
+    def set_default_failure_param_name(self, param_name=None):
+        self.failure_param_name = "ttf" or param_name
+
+    def set_default_repair_param_name(self, param_name=None):
+        self.repair_param_name = "ttr" or param_name
 
     def set_default_failure_param(self):
         failure_param_diff = len(self.targets) - len(self.failure_param)
@@ -1244,18 +1297,3 @@ class ObjFailureModeDelay(ObjFailureMode):
 
     def set_occ_law_repair(self, params):
         return {"cls": "delay", "time": params[self.repair_param_name[0]]}
-
-    def __init__(
-        self,
-        fm_name,
-        failure_param_name="ttf",
-        repair_param_name="ttr",
-        **kwargs,
-    ):
-
-        super().__init__(
-            fm_name,
-            failure_param_name=failure_param_name,
-            repair_param_name=repair_param_name,
-            **kwargs,
-        )
