@@ -21,7 +21,7 @@ This KB relies on the smart component approach, meaning the ultimate goal is to 
 - Next, install the MUSCADET library in your environment from GitHub:
 
   ```sh
-  pip install https://github.com/edgemind-sas/muscadet.git
+  pip install git+https://github.com/edgemind-sas/muscadet.git
   ```
   
 ## Getting started
