@@ -28,6 +28,9 @@ class FlowModel(cod3s.ObjCOD3S):
     sm_flow_fed_name: typing.Any = pydantic.Field(
         None, description="set flow sensitive method"
     )
+    component_authorized: typing.Optional[typing.List[str]] = pydantic.Field(
+        [".*"], description="List of authorized components to be connected"
+    )
 
     @classmethod
     def get_clsname(basecls, **specs):

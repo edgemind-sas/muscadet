@@ -95,6 +95,7 @@ class System(cod3s.PycSystem):
         flow_name,
         out_suffix="_out",
         in_suffix="_in",
+        check_authorization=True,
         logger=None,
     ):
         """
@@ -112,7 +113,40 @@ class System(cod3s.PycSystem):
             dict or None: The connection details if created, otherwise None.
         """
         connection = None
-        if not self.comp[source].is_connected_to(target, flow_name):
+        if self.comp[source].is_connected_to(target, flow_name):
+            if not (logger is None):
+                logger.debug(f"!!! {source} -- {flow_name} --> {target} already exists")
+        else:
+
+            if check_authorization:
+                source_flow_comp_auth_pat = (
+                    self.comp[source].flows_out[flow_name].component_authorized
+                )
+                check_source_auth = any(
+                    [re.search(f"^{pat}$", target) for pat in source_flow_comp_auth_pat]
+                )
+                if not check_source_auth:
+                    if logger is not None:
+                        logger.debug(
+                            f"!!! {source} -- {flow_name} --> {target} not authorized by {source}"
+                        )
+                    return None
+
+                target_flow_comp_auth_pat = (
+                    self.comp[target].flows_in[flow_name].component_authorized
+                )
+                check_target_auth = any(
+                    [re.search(f"^{pat}$", source) for pat in target_flow_comp_auth_pat]
+                )
+                if not check_target_auth:
+                    if logger is not None:
+                        logger.debug(
+                            f"!!! {source} -- {flow_name} --> {target} not authorized by {target}"
+                        )
+                    return None
+
+                # __import__("ipdb").set_trace()
+
             self.connect(
                 source, f"{flow_name}{out_suffix}", target, f"{flow_name}{in_suffix}"
             )
@@ -124,11 +158,8 @@ class System(cod3s.PycSystem):
 
             if not (logger is None):
                 logger.debug(f"{source} -- {flow_name} --> {target}")
-        else:
-            if not (logger is None):
-                logger.debug(f"!!! {source} -- {flow_name} --> {target} already exists")
-        if not (connection is None):
-            return connection
+        # if not (connection is None):
+        return connection
 
     def connect_trigger(
         self,
