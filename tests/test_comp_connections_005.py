@@ -17,6 +17,7 @@ def the_system():
                 dict(
                     cls="FlowIn",
                     name="c1",
+                    component_authorized=[{"class_name_bkd": "CompB"}],
                 )
             )
             self.add_flow(
@@ -29,7 +30,6 @@ def the_system():
                 dict(
                     cls="FlowOut",
                     name="c2",
-                    component_authorized=[{"label": "CB"}],
                 )
             )
 
@@ -43,7 +43,6 @@ def the_system():
                 dict(
                     cls="FlowIn",
                     name="c1",
-                    component_authorized=[{"label": "CC"}],
                 )
             )
 
@@ -123,9 +122,10 @@ def test_system(the_system):
     connections = the_system.auto_connect(".*", ".*")
 
     assert connections == [
+        {"source": "CA", "flow": "c1", "target": "CB"},
         {"source": "CA", "flow": "c2", "target": "CB"},
+        {"source": "CA", "flow": "c2", "target": "CC"},
         {"source": "CB", "flow": "c1", "target": "CA"},
-        {"source": "CC", "flow": "c1", "target": "CA"},
         {"source": "CC", "flow": "c1", "target": "CB"},
     ]
 

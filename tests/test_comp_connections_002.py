@@ -17,7 +17,7 @@ def the_system():
                 dict(
                     cls="FlowIn",
                     name="c1",
-                    component_authorized=["CB"],
+                    component_authorized=[{"label": "CB"}],
                 )
             )
             self.add_flow(

@@ -88,6 +88,25 @@ class System(cod3s.PycSystem):
                     connections_list.append(connection)
         return connections_list
 
+    def check_comp_attributes(self, comp_name, attr_cond_list):
+        comp = self.comp[comp_name]
+
+        return any(
+            [
+                all(
+                    [
+                        (
+                            re.search(f"^{val}$", getattr(comp, attr))
+                            if isinstance(val, str)
+                            else getattr(comp, attr) == val
+                        )
+                        for attr, val in auth_cond.items()
+                    ]
+                )
+                for auth_cond in attr_cond_list
+            ]
+        )
+
     def connect_flow(
         self,
         source,
@@ -122,8 +141,8 @@ class System(cod3s.PycSystem):
                 source_flow_comp_auth_pat = (
                     self.comp[source].flows_out[flow_name].component_authorized
                 )
-                check_source_auth = any(
-                    [re.search(f"^{pat}$", target) for pat in source_flow_comp_auth_pat]
+                check_source_auth = self.check_comp_attributes(
+                    target, source_flow_comp_auth_pat
                 )
                 if not check_source_auth:
                     if logger is not None:
@@ -135,8 +154,8 @@ class System(cod3s.PycSystem):
                 target_flow_comp_auth_pat = (
                     self.comp[target].flows_in[flow_name].component_authorized
                 )
-                check_target_auth = any(
-                    [re.search(f"^{pat}$", source) for pat in target_flow_comp_auth_pat]
+                check_target_auth = self.check_comp_attributes(
+                    source, target_flow_comp_auth_pat
                 )
                 if not check_target_auth:
                     if logger is not None:

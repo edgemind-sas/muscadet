@@ -29,7 +29,7 @@ def the_system():
                 dict(
                     cls="FlowOut",
                     name="c2",
-                    component_authorized=[{"label": "CB"}],
+                    component_authorized=[{"class_name_bkd": "CompB"}],
                 )
             )
 
@@ -43,7 +43,7 @@ def the_system():
                 dict(
                     cls="FlowIn",
                     name="c1",
-                    component_authorized=[{"label": "CC"}],
+                    component_authorized=[{"class_name_bkd": "CompC"}],
                 )
             )
 
