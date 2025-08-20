@@ -1,7 +1,84 @@
 """
-This module defines the ObjFlow class, which is used to model components in a discrete stochastic flow system.
-The ObjFlow class provides methods to add and manage input, output, and input/output flows, as well as to set up
-automata and failure modes for the components.
+Muscadet Object Flow Module
+
+This module provides the core classes for modeling components in discrete stochastic flow systems.
+It defines the fundamental building blocks for creating complex system models with flows, automata,
+and failure modes.
+
+Main Classes
+------------
+ObjFlow : cod3s.PycComponent
+    The primary component class for modeling flow-based systems. Supports input/output flows,
+    automata, and failure modes with rich visualization capabilities.
+
+ObjFailureMode : cod3s.PycComponent
+    Base class for modeling failure modes that can affect multiple target components
+    simultaneously. Supports different orders of failure and customizable conditions.
+
+ObjFailureModeExp : ObjFailureMode
+    Exponential failure mode implementation with lambda/mu parameters for failure
+    and repair rates following exponential distributions.
+
+ObjFailureModeDelay : ObjFailureMode
+    Delay-based failure mode implementation with fixed time-to-failure and
+    time-to-repair parameters.
+
+FailureModeExp : cod3s.ObjCOD3S
+    Pydantic model for exponential failure modes providing structured representation
+    with validation, serialization, and colored visualization capabilities.
+
+Key Features
+------------
+- Flow-based component modeling with input/output flows
+- Automata-based state management and transitions
+- Multiple failure mode types (exponential, delay-based)
+- Rich colored console output for debugging and visualization
+- Pydantic integration for data validation and serialization
+- Support for complex production conditions and flow logic
+- Extensible architecture for custom component types
+
+Usage Example
+-------------
+>>> import muscadet
+>>> system = muscadet.System("MySystem")
+>>>
+>>> # Create a custom component
+>>> class Pump(muscadet.ObjFlow):
+...     def add_flows(self, **kwargs):
+...         super().add_flows(**kwargs)
+...         self.add_flow_in(name="power", logic="and")
+...         self.add_flow_out(name="water", var_prod_default=True)
+...
+>>> # Add component to system
+>>> system.add_component(name="pump1", cls=Pump)
+>>>
+>>> # Add failure mode
+>>> system.add_component(
+...     name="pump_failure",
+...     cls=muscadet.ObjFailureModeExp,
+...     fm_name="failure",
+...     targets=["pump1"],
+...     failure_param=[0.001],  # lambda
+...     repair_param=[0.1],     # mu
+...     failure_effects={"water": False}
+... )
+
+Dependencies
+------------
+- Pycatshoo: Backend simulation engine
+- cod3s: Component-oriented discrete stochastic systems framework
+- pydantic: Data validation and serialization
+- colored: Terminal color output
+- typing: Type hints support
+
+Notes
+-----
+This module follows the project's coding conventions including:
+- Snake_case for variables and functions
+- CamelCase for classes
+- Comprehensive docstrings with parameter descriptions
+- Type hints for all public methods
+- Colored output for enhanced user experience
 """
 
 import Pycatshoo as pyc
@@ -13,6 +90,8 @@ import copy
 import itertools
 from colored import fg, attr
 import importlib
+import typing
+import pydantic
 
 # class TransitionEffect(BaseModel):
 #     var_name: str = \
@@ -278,27 +357,54 @@ class ObjFlow(cod3s.PycComponent):
         """
         Processes and prepares flow specifications, particularly handling production conditions.
 
-        This method processes the var_prod_cond parameter in flow specifications to convert
-        string or list-based production conditions into the internal format required by the system.
-        It handles single conditions, conjunctive conditions (AND), and disjunctive conditions (OR).
+        This method is crucial for converting user-friendly flow condition specifications into
+        the internal format required by the simulation engine. It performs several key transformations:
+
+        1. Converts string-based flow references to actual flow objects
+        2. Normalizes condition structures into conjunctive normal form (CNF)
+        3. Validates that referenced flows exist in the component
+        4. Processes occurrence distribution specifications
+
+        The production condition format follows this logic:
+        - Single string: Simple condition on one flow
+        - List of strings: Disjunctive (OR) condition
+        - List of lists: Conjunctive normal form [(A OR B) AND (C OR D)]
 
         Parameters
         ----------
         flow_specs : dict
             Flow specifications dictionary containing parameters for the flow.
-            The var_prod_cond key can contain:
-            - A single string (flow name)
-            - A list of strings (OR condition)
-            - A list of lists (AND of ORs condition)
+            Key parameters processed:
+            - var_prod_cond: Production condition specification
+            - occ_enable_flow: Occurrence distribution for flow enabling
 
         Returns
         -------
         dict
-            A copy of the input flow_specs with processed var_prod_cond if present.
-            The var_prod_cond is converted into a list of lists format where:
-            - Outer list represents AND conditions
-            - Inner lists represent OR conditions
+            A deep copy of the input flow_specs with processed parameters.
+            The var_prod_cond is converted into a normalized format where:
+            - Outer list represents AND conditions (conjunctive)
+            - Inner lists represent OR conditions (disjunctive)
             - Each condition references the actual flow object instead of its name
+
+        Raises
+        ------
+        ValueError
+            If referenced flows don't exist or if condition format is invalid
+
+        Examples
+        --------
+        >>> # Single condition
+        >>> specs = {"var_prod_cond": "flow1"}
+        >>> # Becomes: [["flow1_object"]]
+
+        >>> # OR condition
+        >>> specs = {"var_prod_cond": ["flow1", "flow2"]}
+        >>> # Becomes: [["flow1_object", "flow2_object"]]
+
+        >>> # AND of ORs condition
+        >>> specs = {"var_prod_cond": [["flow1", "flow2"], ["flow3"]]}
+        >>> # Becomes: [["flow1_object", "flow2_object"], ["flow3_object"]]
         """
         flow_specs = copy.deepcopy(flow_specs)
 
@@ -358,7 +464,42 @@ class ObjFlow(cod3s.PycComponent):
         return flow_specs
 
     def add_flow(self, flow_specs):
+        """
+        Adds a flow to the component using dictionary specifications.
 
+        This method provides a flexible way to add flows using dictionary-based
+        specifications. It automatically determines the flow type from the 'cls'
+        attribute and handles the complete flow creation process including
+        preprocessing and validation.
+
+        Parameters
+        ----------
+        flow_specs : dict
+            Flow specification dictionary that must contain:
+            - cls: Flow class name (e.g., "FlowIn", "FlowOut", "FlowOutTempo")
+            - name: Flow name
+            - Additional parameters specific to the flow type
+
+        Raises
+        ------
+        ValueError
+            If 'cls' attribute is missing, flow name already exists, or
+            flow type is not supported
+
+        Examples
+        --------
+        >>> comp.add_flow({
+        ...     "cls": "FlowIn",
+        ...     "name": "power",
+        ...     "logic": "and"
+        ... })
+
+        >>> comp.add_flow({
+        ...     "cls": "FlowOut",
+        ...     "name": "output",
+        ...     "var_prod_cond": ["input1", "input2"]
+        ... })
+        """
         if "cls" not in flow_specs:
             raise ValueError(
                 "Please add provide a cls attribute to indicate the class of the flow to be added"
@@ -531,14 +672,36 @@ class ObjFlow(cod3s.PycComponent):
 
     def set_flows(self, **kwargs):
         """
-        Sets up the flows for the component.
+        Finalizes flow setup by configuring variables, message boxes, and automata.
+
+        This method completes the flow initialization process by:
+        1. Adding backend variables for each flow
+        2. Setting up message boxes for inter-component communication
+        3. Configuring sensitive methods for automatic updates
+        4. Creating flow-specific automata
+        5. Optionally adding default failure automata for output flows
+
+        The method processes all flows (input and output) and ensures they are
+        properly integrated with the simulation backend. For output flows with
+        default automata enabled, it creates a basic failure mode with extremely
+        low failure rates.
 
         Parameters
         ----------
         **kwargs : dict
-            Additional parameters for setting up the flows.
-        """
+            Additional parameters for flow setup (currently unused but reserved
+            for future extensions)
 
+        Notes
+        -----
+        This method should be called after all flows have been added to the
+        component. It's typically called automatically during component
+        initialization unless partial_init=True is specified.
+
+        The default automata feature (has_default_out_automata) creates a
+        basic ok/nok state machine for each output flow with negligible
+        failure rates (1e-100), primarily for testing and demonstration purposes.
+        """
         flow_list = (
             list(self.flows_in.values())
             # + list(self.flows_io.values())  # TODO: Implement FlowIO class
@@ -546,15 +709,14 @@ class ObjFlow(cod3s.PycComponent):
         )
 
         for flow in flow_list:
-            # if flow.name == "pae_std":
-            #     ipdb.set_trace()
+            # Complete flow setup process
             flow.add_variables(self)
             flow.add_mb(self)
             flow.update_sensitive_methods(self)
             flow.add_automata(self)
 
+            # Add default failure automata for output flows if enabled
             if self.has_default_out_automata and isinstance(flow, FlowOut):
-
                 self.add_atm2states(
                     flow.name,
                     st1="ok",
@@ -890,6 +1052,90 @@ class ObjFlow(cod3s.PycComponent):
 
 
 class ObjFailureMode(cod3s.PycComponent):
+    """
+    A component that models failure modes affecting multiple target components.
+
+    This class creates automata-based failure modes that can affect one or more target
+    components simultaneously. It supports different orders of failure (affecting 1, 2,
+    or more components at once) and allows customization of failure and repair conditions,
+    parameters, and effects.
+
+    The failure mode creates all possible combinations of target components up to the
+    specified order and generates corresponding automata with failure and repair transitions.
+
+    Attributes
+    ----------
+    fm_name : str
+        The base name of the failure mode
+    targets : list[str]
+        List of target component names that can be affected by this failure mode
+    target_name : str
+        Factorized name representing all targets (auto-generated if not provided)
+    failure_state : str
+        Name of the failure state in the automaton (default: "occ")
+    repair_state : str
+        Name of the repair state in the automaton (default: "rep")
+    failure_effects : dict
+        Dictionary mapping flow names to their values when failure occurs
+    repair_effects : dict
+        Dictionary mapping flow names to their values when repair occurs
+    failure_param_name : list[str]
+        Names of the failure parameters (e.g., ["lambda"] for exponential)
+    repair_param_name : list[str]
+        Names of the repair parameters (e.g., ["mu"] for exponential)
+
+    Parameters
+    ----------
+    fm_name : str
+        The name of the failure mode
+    targets : str or list[str]
+        Target component(s) that can be affected by this failure mode
+    target_name : str, optional
+        Custom name for the target combination. If None, auto-generated from targets
+    failure_state : str, optional
+        Name of the failure state (default: "occ")
+    failure_cond : bool or callable, optional
+        Condition that must be met for failure to occur (default: True)
+    failure_effects : dict, optional
+        Effects applied when failure occurs (default: {})
+    failure_param_name : str or list[str], optional
+        Names of failure parameters (default: [])
+    failure_param : list, optional
+        Values of failure parameters (default: [])
+    repair_state : str, optional
+        Name of the repair state (default: "rep")
+    repair_cond : bool or callable, optional
+        Condition that must be met for repair to occur (default: True)
+    repair_effects : dict, optional
+        Effects applied when repair occurs (default: {})
+    repair_param_name : str or list[str], optional
+        Names of repair parameters (default: [])
+    repair_param : list, optional
+        Values of repair parameters (default: [])
+    step : optional
+        Step parameter for automaton transitions
+
+    Methods
+    -------
+    get_failure_cond(target_comps, failure_cond)
+        Creates a failure condition function for the given target components
+    get_repair_cond(target_comps, repair_cond)
+        Creates a repair condition function for the given target components
+    set_default_failure_param_name()
+        Sets default failure parameter names (to be overridden in subclasses)
+    set_default_repair_param_name()
+        Sets default repair parameter names (to be overridden in subclasses)
+
+    Examples
+    --------
+    >>> # Create a failure mode affecting components "pump1" and "pump2"
+    >>> fm = ObjFailureMode(
+    ...     fm_name="common_cause",
+    ...     targets=["pump1", "pump2"],
+    ...     failure_effects={"flow": False},
+    ...     repair_effects={"flow": True}
+    ... )
+    """
 
     def __init__(
         self,
@@ -957,39 +1203,6 @@ class ObjFailureMode(cod3s.PycComponent):
         effect_flows = list(
             set(list(self.failure_effects.keys()) + list(self.repair_effects.keys()))
         )
-
-        # Get powerset of targets indices
-        # targets_powerset_idx = list(
-        #     itertools.chain.from_iterable(
-        #         itertools.combinations(range(len(targets)), n)
-        #         for n in range(1, len(targets) + 1)
-        #     )
-        # )
-
-        # for flow_name in effect_flows:
-        #     for target in self.targets:
-        #         # for target_set_idx in targets_powerset_idx:
-        #         #     for target_idx in target_set_idx:
-        #         # target = targets[target_idx]
-        #         var_name = f"{target}_{flow_name}_fed_control"
-        #         # __import__("ipdb").set_trace()
-        #         var = self.addVariable(var_name, pyc.TVarType.t_bool, True)
-        #         var.setReinitialized(True)
-
-        #         mb_name = f"{target}_{flow_name}_fed_control_out"
-        #         self.addMessageBox(mb_name)
-        #         self.addMessageBoxExport(
-        #             mb_name,
-        #             var,
-        #             f"{flow_name}_fed_control",
-        #         )
-        #         target_comp = self.system().component(target)
-        #         self.system().connect(
-        #             self,
-        #             mb_name,
-        #             target_comp,
-        #             f"{flow_name}_fed_control_in",
-        #         )
 
         self.failure_param = (
             [failure_param]
@@ -1059,39 +1272,33 @@ class ObjFailureMode(cod3s.PycComponent):
                 )
                 repair_var_params_cur.update({repair_param_name_cur: repair_var_param})
 
-                # if order_max > 1:
-                #     repair_param_name = f"{repair_param_name}__{order}_o_{order_max}"
-                # repair_param_cur = repair_param[order - 1] or 0
-                # repair_param_var = self.addVariable(
-                #     repair_param_name, pyc.TVarType.t_double, repair_param_cur
-                # )
-
             for target_set_idx in itertools.combinations(range(order_max), order):
 
-                # failure_effects_cur = {
-                #     f"{self.targets[target_idx]}_{flow_name}_fed_control": val
-                #     for target_idx in target_set_idx
-                #     for flow_name, val in failure_effects.items()
-                # }
-                # __import__("ipdb").set_trace()
-                failure_effects_cur = [
-                    {
-                        "var": self.system()
-                        .component(self.targets[target_idx])
-                        .flows_out[flow_name]
-                        .var_fed_available,
-                        "value": val,
-                    }
-                    for target_idx in target_set_idx
-                    for flow_name, val in self.failure_effects.items()
-                ]
-                # __import__("ipdb").set_trace()
+                failure_effects_cur = []
+                for target_idx in target_set_idx:
+                    comp_target_cur = self.system().component(self.targets[target_idx])
+                    for flow_name_pat, val in self.failure_effects.items():
+                        for fo_name, fo in comp_target_cur.flows_out.items():
+                            if re.search(f"^{flow_name_pat}$", fo_name):
+                                failure_effects_cur.append(
+                                    {
+                                        "var": fo.var_fed_available,
+                                        "value": val,
+                                    }
+                                )
+                repair_effects_cur = []
+                for target_idx in target_set_idx:
+                    comp_target_cur = self.system().component(self.targets[target_idx])
+                    for flow_name_pat, val in self.repair_effects.items():
+                        for fo_name, fo in comp_target_cur.flows_out.items():
+                            if re.search(f"^{flow_name_pat}$", fo_name):
+                                repair_effects_cur.append(
+                                    {
+                                        "var": fo.var_fed_available,
+                                        "value": val,
+                                    }
+                                )
 
-                # repair_effects_cur = {
-                #     f"{self.targets[target_idx]}_{flow_name}_fed_control": val
-                #     for target_idx in target_set_idx
-                #     for flow_name, val in repair_effects.items()
-                # }
                 repair_effects_cur = [
                     {
                         "var": self.system()
@@ -1190,23 +1397,68 @@ class ObjFailureMode(cod3s.PycComponent):
     def _factorize_target_names(
         targets: list[str], rep_char="X", ignored_char=["_"], concat_char=["__"]
     ) -> str:
+        """
+        Creates a factorized name from a list of target component names.
+
+        This utility method generates a compact representation of multiple target
+        names by identifying common patterns and replacing differing characters
+        with a placeholder. This is particularly useful for failure modes that
+        affect multiple similar components.
+
+        The algorithm works as follows:
+        1. If targets have different lengths, concatenate with separator
+        2. For same-length targets, compare character by character
+        3. Keep common characters, replace differences with rep_char
+        4. Ignore specified characters (like underscores) during comparison
+
+        Parameters
+        ----------
+        targets : list[str]
+            List of target component names to factorize
+        rep_char : str, optional
+            Character to use for differing positions (default: "X")
+        ignored_char : list[str], optional
+            Characters to ignore during comparison (default: ["_"])
+        concat_char : list[str], optional
+            Characters to use for concatenation when lengths differ (default: ["__"])
+
+        Returns
+        -------
+        str
+            Factorized name representing all targets
+
+        Examples
+        --------
+        >>> _factorize_target_names(["pump1", "pump2", "pump3"])
+        "pumpX"
+
+        >>> _factorize_target_names(["motor_A1", "motor_B1"])
+        "motor_X1"
+
+        >>> _factorize_target_names(["component1", "very_long_name"])
+        "component1__very_long_name"
+        """
         if not targets:
             return ""
         if len(targets) == 1:
             return targets[0]
 
         first_len = len(targets[0])
+        # If targets have different lengths, concatenate them
         if not all(len(t) == first_len for t in targets):
             return concat_char[0].join(targets)
 
+        # Character-by-character comparison for same-length targets
         result_chars = []
         for i in range(first_len):
             ref_char = targets[0][i]
 
+            # Skip ignored characters (keep them as-is)
             if ref_char in ignored_char:
                 result_chars.append(ref_char)
                 continue
 
+            # Check if character is common across all targets
             is_common = all(t[i] == ref_char for t in targets)
 
             if is_common:
@@ -1218,22 +1470,6 @@ class ObjFailureMode(cod3s.PycComponent):
 
 
 class ObjFailureModeExp(ObjFailureMode):
-
-    # def __init__(
-    #     self,
-    #     fm_name,
-    #     failure_param_name="lambda",
-    #     repair_param_name="mu",
-    #     repair_param=[],
-    #     **kwargs,
-    # ):
-    #     # AI? Is that the correct syntax to call the parent class constructor ?
-    #     super().__init__(
-    #         fm_name,
-    #         failure_param_name=failure_param_name,
-    #         repair_param_name=repair_param_name,
-    #         **kwargs,
-    #     )
 
     def set_default_failure_param_name(self):
         if not self.failure_param_name:
@@ -1261,21 +1497,6 @@ class ObjFailureModeExp(ObjFailureMode):
 
 
 class ObjFailureModeDelay(ObjFailureMode):
-
-    # def __init__(
-    #     self,
-    #     fm_name,
-    #     failure_param_name="ttf",
-    #     repair_param_name="ttr",
-    #     **kwargs,
-    # ):
-
-    #     super().__init__(
-    #         fm_name,
-    #         failure_param_name=failure_param_name,
-    #         repair_param_name=repair_param_name,
-    #         **kwargs,
-    #     )
     def set_default_failure_param_name(self, param_name=None):
         self.failure_param_name = "ttf" or param_name
 
