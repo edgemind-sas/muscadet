@@ -97,7 +97,7 @@ def the_system():
         fm_name="frun",
         targets=["CA", "CB"],
         failure_effects={"c1": False, "c2": False},
-        failure_param=1 / 10,
+        failure_param=[0.1, 0.2],
     )
 
     system.add_component(
@@ -148,7 +148,7 @@ def test_system(the_system):
     assert len(trans_fired) == 1
     tf = trans_fired[0]
     assert tf.end_time == 0
-    assert tf.bkd.distLaw().parameter(0) == 0.0
+    assert tf.bkd.distLaw().parameter(0) == 0.2
     assert tf.bkd.target(0).basename() == "frun__cc_12_occ"
     assert tf.bkd.parent().name() == "CX__frun"
     assert the_system.comp["CA"].flows_out["c1"].var_fed.value() is False

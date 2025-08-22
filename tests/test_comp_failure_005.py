@@ -90,7 +90,7 @@ def the_system():
         fm_name="frun_1",
         targets=["CA", "CB"],
         failure_effects={".*": False},
-        failure_param=1 / 10,
+        failure_param=[0.1, 0.1],
     )
 
     system.add_component(
@@ -98,7 +98,7 @@ def the_system():
         fm_name="frun_2",
         targets=["CA", "CB"],
         failure_effects={"f2": False},
-        failure_param=1 / 10,
+        failure_param=[0.1, 0.1],
     )
 
     return system

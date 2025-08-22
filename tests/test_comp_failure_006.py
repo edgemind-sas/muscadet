@@ -97,7 +97,7 @@ def the_system():
         fm_name="frun",
         targets=["C1a", "C1b"],
         failure_effects={"f1": False, "f2": False},
-        failure_param=1 / 10,
+        failure_param=[0.1, 0.2],
     )
 
     return system
@@ -117,10 +117,10 @@ def test_system(the_system):
 
     # Ensure transitions are valid before proceeding
     transitions = the_system.isimu_fireable_transitions()
-    assert len(transitions) == 2
+    assert len(transitions) == 3
     assert transitions[0].end_time == float("inf")
 
-    the_system.isimu_set_transition(0, date=10)
+    the_system.isimu_set_transition(1, date=10)
     trans_fired = the_system.isimu_step_forward()
 
     assert len(trans_fired) == 1
@@ -138,7 +138,7 @@ def test_system(the_system):
 
     assert the_system.currentTime() == 10
 
-    the_system.isimu_set_transition(0)
+    the_system.isimu_set_transition(1)
     the_system.isimu_step_forward()
 
     assert the_system.currentTime() == 10

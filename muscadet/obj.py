@@ -1318,23 +1318,16 @@ class ObjFailureMode(cod3s.PycComponent):
                         target_comb=target_comb
                     )
 
-                # __import__("ipdb").set_trace()
                 target_comps_cur = [
                     self.system().component(self.targets[idx]) for idx in target_set_idx
                 ]
-                if self.failure_cond is not True:
-                    failure_cond_cur = self.get_failure_cond(
-                        target_comps_cur, self.failure_cond
-                    )
-                else:
-                    failure_cond_cur = self.failure_cond
 
-                if self.repair_cond is not True:
-                    repair_cond_cur = self.get_repair_cond(
-                        target_comps_cur, self.repair_cond
-                    )
-                else:
-                    repair_cond_cur = self.repair_cond
+                failure_cond_cur = self.get_failure_cond(
+                    target_comps_cur, failure_var_params_cur
+                )
+                repair_cond_cur = self.get_repair_cond(
+                    target_comps_cur, repair_var_params_cur
+                )
 
                 # if fm_name_cur == "frun__cc_134":
                 #     __import__("ipdb").set_trace()
@@ -1358,30 +1351,37 @@ class ObjFailureMode(cod3s.PycComponent):
                     step=self.step,
                 )
 
-    def get_failure_cond(self, target_comps, failure_cond):
-        def failure_cond_fun():
-            return all(
-                [
-                    comp.flows_in[flow].var_fed.value() == flow_value
-                    for flow, flow_value in failure_cond.items()
-                    for comp in target_comps
-                ]
-            )
+    def get_failure_cond(self, target_comps, failure_param):
+        if self.failure_cond is not True:
 
-        return failure_cond_fun
+            def failure_cond_fun():
+                return all(
+                    [
+                        comp.flows_in[flow].var_fed.value() == flow_value
+                        for flow, flow_value in self.failure_cond.items()
+                        for comp in target_comps
+                    ]
+                )
 
-    def get_repair_cond(self, target_comps, repair_cond):
-        def repair_cond_fun():
-            # repair_cond = self.repair_cond
-            return all(
-                [
-                    comp.flows_in[flow].var_fed.value() == flow_value
-                    for flow, flow_value in repair_cond.items()
-                    for comp in target_comps
-                ]
-            )
+            return failure_cond_fun
+        else:
+            return True
 
-        return repair_cond_fun
+    def get_repair_cond(self, target_comps, repair_param):
+        if self.repair_cond is not True:
+
+            def repair_cond_fun():
+                return all(
+                    [
+                        comp.flows_in[flow].var_fed.value() == flow_value
+                        for flow, flow_value in self.repair_cond.items()
+                        for comp in target_comps
+                    ]
+                )
+
+            return repair_cond_fun
+        else:
+            return True
 
         # __import__("ipdb").set_trace()
 
@@ -1494,6 +1494,41 @@ class ObjFailureModeExp(ObjFailureMode):
 
     def set_occ_law_repair(self, params):
         return {"cls": "exp", "rate": params[self.repair_param_name[0]]}
+
+    def get_failure_cond(self, target_comps, failure_param):
+        if self.failure_cond is not True:
+
+            def failure_cond_fun():
+                return failure_param[self.failure_param_name[0]].bValue() and all(
+                    [
+                        comp.flows_in[flow].var_fed.value() == flow_value
+                        for flow, flow_value in self.failure_cond.items()
+                        for comp in target_comps
+                    ]
+                )
+
+        else:
+
+            def failure_cond_fun():
+                return failure_param[self.failure_param_name[0]].bValue()
+
+        return failure_cond_fun
+
+    def get_repair_cond(self, target_comps, repair_param):
+        if self.repair_cond is not True:
+
+            def repair_cond_fun():
+                return all(
+                    [
+                        comp.flows_in[flow].var_fed.value() == flow_value
+                        for flow, flow_value in self.repair_cond.items()
+                        for comp in target_comps
+                    ]
+                )
+
+            return repair_cond_fun
+        else:
+            return True
 
 
 class ObjFailureModeDelay(ObjFailureMode):
