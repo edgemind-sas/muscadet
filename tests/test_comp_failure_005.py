@@ -97,7 +97,7 @@ def the_system():
         cls="ObjFailureModeExp",
         fm_name="frun_2",
         targets=["CA", "CB"],
-        failure_effects={"f2": False},
+        failure_effects={"c2": False},
         failure_param=[0.1, 0.1],
     )
 
@@ -140,7 +140,7 @@ def test_system(the_system):
             assert the_system.comp[cname].flows_out[fname].var_fed.value() is False
     for cname in ["CB"]:
         for fname in ["c2"]:
-            assert the_system.comp[cname].flows_out[fname].var_fed.value() is True
+            assert the_system.comp[cname].flows_out[fname].var_fed.value() is False
 
 
 def test_delete(the_system):

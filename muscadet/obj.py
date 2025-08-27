@@ -1278,6 +1278,8 @@ class ObjFailureMode(cod3s.PycComponent):
                 for target_idx in target_set_idx:
                     comp_target_cur = self.system().component(self.targets[target_idx])
                     for flow_name_pat, val in self.failure_effects.items():
+                        if len(flow_name_pat) == 0:
+                            continue
                         fo_found = False
                         for fo_name, fo in comp_target_cur.flows_out.items():
                             if re.search(f"^{flow_name_pat}$", fo_name):
@@ -1290,12 +1292,14 @@ class ObjFailureMode(cod3s.PycComponent):
                                 fo_found = True
                         if not fo_found:
                             raise ValueError(
-                                f"[Component {str(comp_target_cur)}]\n[Failure effects of mode {fm_name}] Pattern {flow_name_pat} does not match any flow out"
+                                f"[Component {str(comp_target_cur)}]\n[{comp_target_cur.name()}: Failure effects of mode {fm_name}] Pattern {flow_name_pat} does not match any flow out"
                             )
                 repair_effects_cur = []
                 for target_idx in target_set_idx:
                     comp_target_cur = self.system().component(self.targets[target_idx])
                     for flow_name_pat, val in self.repair_effects.items():
+                        if len(flow_name_pat) == 0:
+                            continue
                         fo_found = False
                         for fo_name, fo in comp_target_cur.flows_out.items():
                             if re.search(f"^{flow_name_pat}$", fo_name):
@@ -1308,7 +1312,7 @@ class ObjFailureMode(cod3s.PycComponent):
                                 fo_found = True
                         if not fo_found:
                             raise ValueError(
-                                f"[Component {str(comp_target_cur)}]\n[Repair effects of mode {fm_name}] Pattern {flow_name_pat} does not match any flow out"
+                                f"[Component {str(comp_target_cur)}]\n[{comp_target_cur.name()}: Repair effects of mode {fm_name}] Pattern {flow_name_pat} does not match any flow out"
                             )
 
                 repair_effects_cur = [
