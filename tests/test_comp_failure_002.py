@@ -98,6 +98,7 @@ def the_system():
         targets=["C1a", "C1b"],
         failure_effects={"f1": False, "f2": False},
         failure_param=1 / 10,
+        repair_param=0.1,
     )
 
     return system
@@ -137,7 +138,6 @@ def test_system(the_system):
     transitions = the_system.isimu_fireable_transitions()
 
     assert the_system.currentTime() == 10
-
     the_system.isimu_set_transition(0)
     the_system.isimu_step_forward()
 

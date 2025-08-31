@@ -93,7 +93,7 @@ def the_system():
         targets="CB",
         failure_effects={"b2": False},
         failure_param=1 / 10,
-        #        repair_param=[],
+        repair_param=0.1,
     )
 
     # system.add_component(

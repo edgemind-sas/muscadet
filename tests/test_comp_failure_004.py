@@ -99,6 +99,7 @@ def the_system():
         targets=["CA", "CB"],
         failure_effects={"c1": False, "c2": False},
         failure_param=[0.1, 0.2],
+        repair_param=[0.1, 0.1],
     )
 
     system.add_component(

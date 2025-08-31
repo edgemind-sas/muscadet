@@ -1534,7 +1534,7 @@ class ObjFailureModeExp(ObjFailureMode):
         if self.repair_cond is not True:
 
             def repair_cond_fun():
-                return all(
+                return repair_param[self.repair_param_name[0]].bValue() and all(
                     [
                         comp.flows_in[flow].var_fed.value() == flow_value
                         for flow, flow_value in self.repair_cond.items()
@@ -1542,9 +1542,12 @@ class ObjFailureModeExp(ObjFailureMode):
                     ]
                 )
 
-            return repair_cond_fun
         else:
-            return True
+
+            def repair_cond_fun():
+                return repair_param[self.repair_param_name[0]].bValue()
+
+        return repair_cond_fun
 
 
 class ObjFailureModeDelay(ObjFailureMode):

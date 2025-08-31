@@ -98,6 +98,7 @@ def the_system():
         targets=["C1a", "C1b"],
         failure_effects={"f1": False, "f2": False},
         failure_param=[0.1, 0.2],
+        repair_param=[0.1, 0.2],
     )
 
     return system
