@@ -143,14 +143,14 @@ def test_system(the_system):
     transitions = the_system.isimu_fireable_transitions()
     assert len(transitions) == 18
 
-    the_system.isimu_set_transition("CX__frun.frun__cc_12__occ")
+    the_system.isimu_set_transition("CX__frun.occ__cc_12")
     trans_fired = the_system.isimu_step_forward()
 
     assert len(trans_fired) == 1
     tf = trans_fired[0]
     assert tf.end_time == 0
     assert tf.bkd.distLaw().parameter(0) == 0.2
-    assert tf.bkd.target(0).basename() == "frun__cc_12_occ"
+    assert tf.bkd.target(0).basename() == "occ__cc_12"
     assert tf.bkd.parent().name() == "CX__frun"
     assert the_system.comp["CA"].flows_out["c1"].var_fed.value() is False
     assert the_system.comp["CA"].flows_out["c2"].var_fed.value() is False
@@ -162,7 +162,7 @@ def test_system(the_system):
     assert the_system.currentTime() == 0
     assert len(transitions) == 3
     assert all([tr.comp_name == "CX__frun" for tr in transitions])
-    the_system.isimu_set_transition("CX__frun.frun__cc_2__occ")
+    the_system.isimu_set_transition("CX__frun.occ__cc_2")
     trans_fired = the_system.isimu_step_forward()
 
     transitions = the_system.isimu_fireable_transitions()
@@ -170,7 +170,7 @@ def test_system(the_system):
     assert len(transitions) == 3
     assert all([tr.comp_name == "CX__frun" for tr in transitions])
 
-    the_system.isimu_set_transition("CX__frun.frun__cc_12__rep")
+    the_system.isimu_set_transition("CX__frun.rep__cc_12")
     trans_fired = the_system.isimu_step_forward()
     transitions = the_system.isimu_fireable_transitions()
 
@@ -179,7 +179,7 @@ def test_system(the_system):
         for fname in ["c1", "c2"]:
             assert the_system.comp[cname].flows_out[fname].var_fed.value() is False
 
-    the_system.isimu_set_transition("TXX__frun.frun__cc_134__occ")
+    the_system.isimu_set_transition("TXX__frun.occ__cc_134")
     trans_fired = the_system.isimu_step_forward()
 
     for cname in ["T1", "T3", "T4"]:
@@ -194,7 +194,7 @@ def test_system(the_system):
         for fname in ["f3"]:
             assert the_system.comp[cname].flows_out[fname].var_fed.value() is False
 
-    the_system.isimu_set_transition("TXX__frun.frun__cc_134__rep")
+    the_system.isimu_set_transition("TXX__frun.rep__cc_134")
     trans_fired = the_system.isimu_step_forward()
 
     for cname in ["T1", "T2", "T3", "T4"]:

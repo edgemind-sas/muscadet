@@ -65,7 +65,7 @@ def test_system(the_system):
         cls="ObjEvent",
         name="CX_NOK",
         cond=cond,
-        tempo=10,
+        tempo_occ=10,
     )
 
     # Run simulation
@@ -75,27 +75,27 @@ def test_system(the_system):
         for fname in ["c1", "c2"]:
             assert the_system.comp[cname].flows_out[fname].var_fed.value() is True
 
-    assert C_NOK.state("CX_NOK_occurred").isActive() is False
+    assert C_NOK.state("occ").isActive() is False
 
     # Ensure transitions are valid before proceeding
     transitions = the_system.isimu_fireable_transitions()
 
     assert len(transitions) == 3
 
-    the_system.isimu_set_transition("CX__frun.frun__cc_12__occ")
+    the_system.isimu_set_transition("CX__frun.occ__cc_12")
     trans_fired = the_system.isimu_step_forward()
     assert the_system.comp["CA"].flows_out["c1"].var_fed.value() is False
     assert the_system.comp["CA"].flows_out["c2"].var_fed.value() is False
     assert the_system.comp["CB"].flows_out["c1"].var_fed.value() is False
     assert the_system.comp["CB"].flows_out["c2"].var_fed.value() is False
 
-    the_system.isimu_set_transition("CX__frun.frun__cc_12__rep", date=6)
+    the_system.isimu_set_transition("CX__frun.rep__cc_12", date=6)
 
     trans_fired = the_system.isimu_step_forward()
     assert the_system.currentTime() == 6
     transitions = the_system.isimu_fireable_transitions()
-    assert all([trans.name != "CX_NOK__occurred" for trans in transitions])
-    assert C_NOK.state("CX_NOK_occurred").isActive() is False
+    assert all([trans.name != "occ" for trans in transitions])
+    assert C_NOK.state("occ").isActive() is False
 
 
 def test_delete(the_system):

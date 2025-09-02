@@ -125,7 +125,7 @@ def test_system(the_system):
 
     transitions = the_system.isimu_fireable_transitions()
     assert len(transitions) == 1
-    the_system.isimu_set_transition("CB__frun.frun__occ")
+    the_system.isimu_set_transition("CB__frun.occ")
     trans_fired = the_system.isimu_step_forward()
 
     for cname in ["CA"]:
@@ -138,7 +138,7 @@ def test_system(the_system):
         for fname in ["b1"]:
             assert the_system.comp[cname].flows_out[fname].var_fed.value() is True
 
-    the_system.isimu_set_transition("CB__frun.frun__rep")
+    the_system.isimu_set_transition("CB__frun.rep")
     trans_fired = the_system.isimu_step_forward()
 
     for cname in ["CA"]:

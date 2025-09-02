@@ -124,7 +124,7 @@ def test_system(the_system):
     transitions = the_system.isimu_fireable_transitions()
     assert len(transitions) == 6
     # __import__("ipdb").set_trace()
-    the_system.isimu_set_transition("CX__frun_1.frun_1__cc_1__occ")
+    the_system.isimu_set_transition("CX__frun_1.occ__cc_1")
     trans_fired = the_system.isimu_step_forward()
 
     for cname in ["CA"]:
@@ -134,7 +134,7 @@ def test_system(the_system):
         for fname in ["c1", "c2"]:
             assert the_system.comp[cname].flows_out[fname].var_fed.value() is True
 
-    the_system.isimu_set_transition("CX__frun_2.frun_2__cc_2__occ")
+    the_system.isimu_set_transition("CX__frun_2.occ__cc_2")
     trans_fired = the_system.isimu_step_forward()
 
     for cname in ["CA"]:

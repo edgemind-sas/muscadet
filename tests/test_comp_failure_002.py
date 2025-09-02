@@ -128,7 +128,7 @@ def test_system(the_system):
 
     tf = trans_fired[0]
     assert tf.bkd.distLaw().parameter(0) == 0.1
-    assert tf.bkd.target(0).basename() == "frun__cc_1_occ"
+    assert tf.bkd.target(0).basename() == "occ__cc_1"
     assert tf.bkd.parent().name() == "C1X__frun"
     assert the_system.comp["C1a"].flows_out["f1"].var_fed.value() is False
     assert the_system.comp["C1a"].flows_out["f2"].var_fed.value() is False

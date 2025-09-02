@@ -57,7 +57,7 @@ def test_system(the_system):
         cls="ObjEvent",
         name="CA_NOK",
         cond=cond,
-        tempo=0,
+        tempo_occ=0,
     )
 
     # Run simulation
@@ -67,14 +67,14 @@ def test_system(the_system):
         for fname in ["c1", "c2"]:
             assert the_system.comp[cname].flows_out[fname].var_fed.value() is True
 
-    assert CA_NOK.state("CA_NOK_occurred").isActive() is False
+    assert CA_NOK.state("occ").isActive() is False
 
     # Ensure transitions are valid before proceeding
     transitions = the_system.isimu_fireable_transitions()
 
     assert len(transitions) == 3
 
-    the_system.isimu_set_transition("CX__frun.frun__cc_1__occ")
+    the_system.isimu_set_transition("CX__frun.occ__cc_1")
     trans_fired = the_system.isimu_step_forward()
     assert the_system.comp["CA"].flows_out["c1"].var_fed.value() is False
     assert the_system.comp["CA"].flows_out["c2"].var_fed.value() is False
@@ -82,11 +82,11 @@ def test_system(the_system):
     assert the_system.comp["CB"].flows_out["c2"].var_fed.value() is True
 
     transitions = the_system.isimu_fireable_transitions()
-    assert CA_NOK.state("CA_NOK_occurred").isActive() is False
+    assert CA_NOK.state("occ").isActive() is False
     trans_fired = the_system.isimu_step_forward()
     assert len(trans_fired) == 1
-    assert trans_fired[0].name == "CA_NOK__occurred"
-    assert CA_NOK.state("CA_NOK_occurred").isActive() is True
+    assert trans_fired[0].name == "occ"
+    assert CA_NOK.state("occ").isActive() is True
     assert the_system.currentTime() == 0
 
 
