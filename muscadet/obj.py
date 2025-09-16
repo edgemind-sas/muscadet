@@ -1147,7 +1147,7 @@ class ObjFailureMode(cod3s.PycComponent):
     Examples
     --------
     Basic failure mode with default naming:
-    
+
     >>> fm = ObjFailureMode(
     ...     fm_name="common_cause",
     ...     targets=["pump1", "pump2"],
@@ -1157,7 +1157,7 @@ class ObjFailureMode(cod3s.PycComponent):
     # Creates automata: "common_cause__cc_12", "common_cause__cc_1", "common_cause__cc_2"
 
     Using custom trans_name_prefix with binary representation:
-    
+
     >>> fm = ObjFailureMode(
     ...     fm_name="failure",
     ...     targets=["comp1", "comp2", "comp3"],
@@ -1167,7 +1167,7 @@ class ObjFailureMode(cod3s.PycComponent):
     # Creates automata like: "failure__bin_110", "failure__bin_101", etc.
 
     Using custom trans_name_prefix_fun for complex naming:
-    
+
     >>> def custom_naming(target_set_idx, target_comb, target_binary, **kwargs):
     ...     return f"__custom_{len(target_set_idx)}of{kwargs['order_max']}_{target_binary}"
     ...
@@ -1180,7 +1180,7 @@ class ObjFailureMode(cod3s.PycComponent):
     # Creates automata like: "advanced__custom_2of3_110", "advanced__custom_1of3_100", etc.
 
     Using underscore-separated target combinations:
-    
+
     >>> fm = ObjFailureMode(
     ...     fm_name="mode",
     ...     targets=["unit1", "unit2", "unit3"],
@@ -1378,17 +1378,17 @@ class ObjFailureMode(cod3s.PycComponent):
                                 f"[Component {str(comp_target_cur)}]\n[{comp_target_cur.name()}: Repair effects of mode {fm_name}] Pattern {flow_name_pat} does not match any flow out"
                             )
 
-                repair_effects_cur = [
-                    {
-                        "var": self.system()
-                        .component(self.targets[target_idx])
-                        .flows_out[flow_name]
-                        .var_fed_available,
-                        "value": val,
-                    }
-                    for target_idx in target_set_idx
-                    for flow_name, val in self.repair_effects.items()
-                ]
+                # repair_effects_cur = [
+                #     {
+                #         "var": self.system()
+                #         .component(self.targets[target_idx])
+                #         .flows_out[flow_name]
+                #         .var_fed_available,
+                #         "value": val,
+                #     }
+                #     for target_idx in target_set_idx
+                #     for flow_name, val in self.repair_effects.items()
+                # ]
 
                 failure_state_name_cur = self.failure_state
                 repair_state_name_cur = self.repair_state

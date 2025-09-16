@@ -52,7 +52,7 @@ def test_system(the_system):
     # TXX__frun_obj = the_system.comp["TXX__frun"]
 
     CA_comp = the_system.comp["CA"]
-    cond = [[{"var": CA_comp.flows_out["c1"].var_fed, "value": False}]]
+    cond = [[{"attr": CA_comp.flows_out["c1"].var_fed, "value": False}]]
     CA_NOK = the_system.add_component(
         cls="ObjEvent",
         name="CA_NOK",

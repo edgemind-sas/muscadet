@@ -57,10 +57,10 @@ def test_system(the_system):
 
     cond = [
         [
-            {"var": CA_comp.flows_out["c1"].var_fed, "value": False},
-            {"var": CA_comp.flows_out["c2"].var_fed, "value": False},
-            {"var": CB_comp.flows_out["c1"].var_fed, "value": False},
-            {"var": CB_comp.flows_out["c2"].var_fed, "value": False},
+            {"attr": CA_comp.flows_out["c1"].var_fed, "value": False},
+            {"attr": CA_comp.flows_out["c2"].var_fed, "value": False},
+            {"attr": CB_comp.flows_out["c1"].var_fed, "value": False},
+            {"attr": CB_comp.flows_out["c2"].var_fed, "value": False},
         ],
     ]
     C_NOK = the_system.add_component(
