@@ -620,6 +620,8 @@ class FlowOutTempo(FlowOut):
         False,
         description="Indicates if flow init state is enabled or disabled (default disabled",
     )
+    # NOTE: Seems to be a cod3s.StateModel object so that bkd suffix is not relevant...
+    # neither the typing.Any...
     state_enable_bkd: typing.Any = pydantic.Field(
         None, description="Enable state backend"
     )
@@ -659,7 +661,7 @@ class FlowOutTempo(FlowOut):
         def cond_method_enable():
             return self.var_prod_available.value()
 
-        aut.get_transition_by_name(trans_name).bkd.setCondition(
+        aut.get_transition_by_name(trans_name)._bkd.setCondition(
             cond_method_name, cond_method_enable
         )
 
@@ -668,7 +670,7 @@ class FlowOutTempo(FlowOut):
         def cond_method_disable():
             return not self.var_prod_available.value()
 
-        aut.get_transition_by_name(trans_name).bkd.setCondition(
+        aut.get_transition_by_name(trans_name)._bkd.setCondition(
             cond_method_name, cond_method_disable
         )
 
@@ -683,7 +685,7 @@ class FlowOutTempo(FlowOut):
         #     raise ValueError("trigger logic must be 'and' or 'or'")
         self.state_enable_bkd = aut.get_state_by_name(self.state_enable_name)
 
-        aut.bkd.addSensitiveMethod(self.sm_flow_fed_name, self.sm_flow_fed_fun)
+        aut._bkd.addSensitiveMethod(self.sm_flow_fed_name, self.sm_flow_fed_fun)
 
         comp.automata_d[aut.name] = aut
 
@@ -694,9 +696,9 @@ class FlowOutTempo(FlowOut):
 
             def sensitive_set_flow_template():
                 # self.var_prod.setValue(
-                #     self.flow_start.bkd.isActive() and
+                #     self.flow_start._bkd.isActive() and
                 #     self.var_prod_available.value())
-                self.var_prod.setValue(self.state_enable_bkd.bkd.isActive())
+                self.var_prod.setValue(self.state_enable_bkd._bkd.isActive())
 
                 self.var_fed.setValue(
                     self.var_prod.value()
@@ -708,9 +710,9 @@ class FlowOutTempo(FlowOut):
 
             def sensitive_set_flow_template():
                 # self.var_prod.setValue(
-                #     self.flow_start.bkd.isActive() and
+                #     self.flow_start._bkd.isActive() and
                 #     self.var_prod_available.value())
-                self.var_prod.setValue(self.state_enable_bkd.bkd.isActive())
+                self.var_prod.setValue(self.state_enable_bkd._bkd.isActive())
 
                 self.var_fed.setValue(
                     not (
@@ -796,7 +798,7 @@ class FlowOutOnTrigger(FlowOut):
         else:
             raise ValueError("trigger logic must be 'and' or 'or'")
 
-        aut.get_transition_by_name(trans_name).bkd.setCondition(
+        aut.get_transition_by_name(trans_name)._bkd.setCondition(
             cond_method_name, cond_method_12
         )
 
@@ -815,13 +817,13 @@ class FlowOutOnTrigger(FlowOut):
         else:
             raise ValueError("trigger logic must be 'and' or 'or'")
 
-        aut.get_transition_by_name(trans_name).bkd.setCondition(
+        aut.get_transition_by_name(trans_name)._bkd.setCondition(
             cond_method_name, cond_method_21
         )
 
         self.trigger_up = aut.get_state_by_name("up")
 
-        aut.bkd.addSensitiveMethod(self.sm_flow_fed_name, self.sm_flow_fed_fun)
+        aut._bkd.addSensitiveMethod(self.sm_flow_fed_name, self.sm_flow_fed_fun)
 
         comp.automata_d[aut.name] = aut
 
@@ -831,7 +833,7 @@ class FlowOutOnTrigger(FlowOut):
         def sensitive_set_flow_template():
             if not self.negate:
                 self.var_prod.setValue(
-                    self.trigger_up.bkd.isActive() and self.var_prod_available.value()
+                    self.trigger_up._bkd.isActive() and self.var_prod_available.value()
                 )
 
                 self.var_fed.setValue(
@@ -841,7 +843,7 @@ class FlowOutOnTrigger(FlowOut):
                 )
             else:
                 self.var_prod.setValue(
-                    self.trigger_up.bkd.isActive() and self.var_prod_available.value()
+                    self.trigger_up._bkd.isActive() and self.var_prod_available.value()
                 )
 
                 self.var_fed.setValue(

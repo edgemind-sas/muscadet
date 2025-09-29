@@ -858,10 +858,10 @@ class ObjFlow(cod3s.PycComponent):
         # Conditions
         trans_name_12 = f"{name}_{st1}_{st2}"
         if isinstance(cond_occ_12, bool):
-            aut.get_transition_by_name(trans_name_12).bkd.setCondition(cond_occ_12)
+            aut.get_transition_by_name(trans_name_12)._bkd.setCondition(cond_occ_12)
 
         elif isinstance(cond_occ_12, str):
-            aut.get_transition_by_name(trans_name_12).bkd.setCondition(
+            aut.get_transition_by_name(trans_name_12)._bkd.setCondition(
                 self.variable(cond_occ_12)
             )
         else:
@@ -870,7 +870,7 @@ class ObjFlow(cod3s.PycComponent):
             )
 
         # Effects
-        st2_bkd = aut.get_state_by_name(st2_name).bkd
+        st2_bkd = aut.get_state_by_name(st2_name)._bkd
         var_value_list_12 = self.pat_to_var_value_list(*effects_12)
         if len(var_value_list_12) > 0:
 
@@ -878,9 +878,9 @@ class ObjFlow(cod3s.PycComponent):
                 if st2_bkd.isActive():
                     [var.setValue(value) for var, value in var_value_list_12]
 
-            # setattr(comp.bkd, method_name, sensitive_method)
+            # setattr(comp._bkd, method_name, sensitive_method)
             method_name_12 = f"effect_{self.name()}_{trans_name_12}"
-            aut.bkd.addSensitiveMethod(method_name_12, sensitive_method_12)
+            aut._bkd.addSensitiveMethod(method_name_12, sensitive_method_12)
             [
                 var.addSensitiveMethod(method_name_12, sensitive_method_12)
                 for var, value in var_value_list_12
@@ -891,10 +891,10 @@ class ObjFlow(cod3s.PycComponent):
         # Conditions
         trans_name_21 = f"{name}_{st2}_{st1}"
         if isinstance(cond_occ_21, bool):
-            aut.get_transition_by_name(trans_name_21).bkd.setCondition(cond_occ_21)
+            aut.get_transition_by_name(trans_name_21)._bkd.setCondition(cond_occ_21)
 
         elif isinstance(cond_occ_21, str):
-            aut.get_transition_by_name(trans_name_21).bkd.setCondition(
+            aut.get_transition_by_name(trans_name_21)._bkd.setCondition(
                 self.variable(cond_occ_21)
             )
         else:
@@ -902,7 +902,7 @@ class ObjFlow(cod3s.PycComponent):
                 f"Condition '{cond_occ_21}' for transition {trans_name_21} not supported"
             )
         # Effects
-        st1_bkd = aut.get_state_by_name(st1_name).bkd
+        st1_bkd = aut.get_state_by_name(st1_name)._bkd
         var_value_list_21 = self.pat_to_var_value_list(*effects_21)
         if len(var_value_list_21) > 0:
 
@@ -910,9 +910,9 @@ class ObjFlow(cod3s.PycComponent):
                 if st1_bkd.isActive():
                     [var.setValue(value) for var, value in var_value_list_21]
 
-            # setattr(comp.bkd, method_name, sensitive_method)
+            # setattr(comp._bkd, method_name, sensitive_method)
             method_name_21 = f"effect_{self.name()}_{trans_name_21}"
-            aut.bkd.addSensitiveMethod(method_name_21, sensitive_method_21)
+            aut._bkd.addSensitiveMethod(method_name_21, sensitive_method_21)
             [
                 var.addSensitiveMethod(method_name_21, sensitive_method_21)
                 for var, value in var_value_list_21

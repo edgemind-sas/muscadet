@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, field_validator, model_validator
-from typing import Optional, List, Dict, Any, Union, Literal
+from typing import Optional, List, Dict, Any, Union, Literal, ClassVar, Type
 import cod3s
 from .flow import FlowIn, FlowOut
 
@@ -68,6 +68,10 @@ class KBMuscadet(cod3s.KB):
     a model system. It provides a reusable catalog of components
     with their complete specifications.
     """
+
+    component_class_type: ClassVar[Type[ComponentMuscadetClass]] = (
+        ComponentMuscadetClass
+    )
 
     component_classes: Optional[Dict[str, ComponentMuscadetClass]] = Field(
         {}, description="Dictionnary of component classes"

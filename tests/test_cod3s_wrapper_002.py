@@ -25,7 +25,7 @@ def kb():
     )
     flow_out = InterfaceFlowOut(name="flow")
     start_class.add_interface(flow_out)
-    kb.component_classes["Start"] = start_class
+    kb.add_component_class(start_class)
 
     # Create Task component class
     task_class = ObjFlowClass(class_name="Task")
@@ -33,13 +33,13 @@ def kb():
     flow_out = InterfaceFlowOut(name="flow")
     task_class.add_interface(flow_in)
     task_class.add_interface(flow_out)
-    kb.component_classes["Task"] = task_class
+    kb.add_component_class(task_class)
 
     # Create End component class
     end_class = ObjFlowClass(class_name="End")
     flow_in = InterfaceFlowIn(name="flow")
     end_class.add_interface(flow_in)
-    kb.component_classes["End"] = end_class
+    kb.add_component_class(end_class)
 
     return kb
 
