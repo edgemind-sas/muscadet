@@ -97,7 +97,8 @@ class ObjFlowInstance(ObjFlowClass, cod3s.ComponentInstance):
         for ifce in self.interfaces:
 
             if ifce.port_type == "input":
-                __import__("ipdb").set_trace()
+                # TODO : WE ARE HERE
+                # __import__("ipdb").set_trace()
 
                 comp.add_flow(ifce.to_bkd_pycatshoo())
 

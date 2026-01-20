@@ -298,6 +298,14 @@ class FlowIn(FlowModel):
 
 
 class FlowOut(FlowModel):
+
+    var_is_active: typing.Any = pydantic.Field(
+        None, description="Indicating if the flow out is active or not"
+    )
+    var_is_active_default: bool = pydantic.Field(
+        True, description="Indicating the default activation status"
+    )
+
     var_prod: typing.Any = pydantic.Field(None, description="Flow production")
     var_prod_available: typing.Any = pydantic.Field(
         None, description="Indicates if the flow production condition are met"
@@ -318,6 +326,7 @@ class FlowOut(FlowModel):
     var_prod_default: typing.Any = pydantic.Field(
         False, description="Flow production default value"
     )
+
     negate: bool = pydantic.Field(
         False, description="Indicates if the flow output is negated"
     )
@@ -340,6 +349,13 @@ class FlowOut(FlowModel):
             f"{self.name}_fed_available_out", pyc.TVarType.t_bool, True
         )
         self.var_fed_available.setReinitialized(True)
+
+        self.var_is_active = comp.addVariable(
+            f"{self.name}_is_active",
+            pyc.TVarType.t_bool,
+            self.var_is_active_default,
+        )
+        self.var_is_active.setReinitialized(True)
 
         self.var_prod_default = (
             py_type() if self.var_prod_default is None else self.var_prod_default
@@ -458,6 +474,7 @@ class FlowOut(FlowModel):
                 self.var_prod.setValue(self.var_prod_available.value())
                 self.var_fed.setValue(
                     self.var_prod.value()
+                    and self.var_is_active.value()
                     and self.var_fed_available.value()
                     #                    and self.var_fed_control.andValue(True)
                 )
@@ -469,6 +486,7 @@ class FlowOut(FlowModel):
                 self.var_fed.setValue(
                     not (
                         self.var_prod.value()
+                        and self.var_is_active.value()
                         and self.var_fed_available.value()
                         #                        and self.var_fed_control.andValue(True)
                     )

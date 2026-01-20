@@ -29,9 +29,8 @@ def test_system(the_system):
     # Ensure transitions are valid before proceeding
     transitions = the_system.isimu_fireable_transitions()
 
-    the_system.isimu_set_transition(1, date=None, state_index=0)
+    the_system.isimu_set_transition("Start.flow_ok_nok", date=None, state_index=0)
     trans_fired = the_system.isimu_step_forward()
-
     assert len(trans_fired) == 1
 
     assert the_system.comp["Start"].flows_out["flow"].var_fed.value() == False
