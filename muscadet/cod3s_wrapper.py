@@ -10,8 +10,8 @@ class InterfaceMuscadetTemplate(cod3s.InterfaceTemplate):
 
 class InterfaceFlowIn(InterfaceMuscadetTemplate):
     port_type: Literal["input"] = Field("input", description="Port type")
-    logic: str = Field(
-        "or", description="Flow input logic 'and' ; 'or' (default) ; 'k/n'"
+    logic: Union[str, int] = Field(
+        "or", description="Flow input logic: 'and', 'or' (default), or int k (at-least-k)"
     )
 
     def to_bkd_pycatshoo(self):
@@ -42,7 +42,7 @@ class InterfaceFlowOut(InterfaceMuscadetTemplate):
             name=self.name,
             var_prod_cond=self.logic,
             var_prod_cond_inner_mode=self.logic_inner_mode,
-            negate=self.nagate,
+            negate=self.negate,
         )
 
 

@@ -53,23 +53,9 @@ class FlowModel(cod3s.ObjCOD3S):
             py_type() if self.var_fed_default is None else self.var_fed_default
         )
 
-        # ipdb.set_trace()
         self.var_fed = comp.addVariable(
             f"{self.name}_fed_{port}", pyc_type, py_type(self.var_fed_default)
         )
-        # self.var_fed_available = \ *)
-        #     comp.addVariable(f"{self.name}_fed_available_{port}", *)
-        #                      pyc.TVarType.t_bool, True) *)
-        # self.var_fed_available.setReinitialized(True) *)
-
-        # self.var_fed = \
-        #     comp.addVariable(f"{self.name}_fed",
-        #                      pyc_type, py_type(var_fed_default))
-
-        # self.var_fed_available = \
-        #     comp.addVariable(f"{self.name}_fed_available",
-        #                          pyc.TVarType.t_bool, True)
-        # self.var_fed_available.setReinitialized(True)
 
     def add_automata(self, comp):
         pass
@@ -167,7 +153,9 @@ class FlowIn(FlowModel):
         True, description="Flow available input value when not connected"
     )
 
-    logic: str = pydantic.Field("or", description="Flow input logic and ; or ; k/n")
+    logic: typing.Union[str, int] = pydantic.Field(
+        "or", description="Flow input logic: 'and', 'or', or int k (at-least-k)"
+    )
 
     def get_flow_type_color(self) -> str:
         """Return the color formatting for FlowIn type in orange."""
@@ -183,8 +171,12 @@ class FlowIn(FlowModel):
             return self.var_fed_available.andValue(self.var_available_in_default)
         elif self.logic == "or":
             return self.var_fed_available.orValue(self.var_available_in_default)
+        elif isinstance(self.logic, int):
+            if self.var_fed_available.nbCnx() == 0:
+                return self.var_available_in_default
+            return self.var_fed_available.sumValue(0) >= self.logic
         else:
-            raise ValueError("FlowIn logic must be 'and' or 'or'")
+            raise ValueError("FlowIn logic must be 'and', 'or', or a positive integer")
 
     def get_logic_color(self) -> str:
         """Return the color formatting for logic type."""
@@ -192,21 +184,30 @@ class FlowIn(FlowModel):
             return f"{fg('magenta')}{self.logic}{attr('reset')}"
         elif self.logic == "or":
             return f"{fg('cyan')}{self.logic}{attr('reset')}"
+        elif isinstance(self.logic, int):
+            return f"{fg('yellow')}>={self.logic}{attr('reset')}"
         else:
             return f"{fg('red')}{self.logic}{attr('reset')}"
+
+    def _get_var_in_value(self):
+        """Compute the aggregated input value based on logic type."""
+        if self.logic == "and":
+            return self.var_in.andValue(self.var_in_default)
+        elif self.logic == "or":
+            return self.var_in.orValue(self.var_in_default)
+        elif isinstance(self.logic, int):
+            if self.var_in.nbCnx() == 0:
+                return self.var_in_default
+            return self.var_in.sumValue(0) >= self.logic
+        else:
+            raise ValueError("FlowIn logic must be 'and', 'or', or a positive integer")
 
     def __repr__(self) -> str:
         base_str = super().__repr__()
 
         # Get var_in value safely
         try:
-            if self.logic == "and":
-                var_in_value = self.var_in.andValue(self.var_in_default)
-            elif self.logic == "or":
-                var_in_value = self.var_in.orValue(self.var_in_default)
-            else:
-                raise ValueError("FlowIn logic must be 'and' or 'or'")
-
+            var_in_value = self._get_var_in_value()
         except:
             var_in_value = "N/A"
 
@@ -220,13 +221,7 @@ class FlowIn(FlowModel):
 
         # Get var_in value safely
         try:
-            if self.logic == "and":
-                var_in_value = self.var_in.andValue(self.var_in_default)
-            elif self.logic == "or":
-                var_in_value = self.var_in.orValue(self.var_in_default)
-            else:
-                raise ValueError("FlowIn logic must be 'and' or 'or'")
-
+            var_in_value = self._get_var_in_value()
         except:
             var_in_value = "N/A"
 
@@ -280,8 +275,24 @@ class FlowIn(FlowModel):
                     and self.var_fed_available.orValue(self.var_available_in_default)
                 )
 
+        elif isinstance(self.logic, int):
+            k = self.logic
+
+            def sensitive_set_flow_template():
+                if self.var_in.nbCnx() == 0:
+                    in_ok = self.var_in_default
+                else:
+                    in_ok = self.var_in.sumValue(0) >= k
+
+                if self.var_fed_available.nbCnx() == 0:
+                    avail_ok = self.var_available_in_default
+                else:
+                    avail_ok = self.var_fed_available.sumValue(0) >= k
+
+                self.var_fed.setValue(in_ok and avail_ok)
+
         else:
-            raise ValueError("FlowIn logic must be 'and' or 'or'")
+            raise ValueError("FlowIn logic must be 'and', 'or', or a positive integer")
 
         return sensitive_set_flow_template
 
@@ -627,7 +638,7 @@ class FlowOutTempo(FlowOut):
         "enabling", description="Name of the enabling state"
     )
     # TO IMPLEMENT
-    state_enabling_name: str = pydantic.Field(
+    state_disabling_name: str = pydantic.Field(
         "disabling", description="Name of the disabling state"
     )
 
@@ -753,8 +764,8 @@ class FlowOutOnTrigger(FlowOut):
     trigger_time_down: float = pydantic.Field(
         0, description="Time to jump from up to down when trigger is activited"
     )
-    trigger_logic: str = pydantic.Field(
-        "or", description="Flow input logic and ; or ; k/n"
+    trigger_logic: typing.Union[str, int] = pydantic.Field(
+        "or", description="Flow input logic: 'and', 'or', or int k (at-least-k)"
     )
     trigger_up: typing.Any = pydantic.Field(None, description="Trigger up state")
 
@@ -813,8 +824,14 @@ class FlowOutOnTrigger(FlowOut):
             def cond_method_12():
                 return not (self.var_trigger_in.orValue(False))
 
+        elif isinstance(self.trigger_logic, int):
+            k_up = self.trigger_logic
+
+            def cond_method_12():
+                return not (self.var_trigger_in.sumValue(0) >= k_up)
+
         else:
-            raise ValueError("trigger logic must be 'and' or 'or'")
+            raise ValueError("trigger logic must be 'and', 'or', or a positive integer")
 
         aut.get_transition_by_name(trans_name)._bkd.setCondition(
             cond_method_name, cond_method_12
@@ -832,8 +849,14 @@ class FlowOutOnTrigger(FlowOut):
             def cond_method_21():
                 return self.var_trigger_in.orValue(False)
 
+        elif isinstance(self.trigger_logic, int):
+            k_down = self.trigger_logic
+
+            def cond_method_21():
+                return self.var_trigger_in.sumValue(0) >= k_down
+
         else:
-            raise ValueError("trigger logic must be 'and' or 'or'")
+            raise ValueError("trigger logic must be 'and', 'or', or a positive integer")
 
         aut.get_transition_by_name(trans_name)._bkd.setCondition(
             cond_method_name, cond_method_21
@@ -873,84 +896,3 @@ class FlowOutOnTrigger(FlowOut):
                 )
 
         return sensitive_set_flow_template
-
-
-# # TO BE UPDATED : MAKE IT INHERITING FROM IN AND OUT
-# # With automatic out conditions ???
-# class FlowIO(FlowModel):
-
-#     var_in: typing.Any = pydantic.Field(None, description="Flow input")
-#     var_out: typing.Any = pydantic.Field(None, description="Flow output")
-#     var_out_available: typing.Any = pydantic.Field(
-#         None, description="Flow available out"
-#     )
-#     logic: str = pydantic.Field("or", description="Flow input logic and ; or ; k/n")
-
-#     def add_variables(self, comp, **kwargs):
-
-#         super().add_variables(comp, **kwargs)
-
-#         py_type, pyc_type = get_pyc_type(self.var_type)
-
-#         self.var_in = comp.addReference(f"{self.name}_in")
-
-#         self.var_out = comp.addVariable(f"{self.name}_out", pyc_type, py_type())
-
-#         self.var_out_available = comp.addVariable(
-#             f"{self.name}_out_available", pyc.TVarType.t_bool, True
-#         )
-
-#     def add_mb(self, comp, **kwargs):
-
-#         comp.addMessageBox(f"{self.name}_in")
-#         comp.addMessageBoxImport(f"{self.name}_in", self.var_in, self.name)
-#         comp.addMessageBox(f"{self.name}_out")
-#         comp.addMessageBoxExport(f"{self.name}_out", self.var_out, self.name)
-
-#     def create_sensitive_set_flow_fed_in(self):
-
-#         def sensitive_set_flow_template():
-#             # Reminder the value pass in andValue and orValue is
-#             # the returned value in the case of no connection
-#             if self.logic == "and":
-#                 self.var_fed.setValue(
-#                     self.var_in.andValue(self.var_fed_default)
-#                     and self.var_fed_available.value()
-#                 )
-#             elif self.logic == "or":
-#                 self.var_fed.setValue(
-#                     self.var_in.orValue(self.var_fed_default)
-#                     and self.var_fed_available.value()
-#                 )
-#             else:
-#                 raise ValueError("FlowIn logic must be 'and' or 'or'")
-
-#         return sensitive_set_flow_template
-
-#     def create_sensitive_set_flow_out(self):
-
-#         def sensitive_set_flow_template():
-#             self.var_out.setValue(
-#                 self.var_fed.value() and self.var_out_available.value()
-#             )
-
-#         return sensitive_set_flow_template
-
-#     def update_sensitive_methods(self, comp):
-#         self.sm_flow_fed_fun = self.create_sensitive_set_flow_fed_in()
-#         self.sm_flow_fed_name = f"set_{self.name}_fed"
-#         self.var_in.addSensitiveMethod(self.sm_flow_fed_name, self.sm_flow_fed_fun)
-
-#         self.var_fed_available.addSensitiveMethod(
-#             self.sm_flow_fed_name, self.sm_flow_fed_fun
-#         )
-
-#         comp.addStartMethod(self.sm_flow_fed_name, self.sm_flow_fed_fun)
-
-#         sens_meth_flow_out = self.create_sensitive_set_flow_out()
-#         sens_meth_flow_out_name = f"set_{self.name}_out"
-
-#         self.var_fed.addSensitiveMethod(sens_meth_flow_out_name, sens_meth_flow_out)
-#         self.var_out_available.addSensitiveMethod(
-#             sens_meth_flow_out_name, sens_meth_flow_out
-#         )
