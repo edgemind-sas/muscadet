@@ -1649,11 +1649,13 @@ class ObjFailureModeExp(ObjFailureMode):
 
 
 class ObjFailureModeDelay(ObjFailureMode):
-    def set_default_failure_param_name(self, param_name=None):
-        self.failure_param_name = "ttf" or param_name
+    def set_default_failure_param_name(self):
+        if not self.failure_param_name:
+            self.failure_param_name = ["ttf"]
 
-    def set_default_repair_param_name(self, param_name=None):
-        self.repair_param_name = "ttr" or param_name
+    def set_default_repair_param_name(self):
+        if not self.repair_param_name:
+            self.repair_param_name = ["ttr"]
 
     def set_default_failure_param(self):
         failure_param_diff = len(self.targets) - len(self.failure_param)
