@@ -133,3 +133,9 @@ dmypy.json
 # Custom
 old_stuffs
 doc
+
+# Claude Code / AI assistant artefacts
+CLAUDE.md
+
+# uv lockfile (not committed for now)
+uv.lock
