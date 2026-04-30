@@ -89,15 +89,8 @@ import warnings
 import copy
 import itertools
 from colored import fg, attr
-import importlib
 import typing
 import pydantic
-
-# class TransitionEffect(BaseModel):
-#     var_name: str = \
-#         pydantic.Field(..., description="Variable name")
-#     var_value: typing.Any = \
-#         pydantic.Field(..., description="Variable value to be affected")
 
 
 class ObjFlow(cod3s.PycComponent):
@@ -164,10 +157,8 @@ class ObjFlow(cod3s.PycComponent):
 
         self.flows_in = {}
         self.flows_out = {}
-        # self.flows_io = {}  # TODO: Implement FlowIO class
 
         self.params = {}
-        # self.automata = {} Already initialize in COD3S PycComponent
         self.has_default_out_automata = create_default_out_automata
 
         if partial_init:
@@ -175,7 +166,6 @@ class ObjFlow(cod3s.PycComponent):
             # Create complete the object creation
             pass
         else:
-            # TOREMOVE?: WHAT IS THE POINT TO PASS METADATA HERE SINCE IT IS ALREADY AN ATTRIBUTE ?
             kwargs.update(metadata=metadata)
 
             self.add_flows(**kwargs)
@@ -535,22 +525,7 @@ class ObjFlow(cod3s.PycComponent):
         else:
             raise ValueError(f"Input flow {flow_name} already exists")
 
-    # def add_flow_io(self, **params):
-    #     """
-    #     Adds an input/output flow to the component.
-
-    #     Parameters
-    #     ----------
-    #     **params : dict
-    #         Parameters for the input/output flow.
-    #     """
-    #     flow_name = params.get("name")
-    #     if not (flow_name in self.flows_io):
-    #         self.flows_io[flow_name] = FlowIO(**params)
-    #     else:
-    #         raise ValueError(f"Input/Output flow {flow_name} already exists")
-
-    # DEPRACATED
+    # DEPRECATED
     def prepare_flow_out_params(self, **params):
         """
         Prepares the parameters for an output flow.
@@ -639,7 +614,6 @@ class ObjFlow(cod3s.PycComponent):
             raise ValueError(f"Output flow {flow_name} already exists")
 
         # if var_prod_logic:
-        #     ipdb.set_trace()
         # sm_flow_prod_available_fun = \
         #     self.flows[flow_name].create_sensitive_set_flow_prod_available()
         # sm_flow_prod_available_name = f"set_{self.name}_prod_available"
@@ -656,19 +630,14 @@ class ObjFlow(cod3s.PycComponent):
         **params : dict
             Parameters for the triggered output flow.
         """
+        params = self.prepare_flow_out_params(**params)
+
         flow_name = params.get("name")
 
         if not (flow_name in self.flows_out):
             self.flows_out[flow_name] = FlowOutOnTrigger(**params)
         else:
             raise ValueError(f"Output (on trigger) flow {flow_name} already exists")
-
-    # def get_flows(self, cls=["In", "IO", "Out", "OutOnTrigger"]):
-
-    #     class_list = [globals()[f"Flow{suffix}"]
-    #                   for suffix in cls]
-    #     return [flow for flow in self.flows
-    #             if isinstance(flows, class_list)]
 
     def set_flows(self, **kwargs):
         """
@@ -704,7 +673,6 @@ class ObjFlow(cod3s.PycComponent):
         """
         flow_list = (
             list(self.flows_in.values())
-            # + list(self.flows_io.values())  # TODO: Implement FlowIO class
             + list(self.flows_out.values())
         )
 
@@ -1212,7 +1180,6 @@ class ObjFailureMode(cod3s.PycComponent):
         step=None,
         **kwargs,
     ):
-        # __import__("ipdb").set_trace()
 
         self.fm_name = fm_name
         self.targets = [targets] if isinstance(targets, str) else targets
@@ -1431,8 +1398,6 @@ class ObjFailureMode(cod3s.PycComponent):
                     target_comps_cur, repair_var_params_cur
                 )
 
-                # if fm_name_cur == "frun__cc_134":
-                # __import__("ipdb").set_trace()
                 self.add_aut2st(
                     name=aut_name_cur,
                     st1=repair_state_name_cur,
@@ -1485,7 +1450,6 @@ class ObjFailureMode(cod3s.PycComponent):
         else:
             return True
 
-        # __import__("ipdb").set_trace()
 
     # TO BE OVERLOADED IF NEEDED
     def set_default_failure_param_name(self):
