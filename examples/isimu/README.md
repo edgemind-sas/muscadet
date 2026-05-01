@@ -13,6 +13,7 @@ behaviour. They can be driven either through the
 | `trigger_source` | Warm standby via `FlowOutOnTrigger`. S2 activates instantly when S1 fails, deactivates on repair. |
 | `datacenter_lite` | Composite `var_prod_cond` — `(P1 OR P2) AND C` on a server output. Step through power and cooling failures. |
 | `inverter_chain` | `FlowOut(negate=True)` — two inverters in series, even-parity output. |
+| `cyber_3comp` | Cascading cyber compromise modes (MdC) on a 3-component system, replicating the IMdR P23-4 atelier example. Two cascade mechanisms shown side by side: MdC_B gated by MdC_A's automaton state, MdC_proc gated by a propagated dormant "service" flow. |
 
 All the behaviours above are also covered by tests in `tests/`, but the
 examples here are tuned for visual stepping rather than assertions:
@@ -30,6 +31,7 @@ cod3s-isimu --factory examples.isimu.rbd_kn:build
 cod3s-isimu --factory examples.isimu.trigger_source:build
 cod3s-isimu --factory examples.isimu.datacenter_lite:build
 cod3s-isimu --factory examples.isimu.inverter_chain:build
+cod3s-isimu --factory examples.isimu.cyber_3comp:build
 ```
 
 ## Running as a plain Python script
@@ -42,6 +44,7 @@ python -m examples.isimu.rbd_kn
 python -m examples.isimu.trigger_source
 python -m examples.isimu.datacenter_lite
 python -m examples.isimu.inverter_chain
+python -m examples.isimu.cyber_3comp
 ```
 
 Sample output (`rbd_kn`)::
