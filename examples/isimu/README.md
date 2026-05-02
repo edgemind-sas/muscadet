@@ -56,6 +56,45 @@ AFTER S2 fail    t=10 | S1.f1=0 | S2.f1=0 | S3.f1=1 | T.f1.sum=1 | T.f1=0
 AFTER S2 repair  t=15 | S1.f1=1 | S2.f1=1 | S3.f1=1 | T.f1.sum=3 | T.f1=1
 ```
 
+## Sequence analysis with `run-cod3s-study` (YAML)
+
+The `cyber_3comp` example also ships a pair of YAML specs to drive the
+[`run-cod3s-study`](https://github.com/edgemind-sas/cod3s) CLI. The
+study declares the three MdC, two redoubt-event targets (loss of
+`F1`/`F2` on the process), Monte-Carlo parameters, and indicator
+exports — and produces a sequence analysis ``sequences.xml`` listing
+the paths leading to each target::
+
+```sh
+cd examples/isimu
+run-cod3s-study --model cyber_3comp_model.yaml \
+    --study-specs cyber_3comp_study.yaml \
+    --log-level INFO
+```
+
+Outputs (under `cyber_3comp_study/`, gitignored):
+
+```
+sequences.xml      # the cascade as a sequence (3 transitions, P=1)
+sequences.html     # human-readable XSLT render
+proc_outputs.csv   # F1/F2 mean values over the schedule
+srv_service.csv    # f_service mean values over the schedule
+pyc_param.xml      # final PyCATSHOO parameter dump
+```
+
+Expected `sequences.xml` content (one deterministic sequence, P=1)::
+
+```xml
+<SEQ N="1" P="1" C="process_F1_lost">
+    <BR T="10"> <TR NAME="Srv__mdc_a.occ"   .../></BR>
+    <BR T="15"> <TR NAME="Srv__mdc_b.occ"   .../></BR>
+    <BR T="23"> <TR NAME="Proc__mdc_proc.occ" .../></BR>
+</SEQ>
+```
+
+Same cascade as the `cod3s-isimu` factory and `python -m` runner — the
+YAML path adds the redoubt-event analysis on top.
+
 ## Writing your own factory
 
 Any callable returning a populated `muscadet.System` works as a factory.

@@ -1,0 +1,127 @@
+# Study specifications for the cyber compromise cascade POC.
+#
+# Pairs with cyber_3comp_model.yaml.
+# Run::
+#
+#   cd examples/isimu
+#   run-cod3s-study --model cyber_3comp_model.yaml \
+#       --study-specs cyber_3comp_study.yaml \
+#       --log-level INFO
+#
+# Outputs (under cyber_3comp_study/ by default):
+#   - sequences.xml — sequence analysis (paths leading to each target)
+#   - PySeq.xsl     — XSLT to render sequences.xml in a browser
+#   - pyc_param.xml — final PyCATSHOO parameter dump
+
+# ----------------------------------------------------------------------------
+# Failure / compromise modes
+# ----------------------------------------------------------------------------
+#
+# Same three MdC as in cyber_3comp.py::build(), but here driven from
+# YAML so the study runner adds them on top of the bare model. The
+# ``occ_law: delay`` line tells the runner to instantiate ObjFMDelay
+# (cod3s.pycatshoo.system.add_failure_modes maps occ_law -> ObjFMXxx).
+
+failure_modes:
+  # MdC_A — privilege escalation. State-only (empty failure_effects).
+  # No condition: fires after `failure_param` time units. Repair disabled
+  # via repair_cond=false (literal — cod3s wraps it in a callable that
+  # always returns False).
+  - fm_name: mdc_a
+    targets: [Srv]
+    occ_law: delay
+    failure_param: 10
+    failure_effects: {}
+    repair_cond: false
+    repair_param: 1.0e+9
+
+  # MdC_B — service-function exploit. Conditioned on MdC_A's automaton
+  # being in state "occ" (cod3s' structured failure_cond).
+  - fm_name: mdc_b
+    targets: [Srv]
+    occ_law: delay
+    failure_param: 5
+    failure_cond:
+      - - attr: occ
+          obj: Srv__mdc_a
+          value: true
+    failure_effects:
+      f_service_prod_available: true
+    repair_cond: false
+    repair_param: 1.0e+9
+
+  # MdC_proc — function inhibition. Conditioned on the service flow
+  # arriving on Proc.
+  - fm_name: mdc_proc
+    targets: [Proc]
+    occ_law: delay
+    failure_param: 8
+    failure_cond:
+      - - attr: f_service_fed_in
+          value: true
+    failure_effects:
+      F1_fed_available_out: false
+      F2_fed_available_out: false
+    repair_cond: false
+    repair_param: 1.0e+9
+
+# ----------------------------------------------------------------------------
+# Targets — the redoubt events whose sequences will be extracted
+# ----------------------------------------------------------------------------
+#
+# add_targets receives each entry's values positionally:
+#     system.addTarget(name, attr_path, attr_type, op, value)
+# so the key order below MUST be: name, attr_path, attr_type, op, value.
+
+targets:
+  - name: process_F1_lost
+    attr_path: Proc.F1_fed_out
+    attr_type: VAR
+    op: "=="
+    value: 0
+  - name: process_F2_lost
+    attr_path: Proc.F2_fed_out
+    attr_type: VAR
+    op: "=="
+    value: 0
+
+# ----------------------------------------------------------------------------
+# Indicators (optional — exported as CSV under results.indicators)
+# ----------------------------------------------------------------------------
+
+indicators:
+  - component: "Proc"
+    attr_type: "VAR"
+    attr_name: "F._fed_out"
+    stats: ["mean"]
+
+  - component: "Srv"
+    attr_type: "VAR"
+    attr_name: "f_service_fed_out"
+    stats: ["mean"]
+
+# ----------------------------------------------------------------------------
+# Simulation parameters
+# ----------------------------------------------------------------------------
+#
+# Deterministic delays => one run is enough. Horizon 30 covers the
+# expected cascade end at t=23.
+
+simulation:
+  nb_runs: 1
+  schedule:
+    - start: 0
+      end: 30
+      nvalues: 31
+  seed: 42
+
+results:
+  indicators:
+    - id: proc_outputs
+      output: ["csv"]
+      comp_pattern: "Proc"
+      attr_pattern: "F._fed_out"
+    - id: srv_service
+      output: ["csv"]
+      comp_pattern: "Srv"
+      attr_pattern: "f_service.*"

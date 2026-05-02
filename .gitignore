@@ -139,3 +139,6 @@ CLAUDE.md
 
 # uv lockfile (not committed for now)
 uv.lock
+
+# cod3s study outputs (reproducible from the YAML specs)
+examples/isimu/cyber_3comp_study/

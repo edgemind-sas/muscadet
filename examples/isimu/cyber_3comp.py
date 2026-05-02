@@ -50,6 +50,12 @@ from __future__ import annotations
 
 import muscadet
 
+# Re-export the muscadet System class under a top-level name so that
+# the YAML loader (``cod3s.scripts._common.import_module_from_path``)
+# picks it up into its namespace and resolves ``python_class: System``
+# in cyber_3comp_model.yaml.
+System = muscadet.System
+
 # ----------------------------------------------------------------------------
 # Component classes
 # ----------------------------------------------------------------------------

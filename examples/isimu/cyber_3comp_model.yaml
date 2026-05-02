@@ -1,0 +1,49 @@
+# YAML model for the cyber compromise cascade POC.
+#
+# Pairs with cyber_3comp_study.yaml (failure modes, target, simulation).
+# Run::
+#
+#   cd examples/isimu
+#   run-cod3s-study --model cyber_3comp_model.yaml \
+#       --study-specs cyber_3comp_study.yaml \
+#       --log-level INFO
+#
+# The Python factory build() in cyber_3comp.py keeps the same
+# component classes — it remains the entry-point for cod3s-isimu.
+# Both paths exercise the exact same cascade.
+
+system:
+  name: cyber_3comp
+  python_class: System         # muscadet.System, re-exported in cyber_3comp.py
+
+imports:
+  - cyber_3comp.py             # AlimElec, Serveur, ProcessIndustriel, System
+
+components:
+  - name: Alim
+    cls: AlimElec
+  - name: Srv
+    cls: Serveur
+  - name: Proc
+    cls: ProcessIndustriel
+
+connections:
+  # Alim -> Srv : power
+  - component_source: Alim
+    interface_source: power_out
+    component_target: Srv
+    interface_target: power_in
+
+  # Srv -> Proc : two normal mission outputs + the dormant service flow
+  - component_source: Srv
+    interface_source: f_orange_out
+    component_target: Proc
+    interface_target: f_orange_in
+  - component_source: Srv
+    interface_source: f_blue_out
+    component_target: Proc
+    interface_target: f_blue_in
+  - component_source: Srv
+    interface_source: f_service_out
+    component_target: Proc
+    interface_target: f_service_in
