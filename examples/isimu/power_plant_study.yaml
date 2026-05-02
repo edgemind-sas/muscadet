@@ -1,0 +1,184 @@
+# Probabilistic study of the mini power plant — combined sûreté +
+# sécurité analysis on a system with cold redundancy.
+#
+# Three classical hardware failure modes (MdD) and four compromise
+# modes (MdC) forming a realistic IT→OT cyber attack chain. All on
+# exponential occurrence laws.
+#
+# Pairs with power_plant_model.yaml.
+# Run::
+#
+#   cd examples/isimu
+#   run-cod3s-study --model power_plant_model.yaml \
+#       --study-specs power_plant_study.yaml \
+#       --log-level INFO
+#
+# Outputs (under power_plant_study/, gitignored):
+#   - sequences.xml — empirical paths leading to plant_no_output
+#   - sequences.html
+#   - *.csv — boolean means over time = probabilities
+
+# ----------------------------------------------------------------------------
+# Failure modes (MdD) — hardware reliability layer
+# ----------------------------------------------------------------------------
+#
+# Rates such that within the 200 h horizon:
+#   - hw_pumpA is the most likely single failure (lambda = 0.005)
+#   - The backup pump is less stressed, lower rate (lambda = 0.002)
+#   - Grid loss is rare but catastrophic (lambda = 0.001)
+
+failure_modes:
+  - fm_name: hw_grid
+    targets: [Grid]
+    occ_law: exp
+    failure_param: 0.001         # MTBF = 1000 h — power outage
+    failure_effects:
+      power_fed_available_out: false
+    repair_cond: false
+    repair_param: 0
+
+  - fm_name: hw_pumpA
+    targets: [PumpA]
+    occ_law: exp
+    failure_param: 0.005         # MTBF = 200 h — main pump
+    failure_effects:
+      cooling_fed_available_out: false
+    repair_cond: false
+    repair_param: 0
+
+  - fm_name: hw_pumpB
+    targets: [PumpB]
+    occ_law: exp
+    failure_param: 0.002         # MTBF = 500 h — backup is healthier
+    failure_effects:
+      cooling_fed_available_out: false
+    repair_cond: false
+    repair_param: 0
+
+  # ------------------------------------------------------------------------
+  # Cyber compromise chain (MdC) — IT then OT
+  # ------------------------------------------------------------------------
+  #
+  # Modeled as a four-step kill chain typical of ICS attacks:
+  #   1. mdc_phishing           — initial entry on HMI
+  #   2. mdc_lateral_movement   — pivot to OT network (gated on phishing)
+  #   3. mdc_disable_main_pump  — exploit PumpA's PLC firmware (gated)
+  #   4. mdc_inhibit_backup_pump— disable backup interlock (gated)
+  #
+  # Steps 3 and 4 are independent given step 2: both gated solely on
+  # the lateral-movement state. They race and may finish in either
+  # order. The redundancy is defeated only when BOTH have completed.
+
+  - fm_name: mdc_phishing
+    targets: [HMI]
+    occ_law: exp
+    failure_param: 0.01          # ~MTBF 100 h to gain initial entry
+    failure_effects: {}
+    repair_cond: false
+    repair_param: 0
+
+  - fm_name: mdc_lateral_movement
+    targets: [HMI]
+    occ_law: exp
+    failure_param: 0.05          # mean 20 h after phishing
+    failure_cond:
+      - - attr: occ
+          obj: HMI__mdc_phishing
+          value: true
+    failure_effects: {}
+    repair_cond: false
+    repair_param: 0
+
+  - fm_name: mdc_disable_main_pump
+    targets: [PumpA]
+    occ_law: exp
+    failure_param: 0.1           # mean 10 h after lateral
+    failure_cond:
+      - - attr: occ
+          obj: HMI__mdc_lateral_movement
+          value: true
+    failure_effects:
+      cooling_fed_available_out: false
+    repair_cond: false
+    repair_param: 0
+
+  - fm_name: mdc_inhibit_backup_pump
+    targets: [PumpB]
+    occ_law: exp
+    failure_param: 0.05          # mean 20 h after lateral
+    failure_cond:
+      - - attr: occ
+          obj: HMI__mdc_lateral_movement
+          value: true
+    failure_effects:
+      cooling_fed_available_out: false
+    repair_cond: false
+    repair_param: 0
+
+# ----------------------------------------------------------------------------
+# Targets — single redoubt event: the plant stops producing electricity.
+# ----------------------------------------------------------------------------
+#
+# This event is reached when:
+#   - Grid is down (cuts power to plant), OR
+#   - Both pumps are down at the same time (no cooling), OR
+#   - Plant.power_in goes False (alim path)
+#
+# Note: a single PumpA failure is NOT enough — the FlowOutOnTrigger
+# redundancy means PumpB takes over. The target is reached only when
+# the redundancy is genuinely defeated.
+
+targets:
+  - name: plant_no_output
+    attr_path: Plant.electricity_fed_out
+    attr_type: VAR
+    op: "=="
+    value: 0
+
+# ----------------------------------------------------------------------------
+# Indicators
+# ----------------------------------------------------------------------------
+
+indicators:
+  - component: "Plant"
+    attr_type: "VAR"
+    attr_name: "electricity_fed_out"
+    stats: ["mean"]
+
+  - component: "Plant"
+    attr_type: "VAR"
+    attr_name: "cooling_fed_in"
+    stats: ["mean"]
+
+  - component: "PumpA"
+    attr_type: "VAR"
+    attr_name: "cooling_fed_out"
+    stats: ["mean"]
+
+  - component: "PumpB"
+    attr_type: "VAR"
+    attr_name: "cooling_fed_out"
+    stats: ["mean"]
+
+# ----------------------------------------------------------------------------
+# Simulation — Monte Carlo over 200 h
+# ----------------------------------------------------------------------------
+
+simulation:
+  nb_runs: 1000
+  schedule:
+    - start: 0
+      end: 200
+      nvalues: 41
+  seed: 42
+
+results:
+  indicators:
+    - id: plant
+      output: ["csv"]
+      comp_pattern: "Plant"
+      attr_pattern: "(electricity|cooling)_fed_(in|out)"
+    - id: pumps
+      output: ["csv"]
+      comp_pattern: "Pump."
+      attr_pattern: "cooling_fed_out"

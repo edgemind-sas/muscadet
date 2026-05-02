@@ -14,6 +14,7 @@ behaviour. They can be driven either through the
 | `datacenter_lite` | Composite `var_prod_cond` — `(P1 OR P2) AND C` on a server output. Step through power and cooling failures. |
 | `inverter_chain` | `FlowOut(negate=True)` — two inverters in series, even-parity output. |
 | `cyber_3comp` | Cascading cyber compromise modes (MdC) on a 3-component system, replicating the IMdR P23-4 atelier example. Two cascade mechanisms shown side by side: MdC_B gated by MdC_A's automaton state, MdC_proc gated by a propagated dormant "service" flow. |
+| `power_plant` | Mini electricity production plant with cold-redundant cooling (`FlowOutOnTrigger`). Combines hardware failure modes (Grid, both pumps) with a four-step IT→OT cyber kill chain (phishing → lateral movement → coordinated pump exploits) that defeats the redundancy. The probabilistic study reveals competing sequences: cold redundancy mitigates single hardware failures but a coordinated cyber attack disables both pumps in parallel. |
 
 All the behaviours above are also covered by tests in `tests/`, but the
 examples here are tuned for visual stepping rather than assertions:
@@ -32,6 +33,7 @@ cod3s-isimu --factory examples.isimu.trigger_source:build
 cod3s-isimu --factory examples.isimu.datacenter_lite:build
 cod3s-isimu --factory examples.isimu.inverter_chain:build
 cod3s-isimu --factory examples.isimu.cyber_3comp:build
+cod3s-isimu --factory examples.isimu.power_plant:build
 ```
 
 ## Running as a plain Python script
@@ -45,6 +47,7 @@ python -m examples.isimu.trigger_source
 python -m examples.isimu.datacenter_lite
 python -m examples.isimu.inverter_chain
 python -m examples.isimu.cyber_3comp
+python -m examples.isimu.power_plant
 ```
 
 Sample output (`rbd_kn`)::
@@ -126,6 +129,33 @@ shows ~12 distinct paths, e.g.::
 Demonstrates the slide-58 perspective of combined sûreté + sécurité
 analysis on a single model — the same MdC formalism layered on top of
 the classical MdD.
+
+### Power plant with cold redundancy (`power_plant_study.yaml`)
+
+A larger study showcasing the same approach on a five-component model
+with active cold redundancy (`FlowOutOnTrigger`)::
+
+```sh
+cd examples/isimu
+run-cod3s-study --model power_plant_model.yaml \
+    --study-specs power_plant_study.yaml \
+    --log-level INFO
+```
+
+The redundancy mitigates a single hardware failure (PumpB takes over
+when PumpA fails). But a four-step cyber kill chain — phishing,
+lateral movement, then coordinated PumpA disable + backup interlock
+inhibition — defeats it. The Monte-Carlo distribution typically shows
+~15 distinct sequences with empirical probabilities, mixing pure-cyber,
+hardware-only, and interleaved paths.
+
+A subtle artefact worth noting: a single `hw_pumpA` failure reaches
+the redoubt event in the model because PyCATSHOO processes the
+trigger automaton's `up` transition as a separate event at the same
+simulation time, leaving a momentary gap during which Plant
+electricity is False. This faithfully represents the brief glitch on
+real switchover hardware. To remove it, model the redundancy through
+a single `or`-combined input rather than via FlowOutOnTrigger.
 
 ## Writing your own factory
 

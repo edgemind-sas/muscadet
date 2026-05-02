@@ -1,0 +1,73 @@
+# YAML model for the mini power plant with cold-redundant cooling.
+#
+# Five components:
+#   - Grid           (external power source)
+#   - PumpA          (main cooling pump)
+#   - PumpB          (backup cooling pump, FlowOutOnTrigger)
+#   - Plant          (production unit, needs power AND cooling)
+#   - HMI            (operator/SCADA — IT side, no physical flow,
+#                     hosts the cyber attack chain)
+#
+# Pairs with power_plant_study.yaml.
+# Run::
+#
+#   cd examples/isimu
+#   run-cod3s-study --model power_plant_model.yaml \
+#       --study-specs power_plant_study.yaml \
+#       --log-level INFO
+
+system:
+  name: power_plant
+  python_class: System
+
+imports:
+  - power_plant.py        # Grid, MainPump, BackupPump, Plant, HMI, System
+
+components:
+  - name: Grid
+    cls: Grid
+  - name: PumpA
+    cls: MainPump
+  - name: PumpB
+    cls: BackupPump
+  - name: Plant
+    cls: Plant
+  - name: HMI
+    cls: HMI
+
+connections:
+  # Power network — Grid feeds all three downstream components
+  - component_source: Grid
+    interface_source: power_out
+    component_target: PumpA
+    interface_target: power_in
+  - component_source: Grid
+    interface_source: power_out
+    component_target: PumpB
+    interface_target: power_in
+  - component_source: Grid
+    interface_source: power_out
+    component_target: Plant
+    interface_target: power_in
+
+  # Cooling network — both pumps' outputs reach the Plant; the Plant's
+  # cooling_in uses logic="or" so any single pump suffices.
+  - component_source: PumpA
+    interface_source: cooling_out
+    component_target: Plant
+    interface_target: cooling_in
+  - component_source: PumpB
+    interface_source: cooling_out
+    component_target: Plant
+    interface_target: cooling_in
+
+  # Trigger wiring for the cold redundancy: PumpA's cooling output
+  # drives PumpB's trigger input (FlowOutOnTrigger). When PumpA stops
+  # feeding, PumpB activates instantly (trigger_logic="and",
+  # trigger_time_up=0). The cod3s YAML loader uses the message-box
+  # name ``cooling_trigger_in`` which muscadet creates for the
+  # FlowOutOnTrigger.
+  - component_source: PumpA
+    interface_source: cooling_out
+    component_target: PumpB
+    interface_target: cooling_trigger_in
