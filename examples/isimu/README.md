@@ -149,13 +149,46 @@ inhibition — defeats it. The Monte-Carlo distribution typically shows
 ~15 distinct sequences with empirical probabilities, mixing pure-cyber,
 hardware-only, and interleaved paths.
 
-A subtle artefact worth noting: a single `hw_pumpA` failure reaches
-the redoubt event in the model because PyCATSHOO processes the
-trigger automaton's `up` transition as a separate event at the same
-simulation time, leaving a momentary gap during which Plant
-electricity is False. This faithfully represents the brief glitch on
-real switchover hardware. To remove it, model the redundancy through
-a single `or`-combined input rather than via FlowOutOnTrigger.
+**Reading the sequences — transient vs. sustained outages.** PyCATSHOO
+processes the FlowOutOnTrigger ``up`` transition as a *separate*
+simulation event from whatever upstream change triggered it (even
+when both ``trigger_time_up=0``, i.e. same simulation time). Between
+the two events, ``Plant.electricity_fed_out`` momentarily reads
+``False``. This faithfully represents the brief glitch on real
+cold-redundant hardware during switchover.
+
+In the Monte Carlo run, the simulation stops at the first instant the
+target fires — so any sequence that drops PumpA's cooling appears as
+a **single-step** path leading to the target, even though the
+redundancy would have restored output at the next event. Concretely
+the following sequences from ``sequences.xml`` are *transient*
+glitches, not sustained outages:
+
+- ``hw_pumpA``                                  (single hardware failure)
+- ``mdc_phishing → mdc_lateral → mdc_disable_main_pump``  (cyber, no inhibit_backup)
+
+These are perfectly valid events — protective relays can trip, downstream
+processes can abort — but they don't represent a sustained loss of
+production. To filter for **sustained** outages in the Monte Carlo
+output, look for sequences where:
+
+- ``mdc_inhibit_backup_pump`` is among the transitions (intentional
+  defeat of the redundancy), OR
+- both ``hw_pumpA`` and ``hw_pumpB`` have fired (independent hardware
+  double failure), OR
+- ``hw_grid`` has fired (no power = no cooling possible).
+
+The deterministic ``run()`` in ``power_plant.py`` shows both events
+explicitly (you can see ``Plant.elec`` flicker 1 → 0 → 1 at t=8 when
+``hw_pumpA`` fires), so the transient is visible. The pytest tests
+in ``tests/test_power_plant_example.py`` pin the steady-state
+behaviour for the three core scenarios.
+
+To remove the transient artefact entirely, model the redundancy via a
+single OR-combined ``cooling`` input rather than via FlowOutOnTrigger
+(both pumps would always run — "hot" rather than "cold" redundancy).
+The current model intentionally preserves the transient to illustrate
+the cold-standby behaviour.
 
 ## Writing your own factory
 

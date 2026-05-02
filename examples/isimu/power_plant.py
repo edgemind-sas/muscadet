@@ -46,8 +46,44 @@ a classical IT → OT attack chain that defeats the redundancy:
 
 The interesting consequence: under nominal operation, a single failure
 of ``PumpA`` (hardware) triggers the backup pump and the plant keeps
-producing. But the cyber attack is **coordinated** — both pumps are
-disabled in parallel — defeating the redundancy.
+producing (steady-state recovery). But the cyber attack is
+**coordinated** — both pumps are disabled in sequence — defeating the
+redundancy permanently.
+
+Modeling notes — switchover transient
+=====================================
+
+PyCATSHOO processes the ``FlowOutOnTrigger`` ``up`` transition as a
+*separate* simulation event from the upstream failure, even when both
+have ``trigger_time_up=0`` (same simulation instant). Between the two
+events, ``Plant.electricity_fed_out`` momentarily reads ``False``.
+This faithfully represents the brief glitch on real cold-redundant
+hardware during switchover (≈ tens of milliseconds in industrial
+practice).
+
+This applies equally to **any** transition that drops PumpA's cooling:
+``hw_pumpA`` AND ``mdc_disable_main_pump`` both produce the same
+transient. The interactive Python ``run()`` shows both events explicitly
+(``Plant.elec`` flickers 1 → 0 → 1); the Monte Carlo simulation in
+``power_plant_study.yaml`` stops at the first ``elec=False`` instant
+(target reached), which surfaces the transient as a "single-step"
+sequence in ``sequences.xml``.
+
+Two valid interpretations of those single-step sequences:
+
+- **Event-based**: a transient outage IS a real production-affecting
+  event (protective relays may trip, downstream processes may abort).
+  Counting it is appropriate for sensitivity-to-disturbance metrics.
+- **Sustained-outage**: only sequences that leave the plant in a
+  steady ``elec=False`` state matter. To filter Monte Carlo output for
+  these, look for sequences ending with ``mdc_inhibit_backup_pump``,
+  combined ``hw_pumpA`` + ``hw_pumpB``, or ``hw_grid`` alone.
+
+To remove the transient artefact entirely, model the redundancy via a
+single OR-combined input rather than via ``FlowOutOnTrigger`` (the
+backup pump would always run, just unnoticed when PumpA feeds — a
+"hot redundancy" rather than "cold"). The current model intentionally
+preserves the transient to illustrate the cold-standby behaviour.
 
 Run::
 
@@ -291,15 +327,19 @@ def run() -> None:
 
     With the delays in :func:`build`:
 
-    - t=8  : ``hw_pumpA`` fires — main pump down. The trigger fires
-             instantly and PumpB takes over. Plant keeps producing.
-    - t=20 : ``mdc_phishing`` (after ``hw_pumpA`` so the redundancy
-             situation is visible during the cyber chain).
-    - t=25 : ``mdc_lateral_movement``.
-    - t=28 : ``mdc_disable_main_pump`` (PumpA already down — no-op on
-             the flow but the MdC fires nonetheless).
+    - t=8  : ``hw_pumpA`` fires — main pump down. ``Plant.electricity``
+             flickers to 0 momentarily, then to 1 once the
+             ``cooling_trigger_up`` of ``PumpB`` fires (also at t=8 but
+             as a separate simulation event). Steady state: redundancy
+             holds, plant produces.
+    - t=20 : ``mdc_phishing`` — IT compromise.
+    - t=25 : ``mdc_lateral_movement`` — pivot to OT network.
+    - t=28 : ``mdc_disable_main_pump`` — PumpA already down (from
+             ``hw_pumpA``), so this MdC is a no-op on the flow; only
+             the automaton state changes.
     - t=29 : ``mdc_inhibit_backup_pump`` — backup pump cooling drops,
-             Plant loses cooling, output collapses.
+             plant loses cooling, output collapses with no fallback.
+             Steady state: cyber attack defeated the redundancy.
     """
     import cod3s
 
