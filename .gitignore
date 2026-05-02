@@ -144,3 +144,6 @@ uv.lock
 examples/isimu/cyber_3comp_study/
 examples/isimu/cyber_3comp_study_exp/
 examples/isimu/power_plant_study/
+
+# Compiled typst slides (regenerable from the .typ source)
+docs/presentations/*.pdf
