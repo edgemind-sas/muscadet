@@ -1,0 +1,175 @@
+# Probabilistic study — combined sûreté + sécurité on the cyber_3comp model.
+#
+# Adds three classical failure modes (MdD) on the same components in
+# parallel with the three compromise modes (MdC) of cyber_3comp_study.yaml,
+# all with exponential occurrence laws so Monte-Carlo runs produce a
+# distribution of sequences (cyber path vs. hardware paths) leading to
+# each target.
+#
+# Pairs with cyber_3comp_model.yaml.
+# Run::
+#
+#   cd examples/isimu
+#   run-cod3s-study --model cyber_3comp_model.yaml \
+#       --study-specs cyber_3comp_study_exp.yaml \
+#       --log-level INFO
+#
+# Outputs (under cyber_3comp_study_exp/ by default):
+#   - sequences.xml — sequence analysis with empirical probabilities
+#   - sequences.html
+#   - proc_outputs.csv / srv_service.csv — mean = probability over time
+
+# ----------------------------------------------------------------------------
+# Failure modes (MdD) — classical reliability layer
+# ----------------------------------------------------------------------------
+#
+# Rates chosen so that all three give a non-negligible probability of
+# firing within the 200 h horizon, with the alim less likely than the
+# server failures (single redundant supply assumed reliable).
+# `repair_param: 0` disables repair (mu=0 → never fires); cod3s' default
+# `drop_inactive_automata=True` keeps the automaton because the failure
+# branch is active.
+
+failure_modes:
+  # MdD on Alim — random hardware failure of the power supply.
+  # Effect: kills the power output, which propagates to Srv.power_in
+  # then collapses both f_orange and f_blue (their var_prod_cond depends
+  # on power), then F1 and F2 on Proc go False simultaneously.
+  - fm_name: hw_alim
+    targets: [Alim]
+    occ_law: exp
+    failure_param: 0.005      # lambda — MTBF = 200 h
+    failure_effects:
+      power_fed_available_out: false
+    repair_cond: false
+    repair_param: 0
+
+  # MdD on Serveur — independent hardware faults on the two mission
+  # outputs. Each kills only its own output, so F1 and F2 fall
+  # independently (selective loss).
+  - fm_name: hw_srv_orange
+    targets: [Srv]
+    occ_law: exp
+    failure_param: 0.003      # lambda — MTBF ~ 333 h
+    failure_effects:
+      f_orange_fed_available_out: false
+    repair_cond: false
+    repair_param: 0
+
+  - fm_name: hw_srv_blue
+    targets: [Srv]
+    occ_law: exp
+    failure_param: 0.003
+    failure_effects:
+      f_blue_fed_available_out: false
+    repair_cond: false
+    repair_param: 0
+
+  # ------------------------------------------------------------------------
+  # Compromise modes (MdC) — cyber layer (same as cyber_3comp_study.yaml,
+  # but with exponential occurrence laws representing attack difficulty).
+  # ------------------------------------------------------------------------
+
+  # MdC_A — privilege escalation. State-only (no flow effect).
+  - fm_name: mdc_a
+    targets: [Srv]
+    occ_law: exp
+    failure_param: 0.02       # lambda — MTBF = 50 h (attack progresses)
+    failure_effects: {}
+    repair_cond: false
+    repair_param: 0
+
+  # MdC_B — service-function exploit, gated on MdC_A active.
+  # Higher rate than MdC_A: once privileges are escalated, the actual
+  # exploit is fast.
+  - fm_name: mdc_b
+    targets: [Srv]
+    occ_law: exp
+    failure_param: 0.1        # lambda — mean 10 h after MdC_A active
+    failure_cond:
+      - - attr: occ
+          obj: Srv__mdc_a
+          value: true
+    failure_effects:
+      f_service_prod_available: true
+    repair_cond: false
+    repair_param: 0
+
+  # MdC_proc — function inhibition on Proc, gated on f_service_fed_in.
+  - fm_name: mdc_proc
+    targets: [Proc]
+    occ_law: exp
+    failure_param: 0.05       # lambda — mean 20 h after service flow arrives
+    failure_cond:
+      - - attr: f_service_fed_in
+          value: true
+    failure_effects:
+      F1_fed_available_out: false
+      F2_fed_available_out: false
+    repair_cond: false
+    repair_param: 0
+
+# ----------------------------------------------------------------------------
+# Targets — redoubt events. Same as the deterministic study; here the
+# Monte-Carlo simulation produces multiple sequences leading to each
+# target, with empirical probabilities.
+# ----------------------------------------------------------------------------
+
+targets:
+  - name: process_F1_lost
+    attr_path: Proc.F1_fed_out
+    attr_type: VAR
+    op: "=="
+    value: 0
+  - name: process_F2_lost
+    attr_path: Proc.F2_fed_out
+    attr_type: VAR
+    op: "=="
+    value: 0
+
+# ----------------------------------------------------------------------------
+# Indicators — boolean means over time = probabilities.
+# ----------------------------------------------------------------------------
+
+indicators:
+  - component: "Proc"
+    attr_type: "VAR"
+    attr_name: "F._fed_out"
+    stats: ["mean"]
+
+  - component: "Srv"
+    attr_type: "VAR"
+    attr_name: "f_service_fed_out"
+    stats: ["mean"]
+
+  - component: "Alim"
+    attr_type: "VAR"
+    attr_name: "power_fed_out"
+    stats: ["mean"]
+
+# ----------------------------------------------------------------------------
+# Simulation — Monte Carlo over a 200 h horizon.
+# ----------------------------------------------------------------------------
+
+simulation:
+  nb_runs: 1000
+  schedule:
+    - start: 0
+      end: 200
+      nvalues: 41
+  seed: 42
+
+results:
+  indicators:
+    - id: proc_outputs
+      output: ["csv"]
+      comp_pattern: "Proc"
+      attr_pattern: "F._fed_out"
+    - id: srv_service
+      output: ["csv"]
+      comp_pattern: "Srv"
+      attr_pattern: "f_service.*"
+    - id: alim_power
+      output: ["csv"]
+      comp_pattern: "Alim"
+      attr_pattern: "power_fed_out"

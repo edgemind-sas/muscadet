@@ -95,6 +95,38 @@ Expected `sequences.xml` content (one deterministic sequence, P=1)::
 Same cascade as the `cod3s-isimu` factory and `python -m` runner — the
 YAML path adds the redoubt-event analysis on top.
 
+### Probabilistic variant (`cyber_3comp_study_exp.yaml`)
+
+A second study spec layered on the same model adds three classical
+hardware failure modes (MdD on Alim, on Srv.f_orange, on Srv.f_blue)
+in parallel with the three MdC, all with **exponential occurrence
+laws**. Monte-Carlo simulation produces a distribution of competing
+sequences (cyber path vs. hardware paths) leading to each redoubt
+event::
+
+```sh
+cd examples/isimu
+run-cod3s-study --model cyber_3comp_model.yaml \
+    --study-specs cyber_3comp_study_exp.yaml \
+    --log-level INFO
+```
+
+With 1000 runs over a 200 h horizon and the chosen rates (cyber attack
+faster than alim hardware failure), the resulting `sequences.xml`
+shows ~12 distinct paths, e.g.::
+
+  P=0.489  MdC_A → MdC_B → MdC_proc       (pure cyber cascade)
+  P=0.157  hw_alim                         (single power-supply failure)
+  P=0.096  hw_srv_blue                     (loses F2 only)
+  P=0.089  hw_srv_orange                   (loses F1 only)
+  P=0.048  MdC_A → MdC_B → hw_alim         (cyber attack pre-empted by alim)
+  P=0.034  MdC_A → MdC_B → hw_srv_orange   (mixed cyber + hardware)
+  ...
+
+Demonstrates the slide-58 perspective of combined sûreté + sécurité
+analysis on a single model — the same MdC formalism layered on top of
+the classical MdD.
+
 ## Writing your own factory
 
 Any callable returning a populated `muscadet.System` works as a factory.
