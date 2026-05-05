@@ -14,6 +14,7 @@ or a schema drift on the Platform side that the fixture has captured.
 import json
 import os
 
+import cod3s
 import pytest
 
 # Importing ``muscadet`` triggers PyCATSHOO init — gracefully skip
@@ -36,7 +37,16 @@ def dil_v2_payload():
 
 @pytest.fixture(scope="module")
 def dil_v2_system(dil_v2_payload):
-    return system_from_export(dil_v2_payload)
+    """Build the DIL V2 system once per module, tear it down on exit.
+
+    Without the explicit ``deleteSys()`` + ``terminate_session()``,
+    PyCATSHOO's single-system constraint leaks into subsequent test
+    modules and causes spurious "system already exists" failures.
+    """
+    system = system_from_export(dil_v2_payload)
+    yield system
+    system.deleteSys()
+    cod3s.terminate_session()
 
 
 def test_payload_metadata(dil_v2_payload):
