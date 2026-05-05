@@ -598,4 +598,63 @@ The code for this example is available [here](examples/rbd_06/rbd_06.py).
 
 [here](examples/datacenter/README.md).
 
+## Importing models from COD3S Platform
+
+The `muscadet.importers.cod3s_platform` plugin converts a model
+exported from the COD3S Platform UI (`GET
+/modelisation/{name}/export?include_kb=true`) into a `muscadet.System`
+ready for `cod3s-isimu` interactive simulation or `cod3s.simulate()`
+Monte Carlo runs.
+
+```python
+import json
+from muscadet.importers import system_from_export
+
+with open("dil_v2_export.json") as f:
+    payload = json.load(f)
+
+system = system_from_export(payload)
+
+# system is a fully-populated muscadet.System :
+#   - components instantiated as muscadet.ObjFlow
+#   - class_name preserved in each component's metadata['class_name']
+#     (the generic ObjFlow doesn't lose the source identity)
+#   - input flows declared first, output flows resolved against them
+#   - inter-component connections wired via System.connect_flow
+
+# Now simulate :
+system.isimu_start()
+# or :
+system.simulate({"nb_runs": 100, "schedule": [{"start": 0, "end": 24, "nvalues": 1000}]})
+```
+
+The plugin accepts both shapes :
+
+- **Full Platform export** : `{export_version, model, kb_embedded, ...}`
+  — what the export endpoint returns
+- **Canonical** : `{model, kb}` — convenient for tests
+
+Errors during conversion (malformed payload, unknown KB class,
+dangling connection reference, ...) raise
+`muscadet.importers.cod3s_platform.Cod3sPlatformImportError` (a
+`ValueError` subclass).
+
+### Phase 1 scope
+
+The current converter handles the topology layer only :
+
+- Components + their input / output flows
+- Inter-component connections
+- `class_name` preservation in metadata
+
+Out of scope (deferred to later phases) :
+
+- Failure modes (wire `add_exp_failure_mode` from KB attributes)
+- Business attribute initial states (preserved in metadata as
+  `attributes_initial` but not yet wired as `var_in_default`)
+- Indicators / observation points
+
+See `tests/test_importer_cod3s_platform_*` for the full behaviour
+specification and `tests/fixtures/` for sample inputs.
+
 
