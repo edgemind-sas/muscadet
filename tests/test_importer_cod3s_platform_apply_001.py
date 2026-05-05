@@ -133,3 +133,31 @@ def test_canonical_shape_works_too(cleanup_system):
     cleanup_system.append(system)
     assert "Source1" in system.comp
     assert "Sink1" in system.comp
+
+
+def test_default_out_automata_on_by_default(cleanup_system):
+    """The importer defaults to ``create_default_out_automata=True`` so
+    every output flow gets a default ok/nok automaton (rate ``1e-100``)
+    suitable for downstream failure-mode injection."""
+    payload = _load()
+    system = system_from_export(payload)
+    cleanup_system.append(system)
+    src = system.comp["Source1"]
+    # ``Source`` template has one output flow ``out_a`` → exactly one
+    # default automaton attached.
+    assert len(src.automata()) == 1
+
+
+def test_default_out_automata_off_when_requested(cleanup_system):
+    """``create_default_out_automata=False`` produces a lean topology
+    with no automata at all — the connectivity-audit use case."""
+    payload = _load()
+    system = system_from_export(
+        payload, name="LeanTopo", create_default_out_automata=False
+    )
+    cleanup_system.append(system)
+    for comp in system.comp.values():
+        assert len(comp.automata()) == 0, (
+            f"Component {comp.name()} unexpectedly has automata when "
+            f"create_default_out_automata=False"
+        )

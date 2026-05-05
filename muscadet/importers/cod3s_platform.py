@@ -452,7 +452,12 @@ def _order_outputs_by_deps(
     return ordered
 
 
-def apply_to_system(ctx: ImporterContext, system: Any) -> None:
+def apply_to_system(
+    ctx: ImporterContext,
+    system: Any,
+    *,
+    create_default_out_automata: bool = True,
+) -> None:
     """Mutate ``system`` in place to materialise the parse-layer context.
 
     Ordering rules :
@@ -482,6 +487,14 @@ def apply_to_system(ctx: ImporterContext, system: Any) -> None:
         system: a ``muscadet.System`` instance (typed as ``Any`` to
             avoid pulling muscadet at module-import time — the
             parameter type is enforced by the calling sites).
+        create_default_out_automata: when ``True`` (default), each
+            component is instantiated with a default ok/nok automaton
+            attached to every output flow (rate ``1e-100``). This is
+            the convenient default for downstream failure-mode
+            injection — additional ``ObjFM*`` failure modes can hook
+            into existing automata rather than create them. Set to
+            ``False`` for a lean topology with no automata at all,
+            e.g. for connectivity audits.
 
     Raises:
         Cod3sPlatformImportError: if a runtime-level constraint is
@@ -497,7 +510,10 @@ def apply_to_system(ctx: ImporterContext, system: Any) -> None:
         # call ``set_flows()`` once at the end to wire everything to
         # PyCATSHOO in a single pass.
         comp = system.add_component(
-            cls="ObjFlow", name=spec.name, partial_init=True
+            cls="ObjFlow",
+            name=spec.name,
+            partial_init=True,
+            create_default_out_automata=create_default_out_automata,
         )
         # Attach metadata after creation. ObjFlow exposes a
         # ``metadata`` dict attribute ; we update rather than overwrite
@@ -574,6 +590,7 @@ def system_from_export(
     *,
     name: Optional[str] = None,
     system_class: Optional[type] = None,
+    create_default_out_automata: bool = True,
 ) -> Any:
     """Public entry point — Platform JSON dict → populated muscadet.System.
 
@@ -591,6 +608,11 @@ def system_from_export(
         system_class: muscadet ``System`` subclass to instantiate.
             Defaults to :class:`muscadet.System`. Power users can
             pass a custom subclass to wire extra runtime behaviour.
+        create_default_out_automata: when ``True`` (default), each
+            imported component is instantiated with a default ok/nok
+            automaton on every output flow (rate ``1e-100``). Set to
+            ``False`` for a lean topology with no automata —
+            forwarded as-is to :func:`apply_to_system`.
 
     Returns:
         Instance of ``system_class`` populated with components, flows,
@@ -609,5 +631,9 @@ def system_from_export(
 
         system_class = _MuscadetSystem
     system = system_class(name or ctx.system_name)
-    apply_to_system(ctx, system)
+    apply_to_system(
+        ctx,
+        system,
+        create_default_out_automata=create_default_out_automata,
+    )
     return system
