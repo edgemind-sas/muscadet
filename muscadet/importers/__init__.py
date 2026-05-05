@@ -22,3 +22,13 @@ preferred for clarity. If the number of formats grows beyond a
 handful, a registry can be added without breaking the explicit-import
 form.
 """
+
+from muscadet.importers.cod3s_platform import (
+    Cod3sPlatformImportError,
+    system_from_export,
+)
+
+__all__ = [
+    "Cod3sPlatformImportError",
+    "system_from_export",
+]
