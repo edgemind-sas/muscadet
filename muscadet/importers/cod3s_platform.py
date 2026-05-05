@@ -334,18 +334,22 @@ def _parse_connections(
                 f"not an output flow of component {src.name!r} "
                 f"(outputs: {sorted(src_outputs)})"
             )
-        if tgt_iface not in tgt_inputs:
-            raise Cod3sPlatformImportError(
-                f"Connection {conn_id!r}: target interface {tgt_iface!r} is "
-                f"not an input flow of component {tgt.name!r} "
-                f"(inputs: {sorted(tgt_inputs)})"
-            )
+        # ``muscadet.System.connect_flow`` uses a single flow_name on both
+        # ends — the source name wins. Validate that name (not the target
+        # name) against the target's inputs, so the chosen flow exists
+        # where it'll actually be wired.
         if src_iface != tgt_iface:
             logger.warning(
                 "Connection %s: source/target interface names differ "
                 "(%r != %r); muscadet.System.connect_flow uses a single "
                 "flow_name on both ends — using source name.",
                 conn_id, src_iface, tgt_iface,
+            )
+        if src_iface not in tgt_inputs:
+            raise Cod3sPlatformImportError(
+                f"Connection {conn_id!r}: interface {src_iface!r} is "
+                f"not an input flow of component {tgt.name!r} "
+                f"(inputs: {sorted(tgt_inputs)})"
             )
         out.append(
             ConnectionSpec(
