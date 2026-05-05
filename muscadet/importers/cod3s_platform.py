@@ -405,17 +405,68 @@ def parse_platform_export(payload: Dict[str, Any]) -> ImporterContext:
 # ---------------------------------------------------------------------------
 
 
+def _order_outputs_by_deps(
+    output_flows: List[FlowSpec],
+    input_names: set,
+    component_name: str,
+) -> List[FlowSpec]:
+    """Topological sort of output flows so each is created after its deps.
+
+    The COD3S Platform KB allows an output's ``logic`` (var_prod_cond) to
+    reference another **output** of the same component (e.g. diagnostic
+    flows that mirror a primary production output). muscadet's
+    ``add_flow`` resolves names against ``flows_in ∪ flows_out``, so as
+    long as the referenced output is created first, the reference works.
+
+    Returns the outputs in a creation order that satisfies all
+    intra-component dependencies, raising on cycles.
+    """
+    by_name = {f.name: f for f in output_flows}
+    remaining = dict(by_name)
+    ordered: List[FlowSpec] = []
+    available = set(input_names)
+    while remaining:
+        # Pick every flow whose deps are all already available.
+        ready = [
+            f for f in remaining.values()
+            if all(
+                ref in available
+                for disj in (f.logic if isinstance(f.logic, list) else [])
+                for ref in (disj if isinstance(disj, list) else [disj])
+            )
+        ]
+        if not ready:
+            raise Cod3sPlatformImportError(
+                f"Component {component_name!r}: cannot order output flows — "
+                f"either a cycle in var_prod_cond or a reference to an "
+                f"unknown flow. Remaining: {sorted(remaining)}"
+            )
+        for f in ready:
+            ordered.append(f)
+            available.add(f.name)
+            del remaining[f.name]
+    return ordered
+
+
 def apply_to_system(ctx: ImporterContext, system: Any) -> None:
     """Mutate ``system`` in place to materialise the parse-layer context.
 
     Ordering rules :
 
     1. For each component, instantiate via ``system.add_component(cls='ObjFlow',
-       name=...)`` then add **all input flows** before **any output flow**
-       (output's ``var_prod_cond`` is resolved against ``flows_in`` at
-       creation time — see ``muscadet.ObjFlow.prepare_flow_out_params``).
-    2. After all components and flows are declared, wire connections via
+       name=...)``.
+    2. Add **all input flows first** (output ``var_prod_cond`` may reference
+       them).
+    3. Add output flows in **dependency order** — outputs whose
+       ``var_prod_cond`` references another output of the same component
+       are created after their dependencies (the COD3S Platform KB uses
+       this for diagnostic flows that mirror primary outputs).
+    4. After all components and flows are declared, wire connections via
        ``system.connect_flow``.
+
+    Output flows are created via the dict-based ``add_flow`` API, which
+    resolves ``var_prod_cond`` against ``flows_in ∪ flows_out`` (unlike
+    the deprecated ``add_flow_out`` which only consulted ``flows_in``).
 
     The ``class_name`` from the source KB is preserved in
     ``component.metadata['class_name']`` for downstream filters (regex
@@ -434,7 +485,16 @@ def apply_to_system(ctx: ImporterContext, system: Any) -> None:
             re-raised as our domain exception for consistency).
     """
     for spec in ctx.components:
-        comp = system.add_component(cls="ObjFlow", name=spec.name)
+        # ``partial_init=True`` skips the ObjFlow constructor's automatic
+        # call to ``set_flows`` — flows added after ``__init__`` would
+        # otherwise miss ``add_variables`` / ``add_mb`` /
+        # ``update_sensitive_methods`` and connections would fail with
+        # "MessageBox introuvable". We add flows explicitly below, then
+        # call ``set_flows()`` once at the end to wire everything to
+        # PyCATSHOO in a single pass.
+        comp = system.add_component(
+            cls="ObjFlow", name=spec.name, partial_init=True
+        )
         # Attach metadata after creation. ObjFlow exposes a
         # ``metadata`` dict attribute ; we update rather than overwrite
         # so any default keys set by the constructor are preserved.
@@ -449,32 +509,46 @@ def apply_to_system(ctx: ImporterContext, system: Any) -> None:
                 }
             )
 
-        # Inputs first (output's var_prod_cond references them by name)
+        # Inputs first
+        input_names = set()
         for flow in spec.flows:
             if flow.direction == "input":
                 try:
-                    comp.add_flow_in(name=flow.name, logic=flow.logic)
+                    comp.add_flow(
+                        {"cls": "FlowIn", "name": flow.name, "logic": flow.logic}
+                    )
                 except Exception as e:
                     raise Cod3sPlatformImportError(
                         f"Failed to add input flow {flow.name!r} to component "
                         f"{spec.name!r}: {e}"
                     ) from e
+                input_names.add(flow.name)
 
-        # Outputs second
-        for flow in spec.flows:
-            if flow.direction == "output":
-                try:
-                    comp.add_flow_out(
-                        name=flow.name,
-                        var_prod_cond=flow.logic,
-                        var_prod_cond_inner_mode=flow.logic_inner_mode,
-                        negate=flow.negate,
-                    )
-                except Exception as e:
-                    raise Cod3sPlatformImportError(
-                        f"Failed to add output flow {flow.name!r} to component "
-                        f"{spec.name!r}: {e}"
-                    ) from e
+        # Outputs in dependency order (an output's logic may reference
+        # another output of the same component — Platform KB pattern
+        # for diagnostic flows mirroring primary outputs).
+        outputs = [f for f in spec.flows if f.direction == "output"]
+        for flow in _order_outputs_by_deps(outputs, input_names, spec.name):
+            try:
+                comp.add_flow(
+                    {
+                        "cls": "FlowOut",
+                        "name": flow.name,
+                        "var_prod_cond": flow.logic,
+                        "var_prod_cond_inner_mode": flow.logic_inner_mode,
+                        "negate": flow.negate,
+                    }
+                )
+            except Exception as e:
+                raise Cod3sPlatformImportError(
+                    f"Failed to add output flow {flow.name!r} to component "
+                    f"{spec.name!r}: {e}"
+                ) from e
+
+        # Wire all declared flows to PyCATSHOO (variables, message boxes,
+        # sensitive methods, automata) in one shot. Required because
+        # ``partial_init=True`` skipped this in ``__init__``.
+        comp.set_flows()
 
     # Connections — once all flows exist
     for conn in ctx.connections:
