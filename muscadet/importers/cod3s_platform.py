@@ -185,18 +185,29 @@ def _resolve_kb(payload: Dict[str, Any]) -> Dict[str, Any]:
 def _parse_interface(interface: Dict[str, Any]) -> FlowSpec:
     """Translate one KB interface dict into a :class:`FlowSpec`.
 
-    Defaults applied (the dil V2 KB demonstrates that several fields
-    are routinely omitted) :
+    Post-COD3S Platform 3.0.0 schema (cf. plan P1.5 G4 task 16) :
 
-    - inputs without ``logic`` → ``'or'``
-    - outputs without ``logic_inner_mode`` → ``'or'``
-    - outputs without ``negate`` → ``False``
-    - outputs without ``logic`` → empty list (= unconditional production)
+    - **input** ports use ``input_logic`` ('and' / 'or' / int k for
+      k-of-n aggregation of incoming flows). Default 'or' if missing.
+    - **output** ports use ``prod_cond`` (DNF list-of-lists, var_prod_cond
+      muscadet propagation). Defaults to empty list (unconditional).
+      Plus ``logic_inner_mode`` ('or' default) and ``negate`` (False
+      default).
+
+    The legacy ambiguous ``logic`` field is rejected outright (no
+    fallback) per Resolved Arbitrations #4 — re-export from a
+    post-3.0.0 platform instance to upgrade the file.
     """
     name = interface.get("name")
     if not name:
         raise Cod3sPlatformImportError(
             f"Interface missing 'name' field: {interface!r}"
+        )
+    if "logic" in interface:
+        raise Cod3sPlatformImportError(
+            f"Interface {name!r}: legacy 'logic' field is no longer supported. "
+            f"Re-export from a post-3.0.0 COD3S Platform instance "
+            f"(use prod_cond for output, input_logic for input)."
         )
     port_type = (interface.get("port_type") or {}).get("general")
     if port_type not in ("input", "output"):
@@ -208,13 +219,13 @@ def _parse_interface(interface: Dict[str, Any]) -> FlowSpec:
         return FlowSpec(
             name=name,
             direction="input",
-            logic=interface.get("logic", "or"),
+            logic=interface.get("input_logic", "or"),
         )
     # output
     return FlowSpec(
         name=name,
         direction="output",
-        logic=interface.get("logic", []),
+        logic=interface.get("prod_cond", []),
         logic_inner_mode=interface.get("logic_inner_mode", "or"),
         negate=bool(interface.get("negate", False)),
     )
