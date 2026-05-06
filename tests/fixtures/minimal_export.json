@@ -1,17 +1,25 @@
 {
-  "export_version": "1.0.0",
+  "export_version": "3.0.0",
   "exported_at": "2026-05-05T00:00:00+00:00",
   "model": {
     "name": "MinimalModel",
     "description": "Synthetic 2-component fixture for unit tests",
-    "kb": {"name": "MinimalKB", "version": "0.0.1"},
+    "kb": {
+      "name": "MinimalKB",
+      "version": "0.0.1"
+    },
     "owner": "test-owner",
     "elements": {
       "components": {
         "id-source": {
           "name": "Source1",
           "class_name": "Source",
-          "attributes": [{"name": "out_a", "value": false}]
+          "attributes": [
+            {
+              "name": "out_a",
+              "value": false
+            }
+          ]
         },
         "id-sink": {
           "name": "Sink1",
@@ -41,9 +49,11 @@
         "interfaces": {
           "out_a__output": {
             "name": "out_a",
-            "port_type": {"general": "output"},
+            "port_type": {
+              "general": "output"
+            },
             "metadata": {},
-            "logic": []
+            "prod_cond": []
           }
         }
       },
@@ -53,7 +63,9 @@
         "interfaces": {
           "out_a__input": {
             "name": "out_a",
-            "port_type": {"general": "input"},
+            "port_type": {
+              "general": "input"
+            },
             "metadata": {}
           }
         }

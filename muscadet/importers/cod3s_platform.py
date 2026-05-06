@@ -36,8 +36,8 @@ explicitly out of scope and deferred to later phases.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
-from typing import Any, Dict, List, Literal, Optional, Union
+from dataclasses import dataclass, field, replace
+from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
 logger = logging.getLogger(__name__)
 
@@ -68,6 +68,11 @@ class FlowSpec:
 
     Mirrors the ``muscadet`` flow primitives but stays a pure data
     object so the parse layer doesn't pull in the runtime.
+
+    P1.6 — instance overrides : when the source model carries an
+    ``instance.attribute`` for this flow with role ``logic`` or ``init``,
+    the corresponding fields below are overridden by the parse layer
+    so the apply layer sees the effective configuration directly.
     """
 
     name: str
@@ -79,6 +84,12 @@ class FlowSpec:
     # Outputs only — meaningful when direction == 'output'.
     logic_inner_mode: str = "or"
     negate: bool = False
+    # P1.6 — initial value of ``var_prod`` for an output flow, set by
+    # the parse layer when an ``instance.attribute(role=init)`` override
+    # exists on the model component. ``None`` means "leave the muscadet
+    # default" (False — ``var_prod`` starts off, propagation kicks in
+    # from ``var_prod_cond`` inputs at t=0+).
+    init_value: Optional[bool] = None
 
 
 @dataclass(frozen=True)
@@ -250,6 +261,143 @@ def _build_kb_lookup(kb: Dict[str, Any]) -> Dict[str, List[FlowSpec]]:
     return out
 
 
+def _parse_input_logic_value(raw: Any, *, flow_name: str, comp_name: str) -> Union[str, int]:
+    """Coerce an instance override of an input ``logic`` attribute.
+
+    Backend AttributeTemplate for role=logic declares type='string'
+    (cf. plan G2 sync_v2). The platform persists ``'and'`` / ``'or'``
+    as plain strings and ``int k`` (k-of-n) as a decimal string ``'2'``,
+    ``'5'``, ... — the muscadet ``add_flow_in(logic=...)`` API expects
+    a real Python int for k-of-n, hence the str→int coercion here.
+    """
+    if isinstance(raw, str):
+        if raw in ("and", "or"):
+            return raw
+        # Decimal-string k-of-n
+        try:
+            k = int(raw)
+        except ValueError as e:
+            raise Cod3sPlatformImportError(
+                f"Component {comp_name!r}, flow {flow_name!r}: invalid logic "
+                f"override {raw!r} (expected 'and', 'or', or an integer)"
+            ) from e
+        if k < 1:
+            raise Cod3sPlatformImportError(
+                f"Component {comp_name!r}, flow {flow_name!r}: k-of-n logic "
+                f"must be ≥ 1 (got {k})"
+            )
+        return k
+    if isinstance(raw, bool) or not isinstance(raw, int):
+        raise Cod3sPlatformImportError(
+            f"Component {comp_name!r}, flow {flow_name!r}: invalid logic "
+            f"override of type {type(raw).__name__} (expected str or int)"
+        )
+    if raw < 1:
+        raise Cod3sPlatformImportError(
+            f"Component {comp_name!r}, flow {flow_name!r}: k-of-n logic "
+            f"must be ≥ 1 (got {raw})"
+        )
+    return raw
+
+
+def _build_overrides_index(
+    attributes: List[Dict[str, Any]],
+) -> Dict[Tuple[str, str], Any]:
+    """Index a model component's instance attributes by ``(name, role)``.
+
+    Skips entries without a role (legacy / manual attributes) since
+    the apply layer only consumes the ``logic`` (input) and ``init``
+    (output) facets — the observable roles ``availability`` / ``state``
+    are runtime variables, not configuration overrides.
+
+    Drops entries whose ``value`` is ``None`` : an absent value means
+    "use the KB default", same as no override at all.
+    """
+    out: Dict[Tuple[str, str], Any] = {}
+    for attr in attributes or []:
+        if not isinstance(attr, dict):
+            continue
+        name = attr.get("name")
+        role = attr.get("role")
+        value = attr.get("value")
+        if not name or not role:
+            continue
+        if role not in ("logic", "init"):
+            # Observable roles (availability, state) — runtime, ignored.
+            continue
+        if value is None:
+            continue
+        out[(name, role)] = value
+    return out
+
+
+def _apply_instance_overrides(
+    flows: List[FlowSpec],
+    overrides: Dict[Tuple[str, str], Any],
+    *,
+    comp_name: str,
+) -> List[FlowSpec]:
+    """Return a new flow list with instance overrides folded in.
+
+    For each flow, look up overrides on its ``(name, role)`` pair :
+
+    * role=logic → replace the input flow's ``logic``
+    * role=init → set the output flow's ``init_value``
+
+    Rejects role/direction mismatches (logic on output, init on input)
+    with a clear error — these would indicate a corrupted snapshot
+    that the platform validators should have caught.
+
+    The role-to-direction mapping disambiguates the case where an
+    interface name appears on both an input AND an output port of the
+    same component (e.g. DIL ``Logique_Sorties.S_NDILH_PPz_Qx``).
+    Indexing by ``(name, direction)`` rather than ``name`` alone
+    avoids accidentally collapsing the two ports.
+    """
+    # Preserve original order; mutate by index when an override matches.
+    out: List[FlowSpec] = list(flows)
+    for (name, role), value in overrides.items():
+        target_direction = "input" if role == "logic" else "output"
+        idx = next(
+            (
+                i
+                for i, f in enumerate(out)
+                if f.name == name and f.direction == target_direction
+            ),
+            -1,
+        )
+        if idx < 0:
+            # Either the flow is gone (stale override) or it exists with
+            # the OPPOSITE direction (snapshot corruption — surface it).
+            opposite_idx = next(
+                (i for i, f in enumerate(out) if f.name == name),
+                -1,
+            )
+            if opposite_idx < 0:
+                logger.debug(
+                    "Ignoring stale instance override on %s/%s: flow not in current KB",
+                    comp_name, name,
+                )
+                continue
+            other = out[opposite_idx]
+            if role == "logic":
+                raise Cod3sPlatformImportError(
+                    f"Component {comp_name!r}: instance override role=logic "
+                    f"on non-input flow {name!r} (direction={other.direction})"
+                )
+            raise Cod3sPlatformImportError(
+                f"Component {comp_name!r}: instance override role=init "
+                f"on non-output flow {name!r} (direction={other.direction})"
+            )
+        flow = out[idx]
+        if role == "logic":
+            new_logic = _parse_input_logic_value(value, flow_name=name, comp_name=comp_name)
+            out[idx] = replace(flow, logic=new_logic)
+        else:  # role == "init"
+            out[idx] = replace(flow, init_value=bool(value))
+    return out
+
+
 def _parse_components(
     components_raw: Dict[str, Dict[str, Any]],
     kb_lookup: Dict[str, List[FlowSpec]],
@@ -257,8 +405,10 @@ def _parse_components(
     """Translate the model components dict into a list of ComponentSpec.
 
     Validates that each component's ``class_name`` is known in the
-    KB lookup. Preserves the raw ``attributes`` list in metadata for
-    downstream phases (P1.5 will wire them as initial states).
+    KB lookup. Folds instance overrides (attributes with role=logic
+    or role=init) into the FlowSpec list so the apply layer sees the
+    effective configuration directly. Preserves the raw ``attributes``
+    list in metadata for downstream traceability.
     """
     seen_names: set[str] = set()
     out: List[ComponentSpec] = []
@@ -284,15 +434,23 @@ def _parse_components(
                 "names as ids and cannot disambiguate collisions."
             )
         seen_names.add(name)
+        # Instance overrides : attributes with role=logic (input) or
+        # role=init (output) replace the KB defaults for THIS instance.
+        instance_attrs = list(comp.get("attributes") or [])
+        overrides = _build_overrides_index(instance_attrs)
+        flows = _apply_instance_overrides(
+            list(kb_lookup[class_name]), overrides, comp_name=name
+        )
         out.append(
             ComponentSpec(
                 id=cid,
                 name=name,
                 class_name=class_name,
-                flows=list(kb_lookup[class_name]),
+                flows=flows,
                 metadata={
                     "platform_id": cid,
-                    "attributes_initial": list(comp.get("attributes") or []),
+                    "attributes_initial": instance_attrs,
+                    "instance_overrides": dict(overrides),
                 },
             )
         )
@@ -560,16 +718,22 @@ def apply_to_system(
         # for diagnostic flows mirroring primary outputs).
         outputs = [f for f in spec.flows if f.direction == "output"]
         for flow in _order_outputs_by_deps(outputs, input_names, spec.name):
+            flow_kwargs: Dict[str, Any] = {
+                "cls": "FlowOut",
+                "name": flow.name,
+                "var_prod_cond": flow.logic,
+                "var_prod_cond_inner_mode": flow.logic_inner_mode,
+                "negate": flow.negate,
+            }
+            # P1.6 — instance override role=init: set the initial value
+            # of var_prod so the flow starts in the user-chosen state.
+            # When prod_cond is non-empty, the propagation will resolve
+            # var_prod from inputs at t=0+, but the seed matters for
+            # the very first tick and for unconditional outputs.
+            if flow.init_value is not None:
+                flow_kwargs["var_prod_default"] = flow.init_value
             try:
-                comp.add_flow(
-                    {
-                        "cls": "FlowOut",
-                        "name": flow.name,
-                        "var_prod_cond": flow.logic,
-                        "var_prod_cond_inner_mode": flow.logic_inner_mode,
-                        "negate": flow.negate,
-                    }
-                )
+                comp.add_flow(flow_kwargs)
             except Exception as e:
                 raise Cod3sPlatformImportError(
                     f"Failed to add output flow {flow.name!r} to component "

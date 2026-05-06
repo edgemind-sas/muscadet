@@ -20,7 +20,7 @@ def test_single_class_with_one_input_one_output():
                     "out_a__output": {
                         "name": "out_a",
                         "port_type": {"general": "output"},
-                        "logic": [["in_a"]],
+                        "prod_cond": [["in_a"]],
                     },
                 },
             }
@@ -59,7 +59,7 @@ def test_dict_key_naming_is_ignored_in_favor_of_port_type():
                     "weird_key_name": {
                         "name": "out_a",
                         "port_type": {"general": "output"},
-                        "logic": [],
+                        "prod_cond": [],
                     }
                 }
             }
