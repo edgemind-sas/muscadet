@@ -1,5 +1,5 @@
 {
-  "export_version": "1.0.0",
+  "export_version": "3.0.0",
   "exported_at": "2026-05-05T19:35:49.927317+00:00",
   "model": {
     "name": "DIL V2",
@@ -5281,7 +5281,7 @@
               "general": "output"
             },
             "metadata": {},
-            "logic": [
+            "prod_cond": [
               [
                 "V_Source1"
               ],
@@ -5296,7 +5296,7 @@
               "general": "output"
             },
             "metadata": {},
-            "logic": [
+            "prod_cond": [
               [
                 "V_Source1"
               ],
@@ -5311,7 +5311,7 @@
               "general": "output"
             },
             "metadata": {},
-            "logic": [
+            "prod_cond": [
               [
                 "V_24"
               ]
@@ -5323,7 +5323,7 @@
               "general": "output"
             },
             "metadata": {},
-            "logic": [
+            "prod_cond": [
               [
                 "V_24"
               ]
@@ -5335,7 +5335,7 @@
               "general": "output"
             },
             "metadata": {},
-            "logic": [
+            "prod_cond": [
               [
                 "V_24"
               ]
@@ -5347,7 +5347,7 @@
               "general": "output"
             },
             "metadata": {},
-            "logic": [
+            "prod_cond": [
               [
                 "V_24"
               ]
@@ -5473,7 +5473,9 @@
               "origin_data": {
                 "interface_name": "V_Source1",
                 "direction": "input",
-                "seriousness": "🟡 Mineure"
+                "seriousness": "🟡 Mineure",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -5487,7 +5489,9 @@
               "origin_data": {
                 "interface_name": "V_Source2",
                 "direction": "input",
-                "seriousness": "🟡 Mineure"
+                "seriousness": "🟡 Mineure",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -5501,7 +5505,9 @@
               "origin_data": {
                 "interface_name": "V_230",
                 "direction": "output",
-                "seriousness": "🟡 Mineure"
+                "seriousness": "🟡 Mineure",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -5515,7 +5521,9 @@
               "origin_data": {
                 "interface_name": "V_24",
                 "direction": "output",
-                "seriousness": "🔴 Grave"
+                "seriousness": "🔴 Grave",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -5529,7 +5537,9 @@
               "origin_data": {
                 "interface_name": "CS_Diag_V_DJY",
                 "direction": "output",
-                "seriousness": "🔵 Négligeable"
+                "seriousness": "🔵 Négligeable",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -5543,7 +5553,9 @@
               "origin_data": {
                 "interface_name": "CS_Diag_V_ConvY",
                 "direction": "output",
-                "seriousness": "🔵 Négligeable"
+                "seriousness": "🔵 Négligeable",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -5557,7 +5569,9 @@
               "origin_data": {
                 "interface_name": "CS_Diag_V_RedondY",
                 "direction": "output",
-                "seriousness": "🔵 Négligeable"
+                "seriousness": "🔵 Négligeable",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -5571,7 +5585,9 @@
               "origin_data": {
                 "interface_name": "CS_Diag_Bat",
                 "direction": "output",
-                "seriousness": "🔵 Négligeable"
+                "seriousness": "🔵 Négligeable",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           }
@@ -5604,14 +5620,14 @@
               "general": "output"
             },
             "metadata": {},
-            "logic": [
+            "component_authorized": [
+              "Switch_ethernet"
+            ],
+            "prod_cond": [
               [
                 "V_24",
                 "RS485"
               ]
-            ],
-            "component_authorized": [
-              "Switch_ethernet"
             ]
           }
         },
@@ -5684,7 +5700,9 @@
               "origin_data": {
                 "interface_name": "V_24",
                 "direction": "input",
-                "seriousness": "🔴 Grave"
+                "seriousness": "🔴 Grave",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -5698,7 +5716,9 @@
               "origin_data": {
                 "interface_name": "RS485",
                 "direction": "input",
-                "seriousness": "🟡 Mineure"
+                "seriousness": "🟡 Mineure",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -5712,7 +5732,9 @@
               "origin_data": {
                 "interface_name": "RS485_FO",
                 "direction": "output",
-                "seriousness": "🟡 Mineure"
+                "seriousness": "🟡 Mineure",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           }
@@ -5738,7 +5760,7 @@
               "general": "output"
             },
             "metadata": {},
-            "logic": [
+            "prod_cond": [
               [
                 "V_24"
               ]
@@ -5804,7 +5826,9 @@
               "origin_data": {
                 "interface_name": "V_24",
                 "direction": "input",
-                "seriousness": "🔴 Grave"
+                "seriousness": "🔴 Grave",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -5818,7 +5842,9 @@
               "origin_data": {
                 "interface_name": "F_ETH",
                 "direction": "output",
-                "seriousness": "🔴 Grave"
+                "seriousness": "🔴 Grave",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           }
@@ -6107,7 +6133,9 @@
               "origin_data": {
                 "interface_name": "E_KVPP_Qz",
                 "direction": "output",
-                "seriousness": "🔵 Négligeable"
+                "seriousness": "🔵 Négligeable",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -6121,7 +6149,9 @@
               "origin_data": {
                 "interface_name": "E_COPP_BSCR_Qz",
                 "direction": "output",
-                "seriousness": "🔵 Négligeable"
+                "seriousness": "🔵 Négligeable",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -6135,7 +6165,9 @@
               "origin_data": {
                 "interface_name": "E_PT_MF19_Qz",
                 "direction": "output",
-                "seriousness": "🟠 Majeure"
+                "seriousness": "🟠 Majeure",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -6149,7 +6181,9 @@
               "origin_data": {
                 "interface_name": "E_PT_TNE_Qz",
                 "direction": "output",
-                "seriousness": "🟠 Majeure"
+                "seriousness": "🟠 Majeure",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -6163,7 +6197,9 @@
               "origin_data": {
                 "interface_name": "E_Acq_DILFQ_PP_XX_Qz",
                 "direction": "output",
-                "seriousness": "🔵 Négligeable"
+                "seriousness": "🔵 Négligeable",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -6177,7 +6213,9 @@
               "origin_data": {
                 "interface_name": "E_Inh_DIL_PP_XX_Qz",
                 "direction": "output",
-                "seriousness": "🔴 Grave"
+                "seriousness": "🔴 Grave",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -6191,7 +6229,9 @@
               "origin_data": {
                 "interface_name": "E_Acq_PO_PP_XX_Qz",
                 "direction": "output",
-                "seriousness": "🔵 Négligeable"
+                "seriousness": "🔵 Négligeable",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -6205,7 +6245,9 @@
               "origin_data": {
                 "interface_name": "S_NDILH_PPz_Qx",
                 "direction": "input",
-                "seriousness": "🔴 Grave"
+                "seriousness": "🔴 Grave",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -6219,7 +6261,9 @@
               "origin_data": {
                 "interface_name": "S_NDILFQ_PPz_Qx",
                 "direction": "input",
-                "seriousness": "🔴 Grave"
+                "seriousness": "🔴 Grave",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -6233,7 +6277,9 @@
               "origin_data": {
                 "interface_name": "S_R_IPO_PPz_Qx",
                 "direction": "input",
-                "seriousness": "🔵 Négligeable"
+                "seriousness": "🔵 Négligeable",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -6247,7 +6293,9 @@
               "origin_data": {
                 "interface_name": "S_RLacSecur_Qx",
                 "direction": "input",
-                "seriousness": "🔴 Grave"
+                "seriousness": "🔴 Grave",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -6261,7 +6309,9 @@
               "origin_data": {
                 "interface_name": "S_IM_Qx",
                 "direction": "input",
-                "seriousness": "🟡 Mineure"
+                "seriousness": "🟡 Mineure",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -6275,7 +6325,9 @@
               "origin_data": {
                 "interface_name": "CS_IMX",
                 "direction": "input",
-                "seriousness": "🟡 Mineure"
+                "seriousness": "🟡 Mineure",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           }
@@ -6329,13 +6381,13 @@
               "general": "output"
             },
             "metadata": {},
-            "logic": [
+            "component_authorized": [
+              "IFQ"
+            ],
+            "prod_cond": [
               [
                 "S_NDILH_PPz_Qx"
               ]
-            ],
-            "component_authorized": [
-              "IFQ"
             ]
           },
           "S_NDILFQ_PPz_Qx__output": {
@@ -6344,13 +6396,13 @@
               "general": "output"
             },
             "metadata": {},
-            "logic": [
+            "component_authorized": [
+              "IFQ"
+            ],
+            "prod_cond": [
               [
                 "S_NDILFQ_PPz_Qx"
               ]
-            ],
-            "component_authorized": [
-              "IFQ"
             ]
           },
           "S_R_IPO_PPz_Qx__output": {
@@ -6359,13 +6411,13 @@
               "general": "output"
             },
             "metadata": {},
-            "logic": [
+            "component_authorized": [
+              "IFQ"
+            ],
+            "prod_cond": [
               [
                 "S_R_IPO_PPz_Qx"
               ]
-            ],
-            "component_authorized": [
-              "IFQ"
             ]
           },
           "S_RLacSecur_Qx__output": {
@@ -6374,13 +6426,13 @@
               "general": "output"
             },
             "metadata": {},
-            "logic": [
+            "component_authorized": [
+              "IFQ"
+            ],
+            "prod_cond": [
               [
                 "S_RLacSecur_Qx"
               ]
-            ],
-            "component_authorized": [
-              "IFQ"
             ]
           },
           "S_IM_Qx__output": {
@@ -6389,13 +6441,13 @@
               "general": "output"
             },
             "metadata": {},
-            "logic": [
+            "component_authorized": [
+              "IFQ"
+            ],
+            "prod_cond": [
               [
                 "S_IM_Qx"
               ]
-            ],
-            "component_authorized": [
-              "IFQ"
             ]
           }
         },
@@ -6534,7 +6586,9 @@
               "origin_data": {
                 "interface_name": "S_NDILH_PPz_Qx",
                 "direction": "input",
-                "seriousness": "🔴 Grave"
+                "seriousness": "🔴 Grave",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -6548,7 +6602,9 @@
               "origin_data": {
                 "interface_name": "S_NDILFQ_PPz_Qx",
                 "direction": "input",
-                "seriousness": "🔴 Grave"
+                "seriousness": "🔴 Grave",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -6562,7 +6618,9 @@
               "origin_data": {
                 "interface_name": "S_R_IPO_PPz_Qx",
                 "direction": "input",
-                "seriousness": "🔵 Négligeable"
+                "seriousness": "🔵 Négligeable",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -6576,7 +6634,9 @@
               "origin_data": {
                 "interface_name": "S_RLacSecur_Qx",
                 "direction": "input",
-                "seriousness": "🔴 Grave"
+                "seriousness": "🔴 Grave",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -6590,7 +6650,9 @@
               "origin_data": {
                 "interface_name": "S_IM_Qx",
                 "direction": "input",
-                "seriousness": "🟡 Mineure"
+                "seriousness": "🟡 Mineure",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -6604,7 +6666,9 @@
               "origin_data": {
                 "interface_name": "S_NDILH_PPz_Qx",
                 "direction": "output",
-                "seriousness": "🔴 Grave"
+                "seriousness": "🔴 Grave",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -6618,7 +6682,9 @@
               "origin_data": {
                 "interface_name": "S_NDILFQ_PPz_Qx",
                 "direction": "output",
-                "seriousness": "🔴 Grave"
+                "seriousness": "🔴 Grave",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -6632,7 +6698,9 @@
               "origin_data": {
                 "interface_name": "S_R_IPO_PPz_Qx",
                 "direction": "output",
-                "seriousness": "🔵 Négligeable"
+                "seriousness": "🔵 Négligeable",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -6646,7 +6714,9 @@
               "origin_data": {
                 "interface_name": "S_RLacSecur_Qx",
                 "direction": "output",
-                "seriousness": "🔴 Grave"
+                "seriousness": "🔴 Grave",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -6660,7 +6730,9 @@
               "origin_data": {
                 "interface_name": "S_IM_Qx",
                 "direction": "output",
-                "seriousness": "🟡 Mineure"
+                "seriousness": "🟡 Mineure",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           }
@@ -6742,14 +6814,14 @@
               "general": "output"
             },
             "metadata": {},
-            "logic": [
+            "component_authorized": [
+              "Réseau_STD"
+            ],
+            "prod_cond": [
               [
                 "V_24",
                 "F_ETH"
               ]
-            ],
-            "component_authorized": [
-              "Réseau_STD"
             ]
           },
           "CS_IMX__output": {
@@ -6758,14 +6830,14 @@
               "general": "output"
             },
             "metadata": {},
-            "logic": [
+            "component_authorized": [
+              "IFQ"
+            ],
+            "prod_cond": [
               [
                 "V_24",
                 "F_ETH"
               ]
-            ],
-            "component_authorized": [
-              "IFQ"
             ]
           },
           "ETH_DAME_DIL__output": {
@@ -6774,7 +6846,7 @@
               "general": "output"
             },
             "metadata": {},
-            "logic": [
+            "prod_cond": [
               [
                 "V_24",
                 "F_ETH"
@@ -6934,7 +7006,9 @@
               "origin_data": {
                 "interface_name": "V_24",
                 "direction": "input",
-                "seriousness": "🔴 Grave"
+                "seriousness": "🔴 Grave",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -6948,7 +7022,9 @@
               "origin_data": {
                 "interface_name": "F_ETH",
                 "direction": "input",
-                "seriousness": "🔴 Grave"
+                "seriousness": "🔴 Grave",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -6962,7 +7038,9 @@
               "origin_data": {
                 "interface_name": "CS_Diag_V_DJY",
                 "direction": "input",
-                "seriousness": "🔵 Négligeable"
+                "seriousness": "🔵 Négligeable",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -6976,7 +7054,9 @@
               "origin_data": {
                 "interface_name": "CS_Diag_V_ConvY",
                 "direction": "input",
-                "seriousness": "🔵 Négligeable"
+                "seriousness": "🔵 Négligeable",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -6990,7 +7070,9 @@
               "origin_data": {
                 "interface_name": "CS_Diag_V_RedondY",
                 "direction": "input",
-                "seriousness": "🔵 Négligeable"
+                "seriousness": "🔵 Négligeable",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -7004,7 +7086,9 @@
               "origin_data": {
                 "interface_name": "CS_Diag_Bat",
                 "direction": "input",
-                "seriousness": "🔵 Négligeable"
+                "seriousness": "🔵 Négligeable",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -7018,7 +7102,9 @@
               "origin_data": {
                 "interface_name": "Température",
                 "direction": "input",
-                "seriousness": "🟡 Mineure"
+                "seriousness": "🟡 Mineure",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -7032,7 +7118,9 @@
               "origin_data": {
                 "interface_name": "ETH_UT_DAME",
                 "direction": "input",
-                "seriousness": "🔵 Négligeable"
+                "seriousness": "🔵 Négligeable",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -7046,7 +7134,9 @@
               "origin_data": {
                 "interface_name": "ETH_PLC_DAME",
                 "direction": "input",
-                "seriousness": "🔵 Négligeable"
+                "seriousness": "🔵 Négligeable",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -7060,7 +7150,9 @@
               "origin_data": {
                 "interface_name": "ETH_DAME_STD",
                 "direction": "output",
-                "seriousness": "🟡 Mineure"
+                "seriousness": "🟡 Mineure",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -7074,7 +7166,9 @@
               "origin_data": {
                 "interface_name": "CS_IMX",
                 "direction": "output",
-                "seriousness": "🟡 Mineure"
+                "seriousness": "🟡 Mineure",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -7088,7 +7182,9 @@
               "origin_data": {
                 "interface_name": "ETH_DAME_DIL",
                 "direction": "output",
-                "seriousness": "🟡 Mineure"
+                "seriousness": "🟡 Mineure",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           }
@@ -7163,14 +7259,14 @@
               "general": "output"
             },
             "metadata": {},
-            "logic": [
+            "component_authorized": [
+              "Automate_PCL_Y"
+            ],
+            "prod_cond": [
               [
                 "V_24",
                 "E_KVPP_Qz"
               ]
-            ],
-            "component_authorized": [
-              "Automate_PCL_Y"
             ]
           },
           "CS_E_PT_MF19_Qx_PLC__output": {
@@ -7179,14 +7275,14 @@
               "general": "output"
             },
             "metadata": {},
-            "logic": [
+            "component_authorized": [
+              "Automate_PCL_Y"
+            ],
+            "prod_cond": [
               [
                 "V_24",
                 "E_PT_MF19_Qz"
               ]
-            ],
-            "component_authorized": [
-              "Automate_PCL_Y"
             ]
           },
           "CS_E_PT_TNE_Qx_PLC__output": {
@@ -7195,14 +7291,14 @@
               "general": "output"
             },
             "metadata": {},
-            "logic": [
+            "component_authorized": [
+              "Automate_PCL_Y"
+            ],
+            "prod_cond": [
               [
                 "V_24",
                 "E_PT_TNE_Qz"
               ]
-            ],
-            "component_authorized": [
-              "Automate_PCL_Y"
             ]
           },
           "CS_E_Acq_DILFQ_PPz_Qx_PLC__output": {
@@ -7211,14 +7307,14 @@
               "general": "output"
             },
             "metadata": {},
-            "logic": [
+            "component_authorized": [
+              "Automate_PCL_Y"
+            ],
+            "prod_cond": [
               [
                 "V_24",
                 "E_Acq_DILFQ_PP_XX_Qz"
               ]
-            ],
-            "component_authorized": [
-              "Automate_PCL_Y"
             ]
           },
           "CS_E_Acq_PO_PPz_Qx_PLC__output": {
@@ -7227,14 +7323,14 @@
               "general": "output"
             },
             "metadata": {},
-            "logic": [
+            "component_authorized": [
+              "Automate_PCL_Y"
+            ],
+            "prod_cond": [
               [
                 "V_24",
                 "E_Acq_PO_PP_XX_Qz"
               ]
-            ],
-            "component_authorized": [
-              "Automate_PCL_Y"
             ]
           },
           "CS_E_COPP_BSCR_Qx_PLC__output": {
@@ -7243,14 +7339,14 @@
               "general": "output"
             },
             "metadata": {},
-            "logic": [
+            "component_authorized": [
+              "Automate_PCL_Y"
+            ],
+            "prod_cond": [
               [
                 "V_24",
                 "E_COPP_BSCR_Qz"
               ]
-            ],
-            "component_authorized": [
-              "Automate_PCL_Y"
             ]
           },
           "CS_E_Inh_DIL_PPz_Qx_PLC__output": {
@@ -7259,14 +7355,14 @@
               "general": "output"
             },
             "metadata": {},
-            "logic": [
+            "component_authorized": [
+              "Automate_PCL_Y"
+            ],
+            "prod_cond": [
               [
                 "V_24",
                 "E_Inh_DIL_PP_XX_Qz"
               ]
-            ],
-            "component_authorized": [
-              "Automate_PCL_Y"
             ]
           }
         },
@@ -7453,7 +7549,9 @@
               "origin_data": {
                 "interface_name": "V_24",
                 "direction": "input",
-                "seriousness": "🔴 Grave"
+                "seriousness": "🔴 Grave",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -7467,7 +7565,9 @@
               "origin_data": {
                 "interface_name": "E_KVPP_Qz",
                 "direction": "input",
-                "seriousness": "🔵 Négligeable"
+                "seriousness": "🔵 Négligeable",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -7481,7 +7581,9 @@
               "origin_data": {
                 "interface_name": "E_COPP_BSCR_Qz",
                 "direction": "input",
-                "seriousness": "🔵 Négligeable"
+                "seriousness": "🔵 Négligeable",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -7495,7 +7597,9 @@
               "origin_data": {
                 "interface_name": "E_PT_MF19_Qz",
                 "direction": "input",
-                "seriousness": "🟠 Majeure"
+                "seriousness": "🟠 Majeure",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -7509,7 +7613,9 @@
               "origin_data": {
                 "interface_name": "E_PT_TNE_Qz",
                 "direction": "input",
-                "seriousness": "🟠 Majeure"
+                "seriousness": "🟠 Majeure",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -7523,7 +7629,9 @@
               "origin_data": {
                 "interface_name": "E_Acq_DILFQ_PP_XX_Qz",
                 "direction": "input",
-                "seriousness": "🔵 Négligeable"
+                "seriousness": "🔵 Négligeable",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -7537,7 +7645,9 @@
               "origin_data": {
                 "interface_name": "E_Inh_DIL_PP_XX_Qz",
                 "direction": "input",
-                "seriousness": "🔴 Grave"
+                "seriousness": "🔴 Grave",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -7551,7 +7661,9 @@
               "origin_data": {
                 "interface_name": "E_Acq_PO_PP_XX_Qz",
                 "direction": "input",
-                "seriousness": "🔵 Négligeable"
+                "seriousness": "🔵 Négligeable",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -7565,7 +7677,9 @@
               "origin_data": {
                 "interface_name": "CS_E_KVPP_Qx_PLC",
                 "direction": "output",
-                "seriousness": "🔵 Négligeable"
+                "seriousness": "🔵 Négligeable",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -7579,7 +7693,9 @@
               "origin_data": {
                 "interface_name": "CS_E_PT_MF19_Qx_PLC",
                 "direction": "output",
-                "seriousness": "🟠 Majeure"
+                "seriousness": "🟠 Majeure",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -7593,7 +7709,9 @@
               "origin_data": {
                 "interface_name": "CS_E_PT_TNE_Qx_PLC",
                 "direction": "output",
-                "seriousness": "🟠 Majeure"
+                "seriousness": "🟠 Majeure",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -7607,7 +7725,9 @@
               "origin_data": {
                 "interface_name": "CS_E_Acq_DILFQ_PPz_Qx_PLC",
                 "direction": "output",
-                "seriousness": "🔵 Négligeable"
+                "seriousness": "🔵 Négligeable",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -7621,7 +7741,9 @@
               "origin_data": {
                 "interface_name": "CS_E_Acq_PO_PPz_Qx_PLC",
                 "direction": "output",
-                "seriousness": "🔵 Négligeable"
+                "seriousness": "🔵 Négligeable",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -7635,7 +7757,9 @@
               "origin_data": {
                 "interface_name": "CS_E_COPP_BSCR_Qx_PLC",
                 "direction": "output",
-                "seriousness": "🔵 Négligeable"
+                "seriousness": "🔵 Négligeable",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -7649,7 +7773,9 @@
               "origin_data": {
                 "interface_name": "CS_E_Inh_DIL_PPz_Qx_PLC",
                 "direction": "output",
-                "seriousness": "🔴 Grave"
+                "seriousness": "🔴 Grave",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           }
@@ -7710,14 +7836,14 @@
               "general": "output"
             },
             "metadata": {},
-            "logic": [
+            "component_authorized": [
+              "Logique_Sorties"
+            ],
+            "prod_cond": [
               [
                 "V_24",
                 "V_S_NDILH_Ly_Qx_PLC"
               ]
-            ],
-            "component_authorized": [
-              "Logique_Sorties"
             ]
           },
           "S_NDILFQ_PPz_Qx__output": {
@@ -7726,14 +7852,14 @@
               "general": "output"
             },
             "metadata": {},
-            "logic": [
+            "component_authorized": [
+              "Logique_Sorties"
+            ],
+            "prod_cond": [
               [
                 "V_24",
                 "V_S_NDILFQ_Ly_Qx_PLC"
               ]
-            ],
-            "component_authorized": [
-              "Logique_Sorties"
             ]
           },
           "S_R_IPO_PPz_Qx__output": {
@@ -7742,14 +7868,14 @@
               "general": "output"
             },
             "metadata": {},
-            "logic": [
+            "component_authorized": [
+              "Logique_Sorties"
+            ],
+            "prod_cond": [
               [
                 "V_24",
                 "V_S_R_IPO_PPy_Qx_PLC"
               ]
-            ],
-            "component_authorized": [
-              "Logique_Sorties"
             ]
           },
           "S_RLacSecur_Qx__output": {
@@ -7758,14 +7884,14 @@
               "general": "output"
             },
             "metadata": {},
-            "logic": [
+            "component_authorized": [
+              "Logique_Sorties"
+            ],
+            "prod_cond": [
               [
                 "V_24",
                 "V_S_RLacSecur_Qx_PLC"
               ]
-            ],
-            "component_authorized": [
-              "Logique_Sorties"
             ]
           },
           "S_IM_Qx__output": {
@@ -7774,14 +7900,14 @@
               "general": "output"
             },
             "metadata": {},
-            "logic": [
+            "component_authorized": [
+              "Logique_Sorties"
+            ],
+            "prod_cond": [
               [
                 "V_24",
                 "V_S_IM_QX_PLC"
               ]
-            ],
-            "component_authorized": [
-              "Logique_Sorties"
             ]
           }
         },
@@ -7931,7 +8057,9 @@
               "origin_data": {
                 "interface_name": "V_S_NDILH_Ly_Qx_PLC",
                 "direction": "input",
-                "seriousness": "🔵 Négligeable"
+                "seriousness": "🔵 Négligeable",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -7945,7 +8073,9 @@
               "origin_data": {
                 "interface_name": "V_S_NDILFQ_Ly_Qx_PLC",
                 "direction": "input",
-                "seriousness": "🔵 Négligeable"
+                "seriousness": "🔵 Négligeable",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -7959,7 +8089,9 @@
               "origin_data": {
                 "interface_name": "V_S_RLacSecur_Qx_PLC",
                 "direction": "input",
-                "seriousness": "🔴 Grave"
+                "seriousness": "🔴 Grave",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -7973,7 +8105,9 @@
               "origin_data": {
                 "interface_name": "V_24",
                 "direction": "input",
-                "seriousness": "🔴 Grave"
+                "seriousness": "🔴 Grave",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -7987,7 +8121,9 @@
               "origin_data": {
                 "interface_name": "V_S_R_IPO_PPy_Qx_PLC",
                 "direction": "input",
-                "seriousness": "🟡 Mineure"
+                "seriousness": "🟡 Mineure",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -8001,7 +8137,9 @@
               "origin_data": {
                 "interface_name": "V_S_IM_QX_PLC",
                 "direction": "input",
-                "seriousness": "🟡 Mineure"
+                "seriousness": "🟡 Mineure",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -8015,7 +8153,9 @@
               "origin_data": {
                 "interface_name": "S_NDILH_PPz_Qx",
                 "direction": "output",
-                "seriousness": "🔴 Grave"
+                "seriousness": "🔴 Grave",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -8029,7 +8169,9 @@
               "origin_data": {
                 "interface_name": "S_NDILFQ_PPz_Qx",
                 "direction": "output",
-                "seriousness": "🔴 Grave"
+                "seriousness": "🔴 Grave",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -8043,7 +8185,9 @@
               "origin_data": {
                 "interface_name": "S_R_IPO_PPz_Qx",
                 "direction": "output",
-                "seriousness": "🔵 Négligeable"
+                "seriousness": "🔵 Négligeable",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -8057,7 +8201,9 @@
               "origin_data": {
                 "interface_name": "S_RLacSecur_Qx",
                 "direction": "output",
-                "seriousness": "🔴 Grave"
+                "seriousness": "🔴 Grave",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -8071,7 +8217,9 @@
               "origin_data": {
                 "interface_name": "S_IM_Qx",
                 "direction": "output",
-                "seriousness": "🟡 Mineure"
+                "seriousness": "🟡 Mineure",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           }
@@ -8104,7 +8252,7 @@
               "general": "output"
             },
             "metadata": {},
-            "logic": [
+            "prod_cond": [
               [
                 "F_Elec",
                 "ETH_DAME_STD"
@@ -8179,7 +8327,9 @@
               "origin_data": {
                 "interface_name": "F_Elec",
                 "direction": "input",
-                "seriousness": "🟡 Mineure"
+                "seriousness": "🟡 Mineure",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -8193,7 +8343,9 @@
               "origin_data": {
                 "interface_name": "ETH_DAME_STD",
                 "direction": "input",
-                "seriousness": "🟡 Mineure"
+                "seriousness": "🟡 Mineure",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -8207,7 +8359,9 @@
               "origin_data": {
                 "interface_name": "ETH_DAME_STD",
                 "direction": "output",
-                "seriousness": "🟡 Mineure"
+                "seriousness": "🟡 Mineure",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           }
@@ -8233,13 +8387,13 @@
               "general": "output"
             },
             "metadata": {},
-            "logic": [
+            "component_authorized": [
+              "Convertisseur_RS485_FO"
+            ],
+            "prod_cond": [
               [
                 "V_230"
               ]
-            ],
-            "component_authorized": [
-              "Convertisseur_RS485_FO"
             ]
           }
         },
@@ -8302,7 +8456,9 @@
               "origin_data": {
                 "interface_name": "V_230",
                 "direction": "input",
-                "seriousness": "🟡 Mineure"
+                "seriousness": "🟡 Mineure",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -8316,7 +8472,9 @@
               "origin_data": {
                 "interface_name": "RS485",
                 "direction": "output",
-                "seriousness": "🟡 Mineure"
+                "seriousness": "🟡 Mineure",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           }
@@ -8420,7 +8578,9 @@
               "origin_data": {
                 "interface_name": "V_Source1",
                 "direction": "output",
-                "seriousness": "🟡 Mineure"
+                "seriousness": "🟡 Mineure",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -8434,7 +8594,9 @@
               "origin_data": {
                 "interface_name": "V_Source2",
                 "direction": "output",
-                "seriousness": "🟡 Mineure"
+                "seriousness": "🟡 Mineure",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -8448,7 +8610,9 @@
               "origin_data": {
                 "interface_name": "F_Elec",
                 "direction": "output",
-                "seriousness": "🟡 Mineure"
+                "seriousness": "🟡 Mineure",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           }
@@ -8488,15 +8652,15 @@
               "general": "output"
             },
             "metadata": {},
-            "logic": [
+            "component_authorized": [
+              "Unite_Traitement"
+            ],
+            "prod_cond": [
               [
                 "V_24",
                 "RS485_FO",
                 "F_ETH"
               ]
-            ],
-            "component_authorized": [
-              "Unite_Traitement"
             ]
           }
         },
@@ -8579,7 +8743,9 @@
               "origin_data": {
                 "interface_name": "V_24",
                 "direction": "input",
-                "seriousness": "🔴 Grave"
+                "seriousness": "🔴 Grave",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -8593,7 +8759,9 @@
               "origin_data": {
                 "interface_name": "RS485_FO",
                 "direction": "input",
-                "seriousness": "🟡 Mineure"
+                "seriousness": "🟡 Mineure",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -8607,7 +8775,9 @@
               "origin_data": {
                 "interface_name": "F_ETH",
                 "direction": "input",
-                "seriousness": "🔴 Grave"
+                "seriousness": "🔴 Grave",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -8621,7 +8791,9 @@
               "origin_data": {
                 "interface_name": "RS485_FO_Eth",
                 "direction": "output",
-                "seriousness": "🟡 Mineure"
+                "seriousness": "🟡 Mineure",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           }
@@ -8661,14 +8833,14 @@
               "general": "output"
             },
             "metadata": {},
-            "logic": [
+            "component_authorized": [
+              "Automate_PCL_Y"
+            ],
+            "prod_cond": [
               [
                 "V_24",
                 "RS485_FO_Eth"
               ]
-            ],
-            "component_authorized": [
-              "Automate_PCL_Y"
             ]
           },
           "ETH_UT_DAME__output": {
@@ -8677,13 +8849,13 @@
               "general": "output"
             },
             "metadata": {},
-            "logic": [
+            "component_authorized": [
+              "PC_DAME"
+            ],
+            "prod_cond": [
               [
                 "V_24"
               ]
-            ],
-            "component_authorized": [
-              "PC_DAME"
             ]
           }
         },
@@ -8776,7 +8948,9 @@
               "origin_data": {
                 "interface_name": "V_24",
                 "direction": "input",
-                "seriousness": "🔴 Grave"
+                "seriousness": "🔴 Grave",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -8790,7 +8964,9 @@
               "origin_data": {
                 "interface_name": "RS485_FO_Eth",
                 "direction": "input",
-                "seriousness": "🟡 Mineure"
+                "seriousness": "🟡 Mineure",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -8804,7 +8980,9 @@
               "origin_data": {
                 "interface_name": "ETH_DAME_DIL",
                 "direction": "input",
-                "seriousness": "🟡 Mineure"
+                "seriousness": "🟡 Mineure",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -8818,7 +8996,9 @@
               "origin_data": {
                 "interface_name": "RS485_UT_PLCY",
                 "direction": "output",
-                "seriousness": "🟡 Mineure"
+                "seriousness": "🟡 Mineure",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -8832,7 +9012,9 @@
               "origin_data": {
                 "interface_name": "ETH_UT_DAME",
                 "direction": "output",
-                "seriousness": "🔵 Négligeable"
+                "seriousness": "🔵 Négligeable",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           }
@@ -8851,7 +9033,7 @@
               "general": "output"
             },
             "metadata": {},
-            "logic": [
+            "prod_cond": [
               []
             ]
           }
@@ -8867,7 +9049,9 @@
               "origin_name": "interface",
               "origin_data": {
                 "interface_name": "XXX",
-                "direction": "output"
+                "direction": "output",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           }
@@ -9001,7 +9185,7 @@
             "metadata": {
               "seriousness": "🔴 Grave"
             },
-            "logic": [
+            "prod_cond": [
               [
                 "CS_E_PT_MF19_Qx_PLC",
                 "RS485_UT_PLCY",
@@ -9018,7 +9202,7 @@
             "metadata": {
               "seriousness": "🔴 Grave"
             },
-            "logic": [
+            "prod_cond": [
               [
                 "CS_E_PT_MF19_Qx_PLC",
                 "RS485_UT_PLCY",
@@ -9033,7 +9217,7 @@
               "general": "output"
             },
             "metadata": {},
-            "logic": [
+            "prod_cond": [
               [
                 "RS485_UT_PLCY",
                 "CS_E_PT_MF19_Qx_PLC",
@@ -9048,7 +9232,7 @@
               "general": "output"
             },
             "metadata": {},
-            "logic": [
+            "prod_cond": [
               [
                 "V_24"
               ]
@@ -9060,7 +9244,7 @@
               "general": "output"
             },
             "metadata": {},
-            "logic": [
+            "prod_cond": [
               [
                 "V_24"
               ]
@@ -9072,13 +9256,13 @@
               "general": "output"
             },
             "metadata": {},
-            "logic": [
+            "component_authorized": [
+              "PC_DAME"
+            ],
+            "prod_cond": [
               [
                 "V_24"
               ]
-            ],
-            "component_authorized": [
-              "PC_DAME"
             ]
           },
           "ETH_PLC_DAME__output": {
@@ -9087,14 +9271,14 @@
               "general": "output"
             },
             "metadata": {},
-            "logic": [
+            "component_authorized": [
+              "PC_DAME"
+            ],
+            "prod_cond": [
               [
                 "F_ETH",
                 "V_24"
               ]
-            ],
-            "component_authorized": [
-              "PC_DAME"
             ]
           }
         },
@@ -9309,7 +9493,9 @@
               "origin_data": {
                 "interface_name": "V_24",
                 "direction": "input",
-                "seriousness": "🔴 Grave"
+                "seriousness": "🔴 Grave",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -9323,7 +9509,9 @@
               "origin_data": {
                 "interface_name": "F_ETH",
                 "direction": "input",
-                "seriousness": "🔴 Grave"
+                "seriousness": "🔴 Grave",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -9337,7 +9525,9 @@
               "origin_data": {
                 "interface_name": "ETH_DAME_DIL",
                 "direction": "input",
-                "seriousness": "🟡 Mineure"
+                "seriousness": "🟡 Mineure",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -9351,7 +9541,9 @@
               "origin_data": {
                 "interface_name": "CS_E_KVPP_Qx_PLC",
                 "direction": "input",
-                "seriousness": "🔵 Négligeable"
+                "seriousness": "🔵 Négligeable",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -9365,7 +9557,9 @@
               "origin_data": {
                 "interface_name": "CS_E_PT_MF19_Qx_PLC",
                 "direction": "input",
-                "seriousness": "🟠 Majeure"
+                "seriousness": "🟠 Majeure",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -9379,7 +9573,9 @@
               "origin_data": {
                 "interface_name": "CS_E_PT_TNE_Qx_PLC",
                 "direction": "input",
-                "seriousness": "🟠 Majeure"
+                "seriousness": "🟠 Majeure",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -9393,7 +9589,9 @@
               "origin_data": {
                 "interface_name": "CS_E_Acq_DILFQ_PPz_Qx_PLC",
                 "direction": "input",
-                "seriousness": "🔵 Négligeable"
+                "seriousness": "🔵 Négligeable",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -9407,7 +9605,9 @@
               "origin_data": {
                 "interface_name": "CS_E_Acq_PO_PPz_Qx_PLC",
                 "direction": "input",
-                "seriousness": "🔵 Négligeable"
+                "seriousness": "🔵 Négligeable",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -9421,7 +9621,9 @@
               "origin_data": {
                 "interface_name": "CS_E_COPP_BSCR_Qx_PLC",
                 "direction": "input",
-                "seriousness": "🔵 Négligeable"
+                "seriousness": "🔵 Négligeable",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -9435,7 +9637,9 @@
               "origin_data": {
                 "interface_name": "CS_E_Inh_DIL_PPz_Qx_PLC",
                 "direction": "input",
-                "seriousness": "🔴 Grave"
+                "seriousness": "🔴 Grave",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -9449,7 +9653,9 @@
               "origin_data": {
                 "interface_name": "RS485_UT_PLCY",
                 "direction": "input",
-                "seriousness": "🟡 Mineure"
+                "seriousness": "🟡 Mineure",
+                "role": "state",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -9463,7 +9669,9 @@
               "origin_data": {
                 "interface_name": "V_S_NDILH_Ly_Qx_PLC",
                 "direction": "output",
-                "seriousness": "🔴 Grave"
+                "seriousness": "🔴 Grave",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -9477,7 +9685,9 @@
               "origin_data": {
                 "interface_name": "V_S_NDILFQ_Ly_Qx_PLC",
                 "direction": "output",
-                "seriousness": "🔴 Grave"
+                "seriousness": "🔴 Grave",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -9491,7 +9701,9 @@
               "origin_data": {
                 "interface_name": "V_S_RLacSecur_Qx_PLC",
                 "direction": "output",
-                "seriousness": "🔴 Grave"
+                "seriousness": "🔴 Grave",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -9505,7 +9717,9 @@
               "origin_data": {
                 "interface_name": "V_S_R_IPO_PPy_Qx_PLC",
                 "direction": "output",
-                "seriousness": "🟡 Mineure"
+                "seriousness": "🟡 Mineure",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -9519,7 +9733,9 @@
               "origin_data": {
                 "interface_name": "V_S_IM_QX_PLC",
                 "direction": "output",
-                "seriousness": "🟡 Mineure"
+                "seriousness": "🟡 Mineure",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -9533,7 +9749,9 @@
               "origin_data": {
                 "interface_name": "Température",
                 "direction": "output",
-                "seriousness": "🟡 Mineure"
+                "seriousness": "🟡 Mineure",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           },
@@ -9547,7 +9765,9 @@
               "origin_data": {
                 "interface_name": "ETH_PLC_DAME",
                 "direction": "output",
-                "seriousness": "🔵 Négligeable"
+                "seriousness": "🔵 Négligeable",
+                "role": "availability",
+                "fmea_visibility": "visible"
               }
             }
           }
