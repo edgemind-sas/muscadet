@@ -24,6 +24,11 @@ from pathlib import Path
 
 import pytest
 
+# Mark this whole module as integration so a developer can filter
+# parse-only tests via `pytest -m "not integration"` when PyCATSHOO
+# native libs aren't loadable.
+pytestmark = pytest.mark.integration
+
 # muscadet imports trigger PyCATSHOO ; gracefully skip when not loadable
 muscadet = pytest.importorskip("muscadet")
 
@@ -185,3 +190,35 @@ def test_runtime_isimu_start_with_overrides_does_not_raise(
     system = system_from_export(payload)
     cleanup_system.append(system)
     system.isimu_start()
+
+
+def test_runtime_metadata_instance_overrides_propagated(
+    base_payload, cleanup_system
+):
+    """Audit trail : after apply_to_system, ``comp.metadata['instance_overrides']``
+    holds the condensed dict of overrides that were actually folded into the
+    KB defaults. Regression guard for the cosmetic bug where the parse-layer
+    metadata key was not whitelisted into the runtime metadata copy.
+    """
+    payload = _patch_attributes(
+        base_payload,
+        PLC_1_ID,
+        [
+            {
+                "name": "CS_E_KVPP_Qx_PLC",
+                "role": "logic",
+                "value": "2",
+            }
+        ],
+    )
+    system = system_from_export(payload)
+    cleanup_system.append(system)
+
+    # PLC_1 — override applied : audit trail must reflect it
+    plc1_overrides = system.comp["PLC_1"].metadata.get("instance_overrides")
+    assert plc1_overrides == {("CS_E_KVPP_Qx_PLC", "logic"): "2"}
+
+    # PLC_2 — no override : audit trail must be an empty dict (not None)
+    # so callers can trust the key's presence and iterate without guards.
+    plc2_overrides = system.comp["PLC_2"].metadata.get("instance_overrides")
+    assert plc2_overrides == {}

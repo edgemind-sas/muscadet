@@ -57,13 +57,37 @@ class Cod3sPlatformImportError(ValueError):
     """
 
 
-# Major version of the COD3S Platform model export schema this importer
-# supports. A platform export with ``export_version`` outside this major
-# is rejected at parse time : the schema may have moved fields, dropped
-# fields, or changed semantics, and silent acceptance would produce a
-# wrong simulation model. Bump in lockstep with platform breaking
-# releases (``KB_EXPORT_VERSION`` / ``MODEL_EXPORT_VERSION`` major).
-_SUPPORTED_PLATFORM_EXPORT_MAJOR = 3
+# Major versions of the COD3S Platform export schemas this importer
+# supports. The platform versions the model and the KB independently:
+#
+# - Top-level ``export_version`` carries the **model export schema major**
+#   (= ``MODEL_EXPORT_VERSION`` in ``services/model_io_service.py``).
+#   Currently ``1.x``. Tracks structural changes to the model envelope,
+#   ``elements``, ``rendering``, etc.
+# - ``kb_embedded.export_version`` carries the **KB export schema major**
+#   (= ``KB_EXPORT_VERSION`` in ``services/kb_io_service.py``). Currently
+#   ``3.x``. Tracks changes to ``component_templates``, ``interfaces``
+#   (e.g. ``prod_cond`` / ``input_logic`` rename in 3.0.0).
+#
+# Both are checked at parse time : a payload outside either major is
+# rejected because we cannot guarantee semantic compatibility. Bump
+# these in lockstep with the platform breaking releases.
+# Top-level model export major. Accepts both 1.x (current platform
+# ``MODEL_EXPORT_VERSION``) and 3.x (legacy fixtures generated when the
+# model and KB export versions were synchronised pre-decoupling). Drop
+# 3 once all checked-in fixtures have been regenerated under the
+# current platform release.
+_SUPPORTED_MODEL_EXPORT_MAJORS = frozenset({1, 3})
+
+# KB export major. The current platform tag is 3.x. Major 2 is also
+# accepted because checked-in fixtures (e.g. ``dil_v2_export.json``)
+# carry ``kb_embedded.export_version = "2.0.0"`` even though their
+# structure was migrated to the 3.0.0 schema (``logic`` rename to
+# ``prod_cond`` / ``input_logic``) in commit 147edca. The structural
+# check in ``_parse_interface`` rejects the legacy ``logic`` field
+# regardless, so this widening is safe. Drop 2 once those fixtures
+# have been regenerated under a 3.0.0-tagged platform.
+_SUPPORTED_KB_EXPORT_MAJORS = frozenset({2, 3})
 
 
 # ---------------------------------------------------------------------------
@@ -91,7 +115,12 @@ class FlowSpec:
     # expression carried in the KB JSON, e.g. ``[["A"], ["B", "C"]]``.
     logic: Union[str, int, list]
     # Outputs only — meaningful when direction == 'output'.
-    logic_inner_mode: str = "or"
+    # Default 'and' aligns the importer on the COD3S Platform UI semantics
+    # (outer-OR / inner-AND : ``[[A], [B]]`` ⇒ ``A OR B``). With muscadet's
+    # ``var_prod_cond_inner_mode='and'``, the runtime matches what the KB
+    # Editor displays. KBs that explicitly want outer-AND semantics ship
+    # ``logic_inner_mode='or'`` on the interface.
+    logic_inner_mode: str = "and"
     negate: bool = False
     # P1.6 — initial value of ``var_prod`` for an output flow, set by
     # the parse layer when an ``instance.attribute(role=init)`` override
@@ -246,7 +275,9 @@ def _parse_interface(interface: Dict[str, Any]) -> FlowSpec:
         name=name,
         direction="output",
         logic=interface.get("prod_cond", []),
-        logic_inner_mode=interface.get("logic_inner_mode", "or"),
+        # Default 'and' = outer-OR / inner-AND, matching the KB Editor UI.
+        # See FlowSpec.logic_inner_mode docstring for rationale.
+        logic_inner_mode=interface.get("logic_inner_mode", "and"),
         negate=bool(interface.get("negate", False)),
     )
 
@@ -282,6 +313,10 @@ _OVERRIDE_ROLES: frozenset = frozenset(_ROLE_TO_DIRECTION)
 # overrides — they are runtime observables (availability, state) and
 # the importer ignores them silently.
 _OBSERVABLE_ROLES: frozenset = frozenset({"availability", "state"})
+
+# Type aliases — composite key for instance attribute overrides.
+OverrideKey = Tuple[str, str]  # (flow_name, role)
+OverridesIndex = Dict[OverrideKey, Any]
 
 
 def _parse_input_logic_value(raw: Any, *, flow_name: str, comp_name: str) -> Union[str, int]:
@@ -349,7 +384,7 @@ def _parse_init_value(raw: Any, *, flow_name: str, comp_name: str) -> bool:
 
 def _build_overrides_index(
     attributes: List[Dict[str, Any]],
-) -> Dict[Tuple[str, str], Any]:
+) -> OverridesIndex:
     """Index a model component's instance attributes by ``(name, role)``.
 
     Skips entries without a role (legacy / manual attributes) since
@@ -360,7 +395,7 @@ def _build_overrides_index(
     Drops entries whose ``value`` is ``None`` : an absent value means
     "use the KB default", same as no override at all.
     """
-    out: Dict[Tuple[str, str], Any] = {}
+    out: OverridesIndex = {}
     for attr in attributes or []:
         if not isinstance(attr, dict):
             continue
@@ -386,7 +421,7 @@ def _build_overrides_index(
 
 def _apply_instance_overrides(
     flows: List[FlowSpec],
-    overrides: Dict[Tuple[str, str], Any],
+    overrides: OverridesIndex,
     *,
     comp_name: str,
 ) -> List[FlowSpec]:
@@ -587,27 +622,47 @@ def _parse_connections(
 
 
 def _check_export_version(payload: Dict[str, Any]) -> None:
-    """Reject payloads whose ``export_version`` major is outside this
-    importer's supported window.
+    """Reject payloads whose model or KB ``export_version`` is outside
+    this importer's supported window.
 
-    A missing ``export_version`` is tolerated so the canonical test
-    payload (without the platform metadata wrapper) keeps working.
+    Two independent checks because the platform versions the model and
+    the KB independently (cf. ``_SUPPORTED_MODEL_EXPORT_MAJORS`` vs
+    ``_SUPPORTED_KB_EXPORT_MAJORS``).
+
+    A missing ``export_version`` at either level is tolerated so the
+    canonical test payload (without the platform metadata wrapper)
+    keeps working.
     """
-    version = payload.get("export_version")
-    if not version:
-        return
-    try:
-        major = int(str(version).split(".", 1)[0])
-    except (ValueError, AttributeError) as e:
-        raise Cod3sPlatformImportError(
-            f"Invalid export_version {version!r} (expected semver x.y.z)"
-        ) from e
-    if major != _SUPPORTED_PLATFORM_EXPORT_MAJOR:
-        raise Cod3sPlatformImportError(
-            f"Unsupported export_version {version!r}: this importer "
-            f"requires major version {_SUPPORTED_PLATFORM_EXPORT_MAJOR}.x. "
-            f"Re-export from a compatible COD3S Platform release or upgrade "
-            f"the muscadet importer."
+
+    def _check(version: Any, *, supported_majors: frozenset, label: str) -> None:
+        if not version:
+            return
+        try:
+            major = int(str(version).split(".", 1)[0])
+        except (ValueError, AttributeError) as e:
+            raise Cod3sPlatformImportError(
+                f"Invalid {label} export_version {version!r} (expected semver x.y.z)"
+            ) from e
+        if major not in supported_majors:
+            wanted = ", ".join(f"{m}.x" for m in sorted(supported_majors))
+            raise Cod3sPlatformImportError(
+                f"Unsupported {label} export_version {version!r}: this importer "
+                f"requires major version {wanted}. "
+                f"Re-export from a compatible COD3S Platform release or upgrade "
+                f"the muscadet importer."
+            )
+
+    _check(
+        payload.get("export_version"),
+        supported_majors=_SUPPORTED_MODEL_EXPORT_MAJORS,
+        label="model",
+    )
+    kb_embedded = payload.get("kb_embedded")
+    if isinstance(kb_embedded, dict):
+        _check(
+            kb_embedded.get("export_version"),
+            supported_majors=_SUPPORTED_KB_EXPORT_MAJORS,
+            label="kb_embedded",
         )
 
 
