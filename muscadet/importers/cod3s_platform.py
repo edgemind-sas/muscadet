@@ -57,6 +57,15 @@ class Cod3sPlatformImportError(ValueError):
     """
 
 
+# Major version of the COD3S Platform model export schema this importer
+# supports. A platform export with ``export_version`` outside this major
+# is rejected at parse time : the schema may have moved fields, dropped
+# fields, or changed semantics, and silent acceptance would produce a
+# wrong simulation model. Bump in lockstep with platform breaking
+# releases (``KB_EXPORT_VERSION`` / ``MODEL_EXPORT_VERSION`` major).
+_SUPPORTED_PLATFORM_EXPORT_MAJOR = 3
+
+
 # ---------------------------------------------------------------------------
 # Pure data structures (parse layer output)
 # ---------------------------------------------------------------------------
@@ -530,6 +539,31 @@ def _parse_connections(
     return out
 
 
+def _check_export_version(payload: Dict[str, Any]) -> None:
+    """Reject payloads whose ``export_version`` major is outside this
+    importer's supported window.
+
+    A missing ``export_version`` is tolerated so the canonical test
+    payload (without the platform metadata wrapper) keeps working.
+    """
+    version = payload.get("export_version")
+    if not version:
+        return
+    try:
+        major = int(str(version).split(".", 1)[0])
+    except (ValueError, AttributeError) as e:
+        raise Cod3sPlatformImportError(
+            f"Invalid export_version {version!r} (expected semver x.y.z)"
+        ) from e
+    if major != _SUPPORTED_PLATFORM_EXPORT_MAJOR:
+        raise Cod3sPlatformImportError(
+            f"Unsupported export_version {version!r}: this importer "
+            f"requires major version {_SUPPORTED_PLATFORM_EXPORT_MAJOR}.x. "
+            f"Re-export from a compatible COD3S Platform release or upgrade "
+            f"the muscadet importer."
+        )
+
+
 def parse_platform_export(payload: Dict[str, Any]) -> ImporterContext:
     """Translate a Platform JSON payload into a parse-layer context.
 
@@ -547,8 +581,10 @@ def parse_platform_export(payload: Dict[str, Any]) -> ImporterContext:
     Raises:
         Cod3sPlatformImportError: payload malformed, KB missing,
             unknown class, dangling component reference, missing
-            interface, duplicate component name.
+            interface, duplicate component name, or unsupported
+            ``export_version`` major.
     """
+    _check_export_version(payload)
     kb = _resolve_kb(payload)
     model = payload.get("model") or {}
     elements = model.get("elements") or {}
@@ -649,7 +685,10 @@ def apply_to_system(
     The ``class_name`` from the source KB is preserved in
     ``component.metadata['class_name']`` for downstream filters (regex
     on class, indicator grouping, audit). Other preservation fields
-    (``platform_id``, ``attributes_initial``) come along the same way.
+    (``platform_id``, ``attributes_initial``, ``instance_overrides``)
+    come along the same way. ``instance_overrides`` is the condensed
+    audit trail of overrides actually applied (filtered to roles
+    ``logic`` / ``init``, value-non-null), keyed by ``(flow_name, role)``.
 
     Args:
         ctx: result of :func:`parse_platform_export`.
@@ -694,6 +733,9 @@ def apply_to_system(
                     "platform_id": spec.metadata.get("platform_id"),
                     "attributes_initial": spec.metadata.get(
                         "attributes_initial", []
+                    ),
+                    "instance_overrides": dict(
+                        spec.metadata.get("instance_overrides") or {}
                     ),
                 }
             )
