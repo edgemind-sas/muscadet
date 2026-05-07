@@ -270,6 +270,20 @@ def _build_kb_lookup(kb: Dict[str, Any]) -> Dict[str, List[FlowSpec]]:
     return out
 
 
+# Mapping of P1.6 instance-override roles to the flow direction they
+# apply to. The composite key for indexing instance attributes is
+# (name, role) — direction is derived from the role at apply time.
+_ROLE_TO_DIRECTION: Dict[str, str] = {
+    "logic": "input",
+    "init": "output",
+}
+_OVERRIDE_ROLES: frozenset = frozenset(_ROLE_TO_DIRECTION)
+# Roles that exist on the platform but are NOT instance configuration
+# overrides — they are runtime observables (availability, state) and
+# the importer ignores them silently.
+_OBSERVABLE_ROLES: frozenset = frozenset({"availability", "state"})
+
+
 def _parse_input_logic_value(raw: Any, *, flow_name: str, comp_name: str) -> Union[str, int]:
     """Coerce an instance override of an input ``logic`` attribute.
 
@@ -280,11 +294,12 @@ def _parse_input_logic_value(raw: Any, *, flow_name: str, comp_name: str) -> Uni
     a real Python int for k-of-n, hence the str→int coercion here.
     """
     if isinstance(raw, str):
-        if raw in ("and", "or"):
-            return raw
+        stripped = raw.strip()
+        if stripped in ("and", "or"):
+            return stripped
         # Decimal-string k-of-n
         try:
-            k = int(raw)
+            k = int(stripped)
         except ValueError as e:
             raise Cod3sPlatformImportError(
                 f"Component {comp_name!r}, flow {flow_name!r}: invalid logic "
@@ -293,7 +308,7 @@ def _parse_input_logic_value(raw: Any, *, flow_name: str, comp_name: str) -> Uni
         if k < 1:
             raise Cod3sPlatformImportError(
                 f"Component {comp_name!r}, flow {flow_name!r}: k-of-n logic "
-                f"must be ≥ 1 (got {k})"
+                f"must be >= 1 (got {k})"
             )
         return k
     if isinstance(raw, bool) or not isinstance(raw, int):
@@ -304,9 +319,32 @@ def _parse_input_logic_value(raw: Any, *, flow_name: str, comp_name: str) -> Uni
     if raw < 1:
         raise Cod3sPlatformImportError(
             f"Component {comp_name!r}, flow {flow_name!r}: k-of-n logic "
-            f"must be ≥ 1 (got {raw})"
+            f"must be >= 1 (got {raw})"
         )
     return raw
+
+
+def _parse_init_value(raw: Any, *, flow_name: str, comp_name: str) -> bool:
+    """Coerce an instance override of an output ``init`` attribute.
+
+    Symmetric of :func:`_parse_input_logic_value`. Accepts native
+    ``bool`` or canonical string forms (``'true'``/``'false'``,
+    ``'1'``/``'0'``, case-insensitive). Refuses anything else loudly
+    so a ``"false"`` string never silently becomes ``True`` via the
+    Python ``bool(non_empty_str)`` truthiness pitfall.
+    """
+    if isinstance(raw, bool):
+        return raw
+    if isinstance(raw, str):
+        normalized = raw.strip().lower()
+        if normalized in ("true", "1"):
+            return True
+        if normalized in ("false", "0"):
+            return False
+    raise Cod3sPlatformImportError(
+        f"Component {comp_name!r}, flow {flow_name!r}: invalid init "
+        f"override {raw!r} (expected bool or 'true'/'false')"
+    )
 
 
 def _build_overrides_index(
@@ -331,8 +369,14 @@ def _build_overrides_index(
         value = attr.get("value")
         if not name or not role:
             continue
-        if role not in ("logic", "init"):
-            # Observable roles (availability, state) — runtime, ignored.
+        if role in _OBSERVABLE_ROLES:
+            continue
+        if role not in _OVERRIDE_ROLES:
+            logger.warning(
+                "Unknown attribute role %r on flow %r — ignored. "
+                "Importer may need updating to support this role.",
+                role, name,
+            )
             continue
         if value is None:
             continue
@@ -357,16 +401,16 @@ def _apply_instance_overrides(
     with a clear error — these would indicate a corrupted snapshot
     that the platform validators should have caught.
 
-    The role-to-direction mapping disambiguates the case where an
-    interface name appears on both an input AND an output port of the
-    same component (e.g. DIL ``Logique_Sorties.S_NDILH_PPz_Qx``).
-    Indexing by ``(name, direction)`` rather than ``name`` alone
-    avoids accidentally collapsing the two ports.
+    Disambiguates the case where an interface name appears on both an
+    input AND an output port of the same component (e.g. DIL
+    ``Logique_Sorties.S_NDILH_PPz_Qx``) by deriving the target direction
+    from the override's role rather than matching on ``name`` alone.
     """
-    # Preserve original order; mutate by index when an override matches.
+    # FlowSpec is frozen — rebuild the list with replaced entries at
+    # matching indices, preserving the original order.
     out: List[FlowSpec] = list(flows)
     for (name, role), value in overrides.items():
-        target_direction = "input" if role == "logic" else "output"
+        target_direction = _ROLE_TO_DIRECTION[role]
         idx = next(
             (
                 i
@@ -403,7 +447,10 @@ def _apply_instance_overrides(
             new_logic = _parse_input_logic_value(value, flow_name=name, comp_name=comp_name)
             out[idx] = replace(flow, logic=new_logic)
         else:  # role == "init"
-            out[idx] = replace(flow, init_value=bool(value))
+            out[idx] = replace(
+                flow,
+                init_value=_parse_init_value(value, flow_name=name, comp_name=comp_name),
+            )
     return out
 
 

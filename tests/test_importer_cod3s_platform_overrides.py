@@ -44,11 +44,11 @@ class TestParseInputLogicValue:
             _parse_input_logic_value("xor", flow_name="x", comp_name="c")
 
     def test_zero_rejected(self):
-        with pytest.raises(Cod3sPlatformImportError, match="must be ≥ 1"):
+        with pytest.raises(Cod3sPlatformImportError, match="must be >= 1"):
             _parse_input_logic_value("0", flow_name="x", comp_name="c")
 
     def test_negative_rejected(self):
-        with pytest.raises(Cod3sPlatformImportError, match="must be ≥ 1"):
+        with pytest.raises(Cod3sPlatformImportError, match="must be >= 1"):
             _parse_input_logic_value(-1, flow_name="x", comp_name="c")
 
     def test_bool_rejected(self):
@@ -264,3 +264,97 @@ class TestEndToEndOverrides:
         assert comp.metadata["attributes_initial"] == [
             {"name": "in_a", "role": "logic", "value": "2"},
         ]
+
+
+class TestParseInitValue:
+    """Strict init override coercion (P2 — todo 053).
+
+    Symmetric of TestParseInputLogicValue. The Python idiom
+    ``bool(non_empty_string)`` is True for ``"false"`` ; the parser
+    must refuse string forms that aren't canonical true/false.
+    """
+
+    def test_native_true(self):
+        from muscadet.importers.cod3s_platform import _parse_init_value
+        assert _parse_init_value(True, flow_name="x", comp_name="c") is True
+
+    def test_native_false(self):
+        from muscadet.importers.cod3s_platform import _parse_init_value
+        assert _parse_init_value(False, flow_name="x", comp_name="c") is False
+
+    def test_string_true_canonical(self):
+        from muscadet.importers.cod3s_platform import _parse_init_value
+        assert _parse_init_value("true", flow_name="x", comp_name="c") is True
+        assert _parse_init_value(" TRUE ", flow_name="x", comp_name="c") is True
+        assert _parse_init_value("1", flow_name="x", comp_name="c") is True
+
+    def test_string_false_not_silently_truthy(self):
+        from muscadet.importers.cod3s_platform import _parse_init_value, Cod3sPlatformImportError
+        # The bug we guard against: bool("false") == True in pure Python.
+        assert _parse_init_value("false", flow_name="x", comp_name="c") is False
+        assert _parse_init_value("0", flow_name="x", comp_name="c") is False
+
+    def test_arbitrary_string_rejected(self):
+        from muscadet.importers.cod3s_platform import _parse_init_value, Cod3sPlatformImportError
+        with pytest.raises(Cod3sPlatformImportError, match="invalid init"):
+            _parse_init_value("yes", flow_name="x", comp_name="c")
+        with pytest.raises(Cod3sPlatformImportError, match="invalid init"):
+            _parse_init_value("abc", flow_name="x", comp_name="c")
+
+    def test_non_string_non_bool_rejected(self):
+        from muscadet.importers.cod3s_platform import _parse_init_value, Cod3sPlatformImportError
+        with pytest.raises(Cod3sPlatformImportError, match="invalid init"):
+            _parse_init_value(1, flow_name="x", comp_name="c")
+        with pytest.raises(Cod3sPlatformImportError, match="invalid init"):
+            _parse_init_value(None, flow_name="x", comp_name="c")
+        with pytest.raises(Cod3sPlatformImportError, match="invalid init"):
+            _parse_init_value([], flow_name="x", comp_name="c")
+
+
+class TestUnknownRoleHandling:
+    """Unknown attribute roles are logged + ignored, not silently dropped (todo 055-D)."""
+
+    def test_unknown_role_logs_warning(self, caplog):
+        import logging
+        from muscadet.importers.cod3s_platform import _build_overrides_index
+        with caplog.at_level(logging.WARNING, logger="muscadet.importers.cod3s_platform"):
+            idx = _build_overrides_index([
+                {"name": "x", "role": "spurious", "value": "y"},
+            ])
+        assert idx == {}
+        assert any("Unknown attribute role" in rec.getMessage() for rec in caplog.records)
+
+    def test_observable_role_silent(self, caplog):
+        import logging
+        from muscadet.importers.cod3s_platform import _build_overrides_index
+        with caplog.at_level(logging.WARNING, logger="muscadet.importers.cod3s_platform"):
+            idx = _build_overrides_index([
+                {"name": "x", "role": "availability", "value": True},
+                {"name": "y", "role": "state", "value": False},
+            ])
+        assert idx == {}
+        # No warning for observable roles — they're a known taxonomy.
+        assert not any("Unknown" in rec.getMessage() for rec in caplog.records)
+
+
+class TestInputLogicWhitespace:
+    """Whitespace handling on logic value strings (todo 055-C)."""
+
+    def test_whitespace_string_int(self):
+        from muscadet.importers.cod3s_platform import _parse_input_logic_value
+        assert _parse_input_logic_value(" 2 ", flow_name="x", comp_name="c") == 2
+
+    def test_whitespace_string_keyword(self):
+        from muscadet.importers.cod3s_platform import _parse_input_logic_value
+        assert _parse_input_logic_value(" or ", flow_name="x", comp_name="c") == "or"
+        assert _parse_input_logic_value(" and ", flow_name="x", comp_name="c") == "and"
+
+    def test_float_string_rejected(self):
+        from muscadet.importers.cod3s_platform import _parse_input_logic_value, Cod3sPlatformImportError
+        with pytest.raises(Cod3sPlatformImportError, match="invalid logic"):
+            _parse_input_logic_value("2.5", flow_name="x", comp_name="c")
+
+    def test_empty_string_rejected(self):
+        from muscadet.importers.cod3s_platform import _parse_input_logic_value, Cod3sPlatformImportError
+        with pytest.raises(Cod3sPlatformImportError, match="invalid logic"):
+            _parse_input_logic_value("", flow_name="x", comp_name="c")
