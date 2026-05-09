@@ -1180,6 +1180,21 @@ class ObjFailureMode(cod3s.PycComponent):
         step=None,
         **kwargs,
     ):
+        # Deprecation: muscadet.ObjFailureMode and its subclasses
+        # (ObjFailureModeExp, ObjFailureModeDelay) are historical wrappers
+        # around cod3s.ObjFM. The cod3s lib now hosts the canonical
+        # implementation; new code should use ``cod3s.ObjFM``,
+        # ``cod3s.ObjFMExp``, ``cod3s.ObjFMDelay`` directly. This warning
+        # fires once per process at instantiation.
+        warnings.warn(
+            (
+                f"{type(self).__name__} is deprecated; use "
+                f"``cod3s.{type(self).__name__.replace('ObjFailureMode', 'ObjFM')}`` "
+                "instead. The muscadet wrapper will be removed in a future release."
+            ),
+            DeprecationWarning,
+            stacklevel=2,
+        )
 
         self.fm_name = fm_name
         self.targets = [targets] if isinstance(targets, str) else targets
