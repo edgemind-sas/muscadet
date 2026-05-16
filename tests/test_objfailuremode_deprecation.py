@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import warnings
 
+import cod3s
 import pytest
 
 # Importing muscadet pulls PyCATSHOO; skip the whole module when it's
@@ -35,13 +36,23 @@ def _shared_system():
     we share one instance across tests. FM construction may still
     raise downstream errors (missing targets, etc.) — we don't care,
     only the DeprecationWarning is asserted.
+
+    Yields the system and tears it down on module exit so downstream
+    test modules see a clean PyCATSHOO state.
     """
     try:
         import muscadet
 
-        return muscadet.System(name="dep_test_shared")
+        system = muscadet.System(name="dep_test_shared")
     except Exception as e:
         pytest.skip(f"muscadet/PyCATSHOO unavailable: {e}")
+        return
+    yield system
+    try:
+        system.deleteSys()
+    except Exception:
+        pass
+    cod3s.terminate_session()
 
 
 def _instantiate_and_capture_warnings(fm_class, **kwargs):
