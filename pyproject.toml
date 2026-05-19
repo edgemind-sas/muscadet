@@ -30,7 +30,7 @@ dependencies = [
     # downstream consumer (cod3s-platform) gets a deterministic transitive
     # version. Bump in lockstep with the muscadet release that requires
     # new cod3s features (here: cod3s.specs / cod3s.scripts.study_runner).
-    "cod3s @ git+https://github.com/edgemind-sas/cod3s.git@1.6.1",
+    "cod3s @ git+https://github.com/edgemind-sas/cod3s.git@1.7.0",
     "graphviz==0.20.1",
 ]
 
