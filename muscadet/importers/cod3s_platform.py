@@ -304,15 +304,21 @@ def _build_kb_lookup(kb: Dict[str, Any]) -> Dict[str, List[FlowSpec]]:
 # Mapping of P1.6 instance-override roles to the flow direction they
 # apply to. The composite key for indexing instance attributes is
 # (name, role) — direction is derived from the role at apply time.
+#
+# Vocabulary refactor 2026-05-22 (cod3s-api 1.x → bumped here in
+# lockstep) : legacy roles availability/init/state/logic renamed to
+# is_available/prod_init/fed_in/logic_in + new observable fed_out
+# (FlowOut var_fed). The platform side migrates DB data via
+# migrations kb/007, mbsa/006, modelisation/037.
 _ROLE_TO_DIRECTION: Dict[str, str] = {
-    "logic": "input",
-    "init": "output",
+    "logic_in": "input",
+    "prod_init": "output",
 }
 _OVERRIDE_ROLES: frozenset = frozenset(_ROLE_TO_DIRECTION)
 # Roles that exist on the platform but are NOT instance configuration
-# overrides — they are runtime observables (availability, state) and
-# the importer ignores them silently.
-_OBSERVABLE_ROLES: frozenset = frozenset({"availability", "state"})
+# overrides — they are runtime observables (is_available, fed_out,
+# fed_in) and the importer ignores them silently.
+_OBSERVABLE_ROLES: frozenset = frozenset({"is_available", "fed_out", "fed_in"})
 
 # Type aliases — composite key for instance attribute overrides.
 OverrideKey = Tuple[str, str]  # (flow_name, role)
