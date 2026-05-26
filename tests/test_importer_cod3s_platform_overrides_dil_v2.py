@@ -70,7 +70,7 @@ def test_parse_layer_propagates_2_of_3_on_plc_1(base_payload):
         [
             {
                 "name": "CS_E_KVPP_Qx_PLC",
-                "role": "logic",
+                "role": "logic_in",
                 "value": "2",
             }
         ],
@@ -113,7 +113,7 @@ def test_parse_layer_propagates_init_override_on_alim(base_payload):
     payload = _patch_attributes(
         base_payload,
         alim_id,
-        [{"name": target_flow, "role": "init", "value": True}],
+        [{"name": target_flow, "role": "prod_init", "value": True}],
     )
     ctx = parse_platform_export(payload)
     alim = next(c for c in ctx.components if c.name == "Alim_elec_01")
@@ -147,7 +147,7 @@ def test_runtime_plc1_input_logic_set_to_2_of_3(base_payload, cleanup_system):
         [
             {
                 "name": "CS_E_KVPP_Qx_PLC",
-                "role": "logic",
+                "role": "logic_in",
                 "value": "2",
             }
         ],
@@ -182,7 +182,7 @@ def test_runtime_isimu_start_with_overrides_does_not_raise(
         [
             {
                 "name": "CS_E_KVPP_Qx_PLC",
-                "role": "logic",
+                "role": "logic_in",
                 "value": "2",
             }
         ],
@@ -206,7 +206,7 @@ def test_runtime_metadata_instance_overrides_propagated(
         [
             {
                 "name": "CS_E_KVPP_Qx_PLC",
-                "role": "logic",
+                "role": "logic_in",
                 "value": "2",
             }
         ],
@@ -216,7 +216,7 @@ def test_runtime_metadata_instance_overrides_propagated(
 
     # PLC_1 — override applied : audit trail must reflect it
     plc1_overrides = system.comp["PLC_1"].metadata.get("instance_overrides")
-    assert plc1_overrides == {("CS_E_KVPP_Qx_PLC", "logic"): "2"}
+    assert plc1_overrides == {("CS_E_KVPP_Qx_PLC", "logic_in"): "2"}
 
     # PLC_2 — no override : audit trail must be an empty dict (not None)
     # so callers can trust the key's presence and iterate without guards.

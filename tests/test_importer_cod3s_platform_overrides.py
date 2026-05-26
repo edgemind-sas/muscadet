@@ -2,8 +2,8 @@
 
 Covers ``_build_overrides_index``, ``_apply_instance_overrides``,
 ``_parse_input_logic_value``, and the end-to-end ``parse_platform_export``
-behaviour when the model carries instance attributes with role=init or
-role=logic.
+behaviour when the model carries instance attributes with role=prod_init or
+role=logic_in.
 
 These tests exercise the pure parse layer only — no muscadet runtime,
 no PyCATSHOO. They verify that the FlowSpec list emitted by the parser
@@ -66,17 +66,17 @@ class TestParseInputLogicValue:
 class TestBuildOverridesIndex:
     def test_indexes_by_name_role(self):
         attrs = [
-            {"name": "F-AEC", "role": "logic", "value": "2"},
-            {"name": "F-AEBT", "role": "init", "value": True},
+            {"name": "F-AEC", "role": "logic_in", "value": "2"},
+            {"name": "F-AEBT", "role": "prod_init", "value": True},
         ]
         idx = _build_overrides_index(attrs)
-        assert idx == {("F-AEC", "logic"): "2", ("F-AEBT", "init"): True}
+        assert idx == {("F-AEC", "logic_in"): "2", ("F-AEBT", "prod_init"): True}
 
     def test_skips_observable_roles(self):
-        # availability + state are runtime observables — never overrides
+        # is_available + fed_in are runtime observables — never overrides
         attrs = [
-            {"name": "F-AEBT", "role": "availability", "value": True},
-            {"name": "F-AEC", "role": "state", "value": False},
+            {"name": "F-AEBT", "role": "is_available", "value": True},
+            {"name": "F-AEC", "role": "fed_in", "value": False},
         ]
         assert _build_overrides_index(attrs) == {}
 
@@ -86,7 +86,7 @@ class TestBuildOverridesIndex:
 
     def test_skips_null_value(self):
         # Null value means "use KB default" — drop the entry.
-        attrs = [{"name": "F-AEC", "role": "logic", "value": None}]
+        attrs = [{"name": "F-AEC", "role": "logic_in", "value": None}]
         assert _build_overrides_index(attrs) == {}
 
     def test_skips_legacy_no_role(self):
@@ -114,7 +114,7 @@ class TestApplyInstanceOverrides:
     def test_overrides_input_logic_to_int(self):
         flows = self._flows()
         result = _apply_instance_overrides(
-            flows, {("in_a", "logic"): "2"}, comp_name="c"
+            flows, {("in_a", "logic_in"): "2"}, comp_name="c"
         )
         # in_a logic now 2, others untouched
         in_a = next(f for f in result if f.name == "in_a")
@@ -125,30 +125,30 @@ class TestApplyInstanceOverrides:
     def test_overrides_input_logic_to_and(self):
         flows = self._flows()
         result = _apply_instance_overrides(
-            flows, {("in_a", "logic"): "and"}, comp_name="c"
+            flows, {("in_a", "logic_in"): "and"}, comp_name="c"
         )
         assert next(f for f in result if f.name == "in_a").logic == "and"
 
     def test_overrides_output_init_value(self):
         flows = self._flows()
         result = _apply_instance_overrides(
-            flows, {("out_x", "init"): True}, comp_name="c"
+            flows, {("out_x", "prod_init"): True}, comp_name="c"
         )
         out_x = next(f for f in result if f.name == "out_x")
         assert out_x.init_value is True
 
-    def test_rejects_logic_on_output(self):
+    def test_rejects_logic_in_on_output(self):
         flows = self._flows()
-        with pytest.raises(Cod3sPlatformImportError, match="role=logic.*non-input"):
+        with pytest.raises(Cod3sPlatformImportError, match="role=logic_in.*non-input"):
             _apply_instance_overrides(
-                flows, {("out_x", "logic"): "and"}, comp_name="c"
+                flows, {("out_x", "logic_in"): "and"}, comp_name="c"
             )
 
-    def test_rejects_init_on_input(self):
+    def test_rejects_prod_init_on_input(self):
         flows = self._flows()
-        with pytest.raises(Cod3sPlatformImportError, match="role=init.*non-output"):
+        with pytest.raises(Cod3sPlatformImportError, match="role=prod_init.*non-output"):
             _apply_instance_overrides(
-                flows, {("in_a", "init"): True}, comp_name="c"
+                flows, {("in_a", "prod_init"): True}, comp_name="c"
             )
 
     def test_stale_override_silently_ignored(self):
@@ -156,7 +156,7 @@ class TestApplyInstanceOverrides:
         # log + ignore, don't crash.
         flows = self._flows()
         result = _apply_instance_overrides(
-            flows, {("DELETED", "logic"): "and"}, comp_name="c"
+            flows, {("DELETED", "logic_in"): "and"}, comp_name="c"
         )
         # Flows unchanged
         assert [f.name for f in result] == ["in_a", "in_b", "out_x"]
@@ -166,7 +166,7 @@ class TestApplyInstanceOverrides:
         flows = self._flows()
         result = _apply_instance_overrides(
             flows,
-            {("in_a", "logic"): "2", ("out_x", "init"): True},
+            {("in_a", "logic_in"): "2", ("out_x", "prod_init"): True},
             comp_name="c",
         )
         assert [f.name for f in result] == ["in_a", "in_b", "out_x"]
@@ -216,7 +216,7 @@ def _payload(component_attributes):
 class TestEndToEndOverrides:
     def test_logic_override_propagated_through_parse(self):
         ctx = parse_platform_export(_payload([
-            {"name": "in_a", "role": "logic", "value": "3"},
+            {"name": "in_a", "role": "logic_in", "value": "3"},
         ]))
         comp = ctx.components[0]
         in_a = next(f for f in comp.flows if f.name == "in_a")
@@ -227,7 +227,7 @@ class TestEndToEndOverrides:
 
     def test_init_override_propagated_through_parse(self):
         ctx = parse_platform_export(_payload([
-            {"name": "out_x", "role": "init", "value": True},
+            {"name": "out_x", "role": "prod_init", "value": True},
         ]))
         comp = ctx.components[0]
         out_x = next(f for f in comp.flows if f.name == "out_x")
@@ -235,8 +235,8 @@ class TestEndToEndOverrides:
 
     def test_combined_logic_and_init_overrides(self):
         ctx = parse_platform_export(_payload([
-            {"name": "in_a", "role": "logic", "value": "and"},
-            {"name": "out_x", "role": "init", "value": True},
+            {"name": "in_a", "role": "logic_in", "value": "and"},
+            {"name": "out_x", "role": "prod_init", "value": True},
         ]))
         comp = ctx.components[0]
         in_a = next(f for f in comp.flows if f.name == "in_a")
@@ -244,10 +244,10 @@ class TestEndToEndOverrides:
         assert in_a.logic == "and"
         assert out_x.init_value is True
 
-    def test_state_attribute_does_not_override(self):
-        # role=state is a runtime observable — must be ignored.
+    def test_fed_in_attribute_does_not_override(self):
+        # role=fed_in is a runtime observable — must be ignored.
         ctx = parse_platform_export(_payload([
-            {"name": "in_a", "role": "state", "value": True},
+            {"name": "in_a", "role": "fed_in", "value": True},
         ]))
         comp = ctx.components[0]
         in_a = next(f for f in comp.flows if f.name == "in_a")
@@ -255,14 +255,14 @@ class TestEndToEndOverrides:
 
     def test_overrides_persisted_in_component_metadata(self):
         ctx = parse_platform_export(_payload([
-            {"name": "in_a", "role": "logic", "value": "2"},
+            {"name": "in_a", "role": "logic_in", "value": "2"},
         ]))
         comp = ctx.components[0]
         # Traceability: instance_overrides bag carries the raw map
-        assert comp.metadata["instance_overrides"] == {("in_a", "logic"): "2"}
+        assert comp.metadata["instance_overrides"] == {("in_a", "logic_in"): "2"}
         # And the raw attributes_initial list is preserved verbatim
         assert comp.metadata["attributes_initial"] == [
-            {"name": "in_a", "role": "logic", "value": "2"},
+            {"name": "in_a", "role": "logic_in", "value": "2"},
         ]
 
 
@@ -329,8 +329,8 @@ class TestUnknownRoleHandling:
         from muscadet.importers.cod3s_platform import _build_overrides_index
         with caplog.at_level(logging.WARNING, logger="muscadet.importers.cod3s_platform"):
             idx = _build_overrides_index([
-                {"name": "x", "role": "availability", "value": True},
-                {"name": "y", "role": "state", "value": False},
+                {"name": "x", "role": "is_available", "value": True},
+                {"name": "y", "role": "fed_in", "value": False},
             ])
         assert idx == {}
         # No warning for observable roles — they're a known taxonomy.
