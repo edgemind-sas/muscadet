@@ -474,20 +474,20 @@ def _apply_instance_overrides(
                 )
                 continue
             other = out[opposite_idx]
-            if role == "logic":
+            if role == "logic_in":
                 raise Cod3sPlatformImportError(
-                    f"Component {comp_name!r}: instance override role=logic "
+                    f"Component {comp_name!r}: instance override role=logic_in "
                     f"on non-input flow {name!r} (direction={other.direction})"
                 )
             raise Cod3sPlatformImportError(
-                f"Component {comp_name!r}: instance override role=init "
+                f"Component {comp_name!r}: instance override role=prod_init "
                 f"on non-output flow {name!r} (direction={other.direction})"
             )
         flow = out[idx]
-        if role == "logic":
+        if role == "logic_in":
             new_logic = _parse_input_logic_value(value, flow_name=name, comp_name=comp_name)
             out[idx] = replace(flow, logic=new_logic)
-        else:  # role == "init"
+        else:  # role == "prod_init"
             out[idx] = replace(
                 flow,
                 init_value=_parse_init_value(value, flow_name=name, comp_name=comp_name),
