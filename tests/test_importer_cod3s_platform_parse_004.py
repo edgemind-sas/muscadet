@@ -38,7 +38,11 @@ def test_output_default_prod_cond_is_empty_list():
     flow = _parse_interface({"name": "out_a", "port_type": {"general": "output"}})
     assert flow.direction == "output"
     assert flow.logic == []
-    assert flow.logic_inner_mode == "or"
+    # Importer default is "and" (inner-AND / outer-OR): prod_cond=[[A],[B]]
+    # evaluates as A OR B, matching the KB Editor's "OU"-between-groups
+    # display. The native muscadet default "or" was changed in 6963635
+    # because it inverted redundant-source patterns to A AND B.
+    assert flow.logic_inner_mode == "and"
     assert flow.negate is False
 
 
