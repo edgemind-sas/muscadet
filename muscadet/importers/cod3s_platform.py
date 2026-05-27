@@ -151,6 +151,19 @@ class ComponentSpec:
     # list from the model document, the source KB ref, ...). Not
     # consumed by the apply layer in P1 ; available for downstream.
     metadata: Dict[str, Any] = field(default_factory=dict)
+    # F-SYS-10 — logic gate discriminator. ``None`` for a regular
+    # ObjFlow component; ``"or"`` / ``"and"`` / ``"k"`` when the
+    # component's KB class carries ``metadata.logic_gate``. A gate is
+    # materialised as a muscadet ``ObjLogicGate`` (not ObjFlow): it
+    # reads its source observable variables directly via ``cond`` and
+    # exports a boolean ``result`` to its downstream flows.
+    gate_kind: Optional[str] = None
+    # Threshold for ``gate_kind == "k"`` (number of fed inputs required).
+    gate_k: Optional[int] = None
+    # Channel the gate logic reads on its sources: ``True`` → the
+    # ``is_fed`` channel (``<flow>_fed_out``), ``False`` → the
+    # availability channel (``<flow>_fed_available_out``).
+    gate_check_fed: bool = True
 
 
 @dataclass(frozen=True)
@@ -166,6 +179,16 @@ class ConnectionSpec:
     source_component: str
     target_component: str
     flow_name: str  # short interface name shared by both ends
+    # F-SYS-10 — per-endpoint interface names. For a regular connection
+    # both equal ``flow_name`` (muscadet collapses to the source name).
+    # For a connection touching a logic gate's joker port they differ:
+    # ``source_interface`` is the upstream output flow name (used to
+    # build the gate ``cond`` leaf ``<flow>_fed_out``) and
+    # ``target_interface`` is the downstream input flow name (used as
+    # the gate's exported ``out_element``). Default to ``flow_name`` so
+    # existing 3-arg construction keeps working unchanged.
+    source_interface: str = ""
+    target_interface: str = ""
 
 
 @dataclass(frozen=True)
@@ -299,6 +322,96 @@ def _build_kb_lookup(kb: Dict[str, Any]) -> Dict[str, List[FlowSpec]]:
         # for direction. Iterating ``.values()`` is sufficient.
         out[class_name] = [_parse_interface(iface) for iface in ifaces.values()]
     return out
+
+
+# ---------------------------------------------------------------------------
+# Logic gates (F-SYS-10)
+# ---------------------------------------------------------------------------
+#
+# The COD3S Platform injects three synthetic MUSCADET templates
+# (``logic_or`` / ``logic_and`` / ``logic_kn``) carrying
+# ``metadata.logic_gate ∈ {"or", "and", "k"}``. A gate is materialised as
+# a muscadet ``ObjLogicGate`` (an automaton-free combinational component)
+# rather than the generic ``ObjFlow``: it reads the observable variables
+# of its connected sources directly through the ``cond`` mechanism and
+# exports a single boolean ``result`` to each downstream flow element.
+#
+# Heterogeneous source flow names need NO input plumbing — the gate reads
+# ``<source_flow>_fed_out`` (or ``_fed_available_out`` on the availability
+# channel) on each source component by name. The k-of-n threshold is
+# evaluated natively by ``ObjLogicGate`` (``sum(fed flags) >= k``), so a
+# gate aggregating differently-named flows just works.
+
+_VALID_GATE_KINDS = frozenset({"or", "and", "k"})
+
+
+def _gate_kind_of_template(template: Dict[str, Any]) -> Optional[str]:
+    """Return ``"or"``/``"and"``/``"k"`` if the KB template is a logic
+    gate, else ``None``. The marker lives at ``metadata.logic_gate``.
+    """
+    if not isinstance(template, dict):
+        return None
+    kind = (template.get("metadata") or {}).get("logic_gate")
+    return kind if kind in _VALID_GATE_KINDS else None
+
+
+def _build_gate_kinds(kb: Dict[str, Any]) -> Dict[str, str]:
+    """Compute ``{class_name: gate_kind}`` for every logic-gate template
+    in the KB. Empty for a KB with no gates.
+    """
+    templates = kb.get("component_templates") or {}
+    out: Dict[str, str] = {}
+    for class_name, template in templates.items():
+        kind = _gate_kind_of_template(template)
+        if kind is not None:
+            out[class_name] = kind
+    return out
+
+
+def _gate_attr_value(attributes: List[Dict[str, Any]], name: str) -> Any:
+    """Read a gate instance attribute by ``name`` from the model
+    component's attributes list. Prefers the instance ``value`` and
+    falls back to the template ``value_default``. Returns ``None`` when
+    the attribute is absent or carries neither.
+    """
+    for attr in attributes or []:
+        if isinstance(attr, dict) and attr.get("name") == name:
+            value = attr.get("value")
+            if value is None:
+                value = attr.get("value_default")
+            return value
+    return None
+
+
+def _read_gate_check_fed(attributes: List[Dict[str, Any]], *, comp_name: str) -> bool:
+    """Resolve the gate's ``check_fed`` switch (default ``True``)."""
+    raw = _gate_attr_value(attributes, "check_fed")
+    if raw is None:
+        return True
+    return _parse_init_value(raw, flow_name="check_fed", comp_name=comp_name)
+
+
+def _read_gate_k(attributes: List[Dict[str, Any]], *, comp_name: str) -> int:
+    """Resolve the k-of-n threshold for a ``logic_kn`` gate (default 2).
+
+    Accepts native int or decimal string (the platform persists ``k``
+    as an editable int attribute, but a JSON round-trip may stringify
+    it). Rejects ``k < 1`` loudly.
+    """
+    raw = _gate_attr_value(attributes, "k")
+    if raw is None:
+        return 2
+    try:
+        k = int(raw)
+    except (TypeError, ValueError) as exc:
+        raise Cod3sPlatformImportError(
+            f"Logic gate {comp_name!r}: invalid k attribute {raw!r} (expected an integer)"
+        ) from exc
+    if k < 1:
+        raise Cod3sPlatformImportError(
+            f"Logic gate {comp_name!r}: k-of-n threshold must be >= 1 (got {k})"
+        )
+    return k
 
 
 # Mapping of P1.6 instance-override roles to the flow direction they
@@ -498,6 +611,7 @@ def _apply_instance_overrides(
 def _parse_components(
     components_raw: Dict[str, Dict[str, Any]],
     kb_lookup: Dict[str, List[FlowSpec]],
+    gate_kinds: Optional[Dict[str, str]] = None,
 ) -> List[ComponentSpec]:
     """Translate the model components dict into a list of ComponentSpec.
 
@@ -506,7 +620,15 @@ def _parse_components(
     or role=init) into the FlowSpec list so the apply layer sees the
     effective configuration directly. Preserves the raw ``attributes``
     list in metadata for downstream traceability.
+
+    ``gate_kinds`` (F-SYS-10) maps logic-gate class names to their kind
+    (``"or"``/``"and"``/``"k"``). A component of such a class is tagged
+    as a gate: its KB-parsed flows (``in``/``out`` port names) are kept
+    for connection validation, but its ``check_fed`` / ``k`` instance
+    attributes are read out so the apply layer can build the muscadet
+    ``ObjLogicGate``.
     """
+    gate_kinds = gate_kinds or {}
     seen_names: set[str] = set()
     out: List[ComponentSpec] = []
     for cid, comp in (components_raw or {}).items():
@@ -531,9 +653,30 @@ def _parse_components(
                 "names as ids and cannot disambiguate collisions."
             )
         seen_names.add(name)
+        instance_attrs = list(comp.get("attributes") or [])
+
+        gate_kind = gate_kinds.get(class_name)
+        if gate_kind is not None:
+            # Logic gate : keep the KB-parsed flows (the joker ``in``/``out``
+            # port names) for connection validation, but synthesise an
+            # ObjLogicGate (not an ObjFlow) at apply time. Read the editable
+            # ``check_fed`` / ``k`` attributes off the instance.
+            out.append(
+                ComponentSpec(
+                    id=cid,
+                    name=name,
+                    class_name=class_name,
+                    flows=list(kb_lookup[class_name]),
+                    metadata={"platform_id": cid, "attributes_initial": instance_attrs},
+                    gate_kind=gate_kind,
+                    gate_k=(_read_gate_k(instance_attrs, comp_name=name) if gate_kind == "k" else None),
+                    gate_check_fed=_read_gate_check_fed(instance_attrs, comp_name=name),
+                )
+            )
+            continue
+
         # Instance overrides : attributes with role=logic (input) or
         # role=init (output) replace the KB defaults for THIS instance.
-        instance_attrs = list(comp.get("attributes") or [])
         overrides = _build_overrides_index(instance_attrs)
         flows = _apply_instance_overrides(
             list(kb_lookup[class_name]), overrides, comp_name=name
@@ -600,6 +743,30 @@ def _parse_connections(
                 f"not an output flow of component {src.name!r} "
                 f"(outputs: {sorted(src_outputs)})"
             )
+        involves_gate = src.gate_kind is not None or tgt.gate_kind is not None
+        if involves_gate:
+            # F-SYS-10 joker port : the gate's ``in`` / ``out`` ports accept
+            # heterogeneous flow names, so each endpoint is validated against
+            # its OWN port set (no single-name collapse). The apply layer
+            # keeps both interface names — inbound source names build the
+            # gate ``cond`` leaves, outbound target names become the gate's
+            # exported ``out_elements``.
+            if tgt_iface not in tgt_inputs:
+                raise Cod3sPlatformImportError(
+                    f"Connection {conn_id!r}: target interface {tgt_iface!r} is "
+                    f"not an input flow of component {tgt.name!r} "
+                    f"(inputs: {sorted(tgt_inputs)})"
+                )
+            out.append(
+                ConnectionSpec(
+                    source_component=src.name,
+                    target_component=tgt.name,
+                    flow_name=src_iface,
+                    source_interface=src_iface,
+                    target_interface=tgt_iface,
+                )
+            )
+            continue
         # ``muscadet.System.connect_flow`` uses a single flow_name on both
         # ends — the source name wins. Validate that name (not the target
         # name) against the target's inputs, so the chosen flow exists
@@ -622,6 +789,8 @@ def _parse_connections(
                 source_component=src.name,
                 target_component=tgt.name,
                 flow_name=src_iface,
+                source_interface=src_iface,
+                target_interface=src_iface,
             )
         )
     return out
@@ -698,7 +867,8 @@ def parse_platform_export(payload: Dict[str, Any]) -> ImporterContext:
     elements = model.get("elements") or {}
 
     kb_lookup = _build_kb_lookup(kb)
-    components = _parse_components(elements.get("components") or {}, kb_lookup)
+    gate_kinds = _build_gate_kinds(kb)
+    components = _parse_components(elements.get("components") or {}, kb_lookup, gate_kinds)
     connections = _parse_connections(elements.get("connections") or {}, components)
 
     return ImporterContext(
@@ -765,6 +935,131 @@ def _order_outputs_by_deps(
     return ordered
 
 
+# ---------------------------------------------------------------------------
+# Logic gate synthesis (F-SYS-10) — apply layer
+# ---------------------------------------------------------------------------
+
+
+def _gate_leaf_attr(source_interface: str, *, source_is_gate: bool, check_fed: bool) -> str:
+    """Resolve the muscadet observable variable a gate ``cond`` leaf reads
+    on one of its sources.
+
+    * A regular ObjFlow source exposes its output flow as
+      ``<flow>_fed_out`` (is_fed channel) and ``<flow>_fed_available_out``
+      (availability channel). ``check_fed`` picks which one the gate
+      aggregates.
+    * A gate source exposes its combinational outcome as the bare
+      boolean variable ``result`` (independent of the channel — a gate's
+      output is a single abstract boolean), so gate→gate chaining reads
+      ``result`` directly.
+    """
+    if source_is_gate:
+        return "result"
+    return f"{source_interface}_fed_out" if check_fed else f"{source_interface}_fed_available_out"
+
+
+def _build_gate_cond_and_outputs(
+    gate: ComponentSpec,
+    connections: List[ConnectionSpec],
+    gate_names: set,
+) -> Tuple[List[List[Dict[str, Any]]], List[str]]:
+    """Build the ``(cond, out_elements)`` pair for one logic gate from the
+    model topology.
+
+    * ``cond`` — one unit clause ``[{obj, attr, value}]`` per inbound
+      connection (source observable on the selected channel). The
+      ObjLogicGate's ``kind`` alone then selects the aggregation
+      (any / all / sum>=k) across these unit clauses.
+    * ``out_elements`` — the distinct downstream input-flow names this
+      gate feeds (order-preserving). The gate exports its ``result``
+      under ``{elem}_out`` for each, so a plain downstream ``FlowIn``
+      named ``elem`` consumes it.
+    """
+    cond: List[List[Dict[str, Any]]] = []
+    for conn in connections:
+        if conn.target_component != gate.name:
+            continue
+        attr = _gate_leaf_attr(
+            conn.source_interface,
+            source_is_gate=conn.source_component in gate_names,
+            check_fed=gate.gate_check_fed,
+        )
+        cond.append([{"obj": conn.source_component, "attr": attr, "value": True}])
+
+    out_elements: List[str] = []
+    seen: set = set()
+    for conn in connections:
+        if conn.source_component != gate.name:
+            continue
+        if conn.target_interface not in seen:
+            seen.add(conn.target_interface)
+            out_elements.append(conn.target_interface)
+    return cond, out_elements
+
+
+def _order_gates(
+    gates: List[ComponentSpec],
+    connections: List[ConnectionSpec],
+    gate_names: set,
+) -> List[ComponentSpec]:
+    """Topologically order gates so a gate is created after every gate it
+    reads (gate→gate chaining). ``ObjLogicGate.__init__`` resolves its
+    ``cond`` leaves against ``system.comp[obj]`` at construction time, so
+    an upstream gate's ``result`` variable must already exist.
+
+    Raises :class:`Cod3sPlatformImportError` on a cycle among gates.
+    """
+    deps: Dict[str, set] = {}
+    for gate in gates:
+        deps[gate.name] = {
+            conn.source_component
+            for conn in connections
+            if conn.target_component == gate.name and conn.source_component in gate_names
+        }
+    ordered: List[ComponentSpec] = []
+    placed: set = set()
+    remaining = {gate.name: gate for gate in gates}
+    while remaining:
+        ready = [name for name in remaining if deps[name] <= placed]
+        if not ready:
+            raise Cod3sPlatformImportError(
+                f"Logic gate cycle detected among {sorted(remaining)} — "
+                f"a gate's output feeds (directly or transitively) one of its own inputs."
+            )
+        for name in ready:
+            ordered.append(remaining.pop(name))
+            placed.add(name)
+    return ordered
+
+
+def _create_logic_gate(gate: ComponentSpec, system: Any, connections: List[ConnectionSpec], gate_names: set) -> None:
+    """Instantiate one ``ObjLogicGate`` on ``system`` from its parse spec."""
+    cond, out_elements = _build_gate_cond_and_outputs(gate, connections, gate_names)
+    kwargs: Dict[str, Any] = {
+        "cls": "ObjLogicGate",
+        "name": gate.name,
+        "cond": cond,
+        "out_elements": out_elements,
+        "kind": gate.gate_kind,
+    }
+    if gate.gate_kind == "k":
+        kwargs["k"] = gate.gate_k if gate.gate_k is not None else 2
+    try:
+        comp = system.add_component(**kwargs)
+    except Exception as e:
+        raise Cod3sPlatformImportError(
+            f"Failed to create logic gate {gate.name!r} (kind={gate.gate_kind!r}): {e}"
+        ) from e
+    if comp is not None and hasattr(comp, "metadata") and isinstance(comp.metadata, dict):
+        comp.metadata.update(
+            {
+                "class_name": gate.class_name,
+                "platform_id": gate.metadata.get("platform_id"),
+                "logic_gate": gate.gate_kind,
+            }
+        )
+
+
 def apply_to_system(
     ctx: ImporterContext,
     system: Any,
@@ -817,7 +1112,14 @@ def apply_to_system(
             violated (delegated to the underlying muscadet error,
             re-raised as our domain exception for consistency).
     """
-    for spec in ctx.components:
+    # F-SYS-10 — logic gates are materialised as ObjLogicGate, not ObjFlow.
+    # Create regular components first so the gates' ``cond`` leaves can
+    # resolve their source variables at construction time.
+    gate_specs = [c for c in ctx.components if c.gate_kind is not None]
+    gate_names = {g.name for g in gate_specs}
+    normal_specs = [c for c in ctx.components if c.gate_kind is None]
+
+    for spec in normal_specs:
         # ``partial_init=True`` skips the ObjFlow constructor's automatic
         # call to ``set_flows`` — flows added after ``__init__`` would
         # otherwise miss ``add_variables`` / ``add_mb`` /
@@ -895,8 +1197,41 @@ def apply_to_system(
         # ``partial_init=True`` skipped this in ``__init__``.
         comp.set_flows()
 
-    # Connections — once all flows exist
+    # Logic gates after all regular components exist (their ``cond``
+    # references regular source variables) and in dependency order
+    # (gate→gate chaining).
+    for gate in _order_gates(gate_specs, ctx.connections, gate_names):
+        _create_logic_gate(gate, system, ctx.connections, gate_names)
+
+    # Connections — once all flows exist.
     for conn in ctx.connections:
+        # Inbound connections to a gate are NOT wired: the gate reads its
+        # sources directly through ``cond`` (no input message box exists
+        # on an ObjLogicGate). They only contributed to the gate's cond.
+        if conn.target_component in gate_names:
+            continue
+        if conn.source_component in gate_names:
+            # Outbound from a gate. ObjLogicGate is a plain PycComponent
+            # without ``flows_out`` / ``is_connected_to``, so we cannot use
+            # ``connect_flow`` (it runs ObjFlow authorization checks). Wire
+            # the raw message boxes directly: the gate exports ``result``
+            # under ``{target_iface}_out`` and the downstream FlowIn exposes
+            # ``{target_iface}_in``.
+            elem = conn.target_interface
+            try:
+                system.connect(
+                    conn.source_component,
+                    f"{elem}_out",
+                    conn.target_component,
+                    f"{elem}_in",
+                )
+            except Exception as e:
+                raise Cod3sPlatformImportError(
+                    f"Failed to connect logic gate {conn.source_component!r} "
+                    f"--{elem}--> {conn.target_component!r}: {e}"
+                ) from e
+            continue
+        # Regular flow connection (collapsed single ``flow_name``).
         try:
             system.connect_flow(
                 source=conn.source_component,
