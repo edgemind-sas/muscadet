@@ -139,16 +139,30 @@ class TestApplyInstanceOverrides:
 
     def test_rejects_logic_in_on_output(self):
         flows = self._flows()
-        with pytest.raises(Cod3sPlatformImportError, match="role=logic_in.*non-input"):
+        with pytest.raises(Cod3sPlatformImportError, match="role=logic_in.*expects a input"):
             _apply_instance_overrides(
                 flows, {("out_x", "logic_in"): "and"}, comp_name="c"
             )
 
     def test_rejects_prod_init_on_input(self):
         flows = self._flows()
-        with pytest.raises(Cod3sPlatformImportError, match="role=prod_init.*non-output"):
+        with pytest.raises(Cod3sPlatformImportError, match="role=prod_init.*expects a output"):
             _apply_instance_overrides(
                 flows, {("in_a", "prod_init"): True}, comp_name="c"
+            )
+
+    def test_overrides_input_var_in_default(self):
+        flows = self._flows()
+        result = _apply_instance_overrides(
+            flows, {("in_a", "var_in_default"): True}, comp_name="c"
+        )
+        assert next(f for f in result if f.name == "in_a").var_in_default is True
+
+    def test_rejects_var_in_default_on_output(self):
+        flows = self._flows()
+        with pytest.raises(Cod3sPlatformImportError, match="role=var_in_default.*expects a input"):
+            _apply_instance_overrides(
+                flows, {("out_x", "var_in_default"): True}, comp_name="c"
             )
 
     def test_stale_override_silently_ignored(self):

@@ -128,6 +128,12 @@ class FlowSpec:
     # default" (False — ``var_prod`` starts off, propagation kicks in
     # from ``var_prod_cond`` inputs at t=0+).
     init_value: Optional[bool] = None
+    # Value of an INPUT flow when it is NOT connected, set by the parse
+    # layer when an ``instance.attribute(role=var_in_default)`` override
+    # exists. ``None`` means "leave the muscadet default" (False). True
+    # marks an always-fed boundary input (external source). Mirrors
+    # ``logic`` (role=logic_in) ; passed to ``FlowIn.var_in_default``.
+    var_in_default: Optional[bool] = None
 
 
 @dataclass(frozen=True)
@@ -425,6 +431,7 @@ def _read_gate_k(attributes: List[Dict[str, Any]], *, comp_name: str) -> int:
 # migrations kb/007, mbsa/006, modelisation/037.
 _ROLE_TO_DIRECTION: Dict[str, str] = {
     "logic_in": "input",
+    "var_in_default": "input",
     "prod_init": "output",
 }
 _OVERRIDE_ROLES: frozenset = frozenset(_ROLE_TO_DIRECTION)
@@ -587,19 +594,20 @@ def _apply_instance_overrides(
                 )
                 continue
             other = out[opposite_idx]
-            if role == "logic_in":
-                raise Cod3sPlatformImportError(
-                    f"Component {comp_name!r}: instance override role=logic_in "
-                    f"on non-input flow {name!r} (direction={other.direction})"
-                )
             raise Cod3sPlatformImportError(
-                f"Component {comp_name!r}: instance override role=prod_init "
-                f"on non-output flow {name!r} (direction={other.direction})"
+                f"Component {comp_name!r}: instance override role={role} "
+                f"expects a {target_direction} flow but {name!r} is "
+                f"{other.direction} (snapshot corruption)"
             )
         flow = out[idx]
         if role == "logic_in":
             new_logic = _parse_input_logic_value(value, flow_name=name, comp_name=comp_name)
             out[idx] = replace(flow, logic=new_logic)
+        elif role == "var_in_default":
+            out[idx] = replace(
+                flow,
+                var_in_default=_parse_init_value(value, flow_name=name, comp_name=comp_name),
+            )
         else:  # role == "prod_init"
             out[idx] = replace(
                 flow,
@@ -1154,10 +1162,13 @@ def apply_to_system(
         input_names = set()
         for flow in spec.flows:
             if flow.direction == "input":
+                flow_in_kwargs = {"cls": "FlowIn", "name": flow.name, "logic": flow.logic}
+                # Only pass var_in_default when explicitly set (role=var_in_default
+                # instance override) ; None leaves the muscadet FlowIn default (False).
+                if flow.var_in_default is not None:
+                    flow_in_kwargs["var_in_default"] = flow.var_in_default
                 try:
-                    comp.add_flow(
-                        {"cls": "FlowIn", "name": flow.name, "logic": flow.logic}
-                    )
+                    comp.add_flow(flow_in_kwargs)
                 except Exception as e:
                     raise Cod3sPlatformImportError(
                         f"Failed to add input flow {flow.name!r} to component "

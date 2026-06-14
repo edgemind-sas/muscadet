@@ -90,6 +90,27 @@ def test_parse_layer_propagates_2_of_3_on_plc_1(base_payload):
     assert plc2_target.logic == "or"
 
 
+def test_parse_layer_propagates_var_in_default_override_on_plc_1(base_payload):
+    """role=var_in_default on an input flow lands on FlowSpec.var_in_default
+    (mirrors logic_in). True marks an always-fed boundary input."""
+    payload = _patch_attributes(
+        base_payload,
+        PLC_1_ID,
+        [{"name": "CS_E_KVPP_Qx_PLC", "role": "var_in_default", "value": True}],
+    )
+    ctx = parse_platform_export(payload)
+    plc = next(c for c in ctx.components if c.name == "PLC_1")
+    target = next(f for f in plc.flows if f.name == "CS_E_KVPP_Qx_PLC")
+    assert target.var_in_default is True
+    # Sibling input untouched → muscadet default (None = FlowIn default False)
+    other = next(f for f in plc.flows if f.name == "F_ETH")
+    assert other.var_in_default is None
+    # Per-instance: PLC_2 untouched
+    plc2 = next(c for c in ctx.components if c.name == "PLC_2")
+    plc2_target = next(f for f in plc2.flows if f.name == "CS_E_KVPP_Qx_PLC")
+    assert plc2_target.var_in_default is None
+
+
 def test_parse_layer_propagates_init_override_on_alim(base_payload):
     """Parse layer carries init=True onto a Source-like output flow."""
     # Find Alim_elec_01 by scanning the components dict
