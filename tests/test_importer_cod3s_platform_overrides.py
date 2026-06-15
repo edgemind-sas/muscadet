@@ -22,6 +22,26 @@ from muscadet.importers.cod3s_platform import (
 )
 
 
+@pytest.fixture
+def cleanup_system():
+    """Tear down PyCATSHOO state after a runtime build (one System per name).
+
+    Same pattern as test_importer_cod3s_platform_apply_001 — the test fills the
+    yielded list with built systems; on teardown each is deleted and the
+    session terminated so a later test can build a fresh one.
+    """
+    import cod3s
+
+    systems: list = []
+    yield systems
+    for system in systems:
+        try:
+            system.deleteSys()
+        except Exception:
+            pass
+    cod3s.terminate_session()
+
+
 # ---------------------------------------------------------------------------
 # _parse_input_logic_value
 # ---------------------------------------------------------------------------
@@ -372,3 +392,261 @@ class TestInputLogicWhitespace:
         from muscadet.importers.cod3s_platform import _parse_input_logic_value, Cod3sPlatformImportError
         with pytest.raises(Cod3sPlatformImportError, match="invalid logic"):
             _parse_input_logic_value("", flow_name="x", comp_name="c")
+
+
+# ---------------------------------------------------------------------------
+# Service functions — role=active_init -> FlowOut.var_is_active_default
+# (2026-06-15). A service function is dormant by default (fed_out=False even
+# when prod_cond holds) and only fed once an effect sets var_is_active True,
+# ORTHOGONALLY to prod_cond.
+# ---------------------------------------------------------------------------
+
+
+class TestServiceFunctionActiveInit:
+    def test_build_overrides_index_keeps_active_init(self):
+        idx = _build_overrides_index([
+            {"name": "SRVFEU", "role": "active_init", "value": False},
+        ])
+        assert idx == {("SRVFEU", "active_init"): False}
+
+    def test_build_overrides_index_skips_is_active_observable(self):
+        # is_active is a runtime observable (the effect target), never a
+        # config override on the parse layer.
+        assert _build_overrides_index([
+            {"name": "SRVFEU", "role": "is_active", "value": True},
+        ]) == {}
+
+    def test_apply_active_init_sets_is_active_default(self):
+        flows = [
+            FlowSpec(name="in_a", direction="input", logic="or"),
+            FlowSpec(name="SRVFEU", direction="output", logic=[["in_a"]]),
+        ]
+        result = _apply_instance_overrides(
+            flows, {("SRVFEU", "active_init"): False}, comp_name="c"
+        )
+        srv = next(f for f in result if f.name == "SRVFEU")
+        # Dormancy is orthogonal to prod_cond: the flow keeps its prod_cond.
+        assert srv.is_active_default is False
+        assert srv.logic == [["in_a"]]
+
+    def test_rejects_active_init_on_input(self):
+        flows = [FlowSpec(name="in_a", direction="input", logic="or")]
+        with pytest.raises(Cod3sPlatformImportError, match="role=active_init.*expects a output"):
+            _apply_instance_overrides(
+                flows, {("in_a", "active_init"): False}, comp_name="c"
+            )
+
+    def test_end_to_end_active_init_propagated(self):
+        # A service-function output WITH a prod_cond + active_init=False.
+        ctx = parse_platform_export({
+            "model": {
+                "name": "M",
+                "kb": {"name": "KB", "version": "1.0.0"},
+                "elements": {
+                    "components": {
+                        "c1": {
+                            "name": "C1",
+                            "class_name": "Cls",
+                            "attributes": [
+                                {"name": "SRVFEU", "role": "active_init", "value": False},
+                            ],
+                        },
+                    },
+                    "connections": {},
+                },
+            },
+            "kb": {
+                "component_templates": {
+                    "Cls": {
+                        "interfaces": {
+                            "in_a__input": {"name": "in_a", "port_type": {"general": "input"}},
+                            "SRVFEU__output": {
+                                "name": "SRVFEU",
+                                "port_type": {"general": "output"},
+                                "prod_cond": [["in_a"]],
+                            },
+                        },
+                    },
+                },
+            },
+        })
+        comp = ctx.components[0]
+        srv = next(f for f in comp.flows if f.name == "SRVFEU")
+        assert srv.is_active_default is False
+        # prod_cond preserved alongside dormancy
+        assert srv.logic == [["in_a"]]
+
+    def test_runtime_flowout_gets_var_is_active_default(self, cleanup_system):
+        # Full build to the muscadet runtime: the FlowOut object carries
+        # var_is_active_default=False so var_fed stays False until an effect
+        # sets var_is_active (cf. FlowOut.create_sensitive_set_flow_fed_out:
+        # var_fed = var_prod AND var_is_active AND var_fed_available_out).
+        from muscadet.importers.cod3s_platform import system_from_export
+
+        system = system_from_export({
+            "model": {
+                "name": "Msvc",
+                "kb": {"name": "KB", "version": "1.0.0"},
+                "elements": {
+                    "components": {
+                        "c1": {
+                            "name": "C1",
+                            "class_name": "Cls",
+                            "attributes": [
+                                {"name": "SRVFEU", "role": "active_init", "value": False},
+                            ],
+                        },
+                    },
+                    "connections": {},
+                },
+            },
+            "kb": {
+                "component_templates": {
+                    "Cls": {
+                        "interfaces": {
+                            "in_a__input": {"name": "in_a", "port_type": {"general": "input"}},
+                            "SRVFEU__output": {
+                                "name": "SRVFEU",
+                                "port_type": {"general": "output"},
+                                "prod_cond": [["in_a"]],
+                            },
+                        },
+                    },
+                },
+            },
+        })
+        cleanup_system.append(system)
+        comp = system.comp["C1"]
+        srv = comp.flows_out["SRVFEU"]
+        assert srv.var_is_active_default is False
+
+    def test_runtime_normal_flow_keeps_active_default_true(self, cleanup_system):
+        # No active_init override → normal flow stays always-active (default).
+        from muscadet.importers.cod3s_platform import system_from_export
+
+        system = system_from_export({
+            "model": {
+                "name": "Mnorm",
+                "kb": {"name": "KB", "version": "1.0.0"},
+                "elements": {
+                    "components": {
+                        "c1": {"name": "C1", "class_name": "Cls", "attributes": []},
+                    },
+                    "connections": {},
+                },
+            },
+            "kb": {
+                "component_templates": {
+                    "Cls": {
+                        "interfaces": {
+                            "out_x__output": {"name": "out_x", "port_type": {"general": "output"}},
+                        },
+                    },
+                },
+            },
+        })
+        cleanup_system.append(system)
+        comp = system.comp["C1"]
+        assert comp.flows_out["out_x"].var_is_active_default is True
+
+
+# ---------------------------------------------------------------------------
+# Service functions — role=fed_available_init -> FlowOut.var_fed_available_out_init
+# (2026-06-15, USER-FACING dormancy). A dormant flow starts (and reinitialises)
+# with var_fed_available_out=False : unfed AND "unavailable" downstream until an
+# effect re-opens the gate. Orthogonal to prod_cond.
+# ---------------------------------------------------------------------------
+
+
+class TestServiceFunctionFedAvailableInit:
+    def test_build_overrides_index_keeps_fed_available_init(self):
+        idx = _build_overrides_index([
+            {"name": "SRVFEU", "role": "fed_available_init", "value": False},
+        ])
+        assert idx == {("SRVFEU", "fed_available_init"): False}
+
+    def test_apply_fed_available_init_sets_flowspec_field(self):
+        flows = [
+            FlowSpec(name="in_a", direction="input", logic="or"),
+            FlowSpec(name="SRVFEU", direction="output", logic=[["in_a"]]),
+        ]
+        result = _apply_instance_overrides(
+            flows, {("SRVFEU", "fed_available_init"): False}, comp_name="c"
+        )
+        srv = next(f for f in result if f.name == "SRVFEU")
+        assert srv.fed_available_init is False
+        # dormancy orthogonal to prod_cond: the flow keeps its prod_cond
+        assert srv.logic == [["in_a"]]
+        # and does NOT touch the var_is_active path
+        assert srv.is_active_default is None
+
+    def test_rejects_fed_available_init_on_input(self):
+        flows = [FlowSpec(name="in_a", direction="input", logic="or")]
+        with pytest.raises(Cod3sPlatformImportError, match="role=fed_available_init.*expects a output"):
+            _apply_instance_overrides(
+                flows, {("in_a", "fed_available_init"): False}, comp_name="c"
+            )
+
+    def test_runtime_flowout_gets_var_fed_available_out_init(self, cleanup_system):
+        from muscadet.importers.cod3s_platform import system_from_export
+
+        system = system_from_export({
+            "model": {
+                "name": "Msvc_avail",
+                "kb": {"name": "KB", "version": "1.0.0"},
+                "elements": {
+                    "components": {
+                        "c1": {
+                            "name": "C1",
+                            "class_name": "Cls",
+                            "attributes": [
+                                {"name": "SRVFEU", "role": "fed_available_init", "value": False},
+                            ],
+                        },
+                    },
+                    "connections": {},
+                },
+            },
+            "kb": {
+                "component_templates": {
+                    "Cls": {
+                        "interfaces": {
+                            "in_a__input": {"name": "in_a", "port_type": {"general": "input"}},
+                            "SRVFEU__output": {
+                                "name": "SRVFEU",
+                                "port_type": {"general": "output"},
+                                "prod_cond": [["in_a"]],
+                            },
+                        },
+                    },
+                },
+            },
+        })
+        cleanup_system.append(system)
+        srv = system.comp["C1"].flows_out["SRVFEU"]
+        assert srv.var_fed_available_out_init is False
+
+    def test_runtime_normal_flow_keeps_fed_available_out_init_true(self, cleanup_system):
+        from muscadet.importers.cod3s_platform import system_from_export
+
+        system = system_from_export({
+            "model": {
+                "name": "Mnorm_avail",
+                "kb": {"name": "KB", "version": "1.0.0"},
+                "elements": {
+                    "components": {"c1": {"name": "C1", "class_name": "Cls", "attributes": []}},
+                    "connections": {},
+                },
+            },
+            "kb": {
+                "component_templates": {
+                    "Cls": {
+                        "interfaces": {
+                            "out_x__output": {"name": "out_x", "port_type": {"general": "output"}},
+                        },
+                    },
+                },
+            },
+        })
+        cleanup_system.append(system)
+        assert system.comp["C1"].flows_out["out_x"].var_fed_available_out_init is True

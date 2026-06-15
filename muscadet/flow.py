@@ -310,11 +310,40 @@ class FlowIn(FlowModel):
 
 class FlowOut(FlowModel):
 
+    # --- POINT À TRANCHER (2026-06-15) : var_is_active vs var_fed_available_out_init ---
+    # var_is_active et var_fed_available sont deux portes booléennes ET sur var_fed
+    # (var_fed = var_prod AND var_is_active AND var_fed_available, cf.
+    # create_sensitive_set_flow_fed_out). Elles semblent redondantes, à UNE
+    # différence près : var_fed_available est EXPORTÉE sur le canal availability
+    # (MessageBox `{name}_available_out`, lue en aval par FlowIn.var_fed_available,
+    # les portes logiques en mode check_fed=False et la viz) ; var_is_active est
+    # purement LOCALE (n'intervient que dans la formule var_fed).
+    #
+    # Usage côté plateforme cod3s (fonction de service, prototype 2026-06-15) :
+    # un flux dormant par défaut (activé par un mode de défaillance). Implémenté
+    # via var_is_active_default=False (porte locale → l'aval reste "disponible
+    # mais non alimenté"). Décision métier prise : il serait acceptable que le
+    # flux dormant apparaisse plutôt "indisponible" en aval — ce qui plaiderait
+    # pour introduire un `var_fed_available_out_init` (init configurable de
+    # var_fed_available, aujourd'hui câblé en dur à True) et déprécier
+    # var_is_active. NON FAIT pour l'instant : on conserve var_is_active.
+    # À trancher : consolider sur var_fed_available_out_init (sémantique
+    # "indisponible") OU garder la séparation availability/activation.
+    # ----------------------------------------------------------------------------
     var_is_active: typing.Any = pydantic.Field(
         None, description="Indicating if the flow out is active or not"
     )
     var_is_active_default: bool = pydantic.Field(
         True, description="Indicating the default activation status"
+    )
+
+    # Configurable init of var_fed_available (the `{name}_fed_available_out`
+    # availability gate). Historically hard-wired to True ; exposed here so a
+    # flow can start UNAVAILABLE (dormant) and be woken by an effect setting
+    # var_fed_available_out True — orthogonally to prod_cond. Default True =
+    # byte-identical legacy behaviour. cf. the "POINT À TRANCHER" note above.
+    var_fed_available_out_init: bool = pydantic.Field(
+        True, description="Initial (and reinitialized) value of var_fed_available_out"
     )
 
     var_prod: typing.Any = pydantic.Field(None, description="Flow production")
@@ -357,7 +386,9 @@ class FlowOut(FlowModel):
         py_type, pyc_type = get_pyc_type(self.var_type)
 
         self.var_fed_available = comp.addVariable(
-            f"{self.name}_fed_available_out", pyc.TVarType.t_bool, True
+            f"{self.name}_fed_available_out",
+            pyc.TVarType.t_bool,
+            self.var_fed_available_out_init,
         )
         self.var_fed_available.setReinitialized(True)
 

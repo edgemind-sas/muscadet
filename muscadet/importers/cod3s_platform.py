@@ -134,6 +134,25 @@ class FlowSpec:
     # marks an always-fed boundary input (external source). Mirrors
     # ``logic`` (role=logic_in) ; passed to ``FlowIn.var_in_default``.
     var_in_default: Optional[bool] = None
+    # Service-function dormancy default for an OUTPUT flow, set by the parse
+    # layer when an ``instance.attribute(role=active_init)`` override exists.
+    # ``None`` means "leave the muscadet default" (``var_is_active_default`` =
+    # True, i.e. always active). ``False`` makes the flow a *service function*:
+    # ``var_fed = var_prod AND var_is_active AND var_fed_available_out`` stays
+    # False even when ``var_prod_cond`` holds, until an effect sets
+    # ``var_is_active`` True. Passed to ``FlowOut.var_is_active_default``.
+    # NOTE: kept for the var_is_active path (cf. flow.py "POINT À TRANCHER") but
+    # NOT surfaced as a platform UI role — the user-facing dormancy control is
+    # ``fed_available_init`` below.
+    is_active_default: Optional[bool] = None
+    # Service-function dormancy via the availability gate (the user-facing
+    # mechanism). Set by the parse layer when an
+    # ``instance.attribute(role=fed_available_init)`` override exists. ``None``
+    # = muscadet default (``var_fed_available_out_init`` = True, available).
+    # ``False`` = dormant: ``var_fed_available_out`` starts (and reinitialises)
+    # False, so the flow is unfed AND propagates "unavailable" downstream until
+    # an effect sets it True. Passed to ``FlowOut.var_fed_available_out_init``.
+    fed_available_init: Optional[bool] = None
 
 
 @dataclass(frozen=True)
@@ -433,12 +452,17 @@ _ROLE_TO_DIRECTION: Dict[str, str] = {
     "logic_in": "input",
     "var_in_default": "input",
     "prod_init": "output",
+    # Service-function dormancy default (output) → FlowOut.var_is_active_default.
+    "active_init": "output",
+    # Service-function dormancy via availability gate (output) →
+    # FlowOut.var_fed_available_out_init. User-facing UI role.
+    "fed_available_init": "output",
 }
 _OVERRIDE_ROLES: frozenset = frozenset(_ROLE_TO_DIRECTION)
 # Roles that exist on the platform but are NOT instance configuration
 # overrides — they are runtime observables (is_available, fed_out,
-# fed_in) and the importer ignores them silently.
-_OBSERVABLE_ROLES: frozenset = frozenset({"is_available", "fed_out", "fed_in"})
+# fed_in, is_active) and the importer ignores them silently.
+_OBSERVABLE_ROLES: frozenset = frozenset({"is_available", "fed_out", "fed_in", "is_active"})
 
 # Type aliases — composite key for instance attribute overrides.
 OverrideKey = Tuple[str, str]  # (flow_name, role)
@@ -607,6 +631,16 @@ def _apply_instance_overrides(
             out[idx] = replace(
                 flow,
                 var_in_default=_parse_init_value(value, flow_name=name, comp_name=comp_name),
+            )
+        elif role == "active_init":
+            out[idx] = replace(
+                flow,
+                is_active_default=_parse_init_value(value, flow_name=name, comp_name=comp_name),
+            )
+        elif role == "fed_available_init":
+            out[idx] = replace(
+                flow,
+                fed_available_init=_parse_init_value(value, flow_name=name, comp_name=comp_name),
             )
         else:  # role == "prod_init"
             out[idx] = replace(
@@ -1195,6 +1229,16 @@ def apply_to_system(
             # the very first tick and for unconditional outputs.
             if flow.init_value is not None:
                 flow_kwargs["var_prod_default"] = flow.init_value
+            # Service-function dormancy: var_is_active_default=False makes the
+            # flow stay unfed (orthogonally to prod_cond) until an effect sets
+            # var_is_active True. Only passed when explicitly overridden so
+            # normal flows keep the muscadet default (True = always active).
+            if flow.is_active_default is not None:
+                flow_kwargs["var_is_active_default"] = flow.is_active_default
+            # Service-function dormancy (user-facing): start the availability
+            # gate closed so the flow is dormant until an effect re-opens it.
+            if flow.fed_available_init is not None:
+                flow_kwargs["var_fed_available_out_init"] = flow.fed_available_init
             try:
                 comp.add_flow(flow_kwargs)
             except Exception as e:
