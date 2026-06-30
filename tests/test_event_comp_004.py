@@ -84,7 +84,7 @@ def test_system(the_system):
 
     assert len(transitions) == 3
 
-    the_system.isimu_set_transition("CX__frun.occ__cc_12")
+    the_system.isimu_set_transition("CX__frun.occ__cc_1_2")
     trans_fired = the_system.isimu_step_forward()
     assert the_system.comp["CA"].flows_out["c1"].var_fed.value() is False
     assert the_system.comp["CA"].flows_out["c2"].var_fed.value() is False
@@ -98,7 +98,7 @@ def test_system(the_system):
 
     assert C_NOK.state("occ").isActive() is True
 
-    the_system.isimu_set_transition("CX__frun.rep__cc_12", date=15)
+    the_system.isimu_set_transition("CX__frun.rep__cc_1_2", date=15)
     trans_fired = the_system.isimu_step_forward()
     transitions = the_system.isimu_fireable_transitions()
     trans_fired = the_system.isimu_step_forward()

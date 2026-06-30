@@ -1089,7 +1089,7 @@ class ObjFailureMode(cod3s.PycComponent):
     param_name_order_prefix : str, optional
         Template for parameter name suffixes (default: "__{order}_o_{order_max}")
     trans_name_prefix : str, optional
-        Template for transition/automaton name suffixes (default: "__cc_{target_comb}")
+        Template for transition/automaton name suffixes (default: "__cc_{target_comb_u}")
         Available placeholders: {target_comb}, {target_binary}, {target_comb_u}, {order}, {order_max}
     trans_name_prefix_fun : callable, optional
         Custom function to generate transition/automaton name suffixes. Takes keyword arguments:
@@ -1122,7 +1122,7 @@ class ObjFailureMode(cod3s.PycComponent):
     ...     failure_effects={"flow": False},
     ...     repair_effects={"flow": True}
     ... )
-    # Creates automata: "common_cause__cc_12", "common_cause__cc_1", "common_cause__cc_2"
+    # Creates automata: "common_cause__cc_1_2", "common_cause__cc_1", "common_cause__cc_2"
 
     Using custom trans_name_prefix with binary representation:
 
@@ -1174,7 +1174,7 @@ class ObjFailureMode(cod3s.PycComponent):
         repair_param_name=[],
         repair_param=[],
         param_name_order_prefix="__{order}_o_{order_max}",
-        trans_name_prefix="__cc_{target_comb}",
+        trans_name_prefix="__cc_{target_comb_u}",
         trans_name_prefix_fun=None,
         drop_inactive_automata=True,
         step=None,

@@ -116,11 +116,11 @@ def test_initial_state(the_system):
 
 
 def test_first_fm_propagates(the_system):
-    """Firing CX__frun.occ__cc_12 (both CA and CB fail) cascades to all T*."""
+    """Firing CX__frun.occ__cc_1_2 (both CA and CB fail) cascades to all T*."""
     transitions = the_system.isimu_fireable_transitions()
     assert len(transitions) >= 1
 
-    the_system.isimu_set_transition("CX__frun.occ__cc_12")
+    the_system.isimu_set_transition("CX__frun.occ__cc_1_2")
     trans_fired = the_system.isimu_step_forward()
     assert len(trans_fired) == 1
 
