@@ -442,14 +442,20 @@ class ObjFlow(cod3s.PycComponent):
 
             flow_specs["var_prod_cond"] = var_prod_cond_tiny
 
-        # Postprocess : other attributes...
-        if occ_enable_flow := flow_specs.get("occ_enable_flow"):
-            occ_clsname = occ_enable_flow.get("cls")
-            if "OccDistribution" not in occ_clsname:
-                occ_clsname = occ_clsname.capitalize() + "OccDistribution"
-                occ_enable_flow["cls"] = occ_clsname
-
-            flow_specs["occ_enable_flow"] = occ_enable_flow
+        # Normalise tempo occurrence-law SHORT forms to the long class names so
+        # ``ObjCOD3S.from_dict`` (called next in ``add_flow``) can resolve them
+        # into concrete OccurrenceDistributionModel subclasses:
+        #   "delay" -> "DelayOccDistribution", "exp" -> "ExpOccDistribution",
+        #   "inst"  -> "InstOccDistribution".
+        # BOTH the enable and disable laws are handled. A previous version
+        # normalised only ``occ_enable_flow``, so a short-form ``occ_disable_flow``
+        # crashed ``from_dict`` with "delay is not a subclass of ObjCOD3S".
+        for _occ_key in ("occ_enable_flow", "occ_disable_flow"):
+            occ = flow_specs.get(_occ_key)
+            if isinstance(occ, dict):
+                occ_clsname = occ.get("cls")
+                if occ_clsname and "OccDistribution" not in occ_clsname:
+                    occ["cls"] = occ_clsname.capitalize() + "OccDistribution"
 
         return flow_specs
 

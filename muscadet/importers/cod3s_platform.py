@@ -154,6 +154,33 @@ class FlowSpec:
     # an effect sets it True. Passed to ``FlowOut.var_fed_available_out_init``.
     fed_available_init: Optional[bool] = None
 
+    # --- Dynamic output flow types (2026-07-10, cross-repo contract) ---------
+    # Discriminator selecting the muscadet flow-out class for an OUTPUT flow.
+    # ``'classic'`` (or absent on a legacy KB) -> ``FlowOut`` (combinational);
+    # ``'tempo'`` -> ``FlowOutTempo`` (timed enable/disable automaton);
+    # ``'on_trigger'`` -> ``FlowOutOnTrigger`` (external-signal-driven automaton).
+    # Kept a plain string so a KB predating this field parses as ``classic``.
+    flow_type: str = "classic"
+    # tempo params (flow_type == 'tempo'). Occurrence-law dicts in SHORT wire
+    # form ({"cls": "delay"|"exp"|"inst", ...}); cod3s' sanitize_occ_law
+    # normalises them when the automaton is built. ``None`` leaves the muscadet
+    # FlowOutTempo default ({"cls": "delay", "time": 0}).
+    occ_enable: Optional[dict] = None
+    occ_disable: Optional[dict] = None
+    # Initial automaton state for a tempo flow. ``None`` leaves the muscadet
+    # default (init_enable=False, i.e. starts disabled/dormant).
+    init_enable: Optional[bool] = None
+    # on_trigger params (flow_type == 'on_trigger'). Plain floats — muscadet
+    # wraps them in a ``delay`` law internally (cf. flow.py FlowOutOnTrigger).
+    # ``None`` leaves the muscadet default (0).
+    trigger_time_up: Optional[float] = None
+    trigger_time_down: Optional[float] = None
+    # 'and' / 'or' / int k (at-least-k). ``None`` leaves the muscadet default
+    # ('or'). Trigger wiring itself (connect_trigger) is a separate concern and
+    # is not emitted by this importer yet — an unwired on_trigger flow builds
+    # and simulates but follows the automaton default until wired.
+    trigger_logic: Optional[Union[str, int]] = None
+
 
 @dataclass(frozen=True)
 class ComponentSpec:
@@ -278,6 +305,11 @@ def _resolve_kb(payload: Dict[str, Any]) -> Dict[str, Any]:
 # Parse layer
 # ---------------------------------------------------------------------------
 
+# Output flow-out discriminator values understood by the apply layer.
+# ``classic`` -> FlowOut, ``tempo`` -> FlowOutTempo, ``on_trigger`` ->
+# FlowOutOnTrigger (cf. FlowSpec.flow_type).
+_VALID_FLOW_TYPES = frozenset({"classic", "tempo", "on_trigger"})
+
 
 def _parse_interface(interface: Dict[str, Any]) -> FlowSpec:
     """Translate one KB interface dict into a :class:`FlowSpec`.
@@ -319,6 +351,12 @@ def _parse_interface(interface: Dict[str, Any]) -> FlowSpec:
             logic=interface.get("input_logic", "or"),
         )
     # output
+    flow_type = interface.get("flow_type") or "classic"
+    if flow_type not in _VALID_FLOW_TYPES:
+        raise Cod3sPlatformImportError(
+            f"Interface {name!r}: unsupported flow_type={flow_type!r} "
+            f"(expected one of {sorted(_VALID_FLOW_TYPES)})"
+        )
     return FlowSpec(
         name=name,
         direction="output",
@@ -327,6 +365,13 @@ def _parse_interface(interface: Dict[str, Any]) -> FlowSpec:
         # See FlowSpec.logic_inner_mode docstring for rationale.
         logic_inner_mode=interface.get("logic_inner_mode", "and"),
         negate=bool(interface.get("negate", False)),
+        flow_type=flow_type,
+        occ_enable=interface.get("occ_enable"),
+        occ_disable=interface.get("occ_disable"),
+        init_enable=interface.get("init_enable"),
+        trigger_time_up=interface.get("trigger_time_up"),
+        trigger_time_down=interface.get("trigger_time_down"),
+        trigger_logic=interface.get("trigger_logic"),
     )
 
 
@@ -1215,8 +1260,15 @@ def apply_to_system(
         # for diagnostic flows mirroring primary outputs).
         outputs = [f for f in spec.flows if f.direction == "output"]
         for flow in _order_outputs_by_deps(outputs, input_names, spec.name):
+            # Dynamic flow-out dispatch (2026-07-10). All three classes derive
+            # from FlowOut, so var_prod_cond / inner_mode / negate apply to each.
+            flow_type = flow.flow_type or "classic"
+            cls_name = {
+                "tempo": "FlowOutTempo",
+                "on_trigger": "FlowOutOnTrigger",
+            }.get(flow_type, "FlowOut")
             flow_kwargs: Dict[str, Any] = {
-                "cls": "FlowOut",
+                "cls": cls_name,
                 "name": flow.name,
                 "var_prod_cond": flow.logic,
                 "var_prod_cond_inner_mode": flow.logic_inner_mode,
@@ -1239,6 +1291,24 @@ def apply_to_system(
             # gate closed so the flow is dormant until an effect re-opens it.
             if flow.fed_available_init is not None:
                 flow_kwargs["var_fed_available_out_init"] = flow.fed_available_init
+            # Tempo params (FlowOutTempo). Occurrence-law dicts pass through in
+            # SHORT wire form; cod3s' sanitize_occ_law normalises them.
+            if flow_type == "tempo":
+                if flow.occ_enable is not None:
+                    flow_kwargs["occ_enable_flow"] = flow.occ_enable
+                if flow.occ_disable is not None:
+                    flow_kwargs["occ_disable_flow"] = flow.occ_disable
+                if flow.init_enable is not None:
+                    flow_kwargs["init_enable"] = flow.init_enable
+            # On-trigger params (FlowOutOnTrigger). Trigger times are plain
+            # floats; muscadet wraps them in a delay law internally.
+            elif flow_type == "on_trigger":
+                if flow.trigger_time_up is not None:
+                    flow_kwargs["trigger_time_up"] = flow.trigger_time_up
+                if flow.trigger_time_down is not None:
+                    flow_kwargs["trigger_time_down"] = flow.trigger_time_down
+                if flow.trigger_logic is not None:
+                    flow_kwargs["trigger_logic"] = flow.trigger_logic
             try:
                 comp.add_flow(flow_kwargs)
             except Exception as e:
