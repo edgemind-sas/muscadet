@@ -153,6 +153,14 @@ class FlowSpec:
     # False, so the flow is unfed AND propagates "unavailable" downstream until
     # an effect sets it True. Passed to ``FlowOut.var_fed_available_out_init``.
     fed_available_init: Optional[bool] = None
+    # Availability-gate reset control for an OUTPUT flow. Set by the parse layer
+    # when an ``instance.attribute(role=fed_available_reset)`` override exists.
+    # ``None`` = muscadet default (``var_fed_available_out_reset`` = True, gate
+    # reinitialised at each step). ``False`` = the availability gate is PERSISTENT
+    # and memorises its last value within a sequence (setReinitialized(False));
+    # the init is still honoured at t=0 and between MC sequences. Passed to
+    # ``FlowOut.var_fed_available_out_reset``.
+    fed_available_reset: Optional[bool] = None
 
     # --- Dynamic output flow types (2026-07-10, cross-repo contract) ---------
     # Discriminator selecting the muscadet flow-out class for an OUTPUT flow.
@@ -502,6 +510,9 @@ _ROLE_TO_DIRECTION: Dict[str, str] = {
     # Service-function dormancy via availability gate (output) →
     # FlowOut.var_fed_available_out_init. User-facing UI role.
     "fed_available_init": "output",
+    # Availability-gate reset control (output) →
+    # FlowOut.var_fed_available_out_reset. User-facing UI role.
+    "fed_available_reset": "output",
 }
 _OVERRIDE_ROLES: frozenset = frozenset(_ROLE_TO_DIRECTION)
 # Roles that exist on the platform but are NOT instance configuration
@@ -686,6 +697,11 @@ def _apply_instance_overrides(
             out[idx] = replace(
                 flow,
                 fed_available_init=_parse_init_value(value, flow_name=name, comp_name=comp_name),
+            )
+        elif role == "fed_available_reset":
+            out[idx] = replace(
+                flow,
+                fed_available_reset=_parse_init_value(value, flow_name=name, comp_name=comp_name),
             )
         else:  # role == "prod_init"
             out[idx] = replace(
@@ -1291,6 +1307,12 @@ def apply_to_system(
             # gate closed so the flow is dormant until an effect re-opens it.
             if flow.fed_available_init is not None:
                 flow_kwargs["var_fed_available_out_init"] = flow.fed_available_init
+            # Availability-gate reset control: when False, keep the gate's last
+            # value within a sequence instead of reinitialising it each step. Only
+            # passed when explicitly overridden so normal flows keep the muscadet
+            # default (True = legacy reinitialised gate, byte-identical).
+            if flow.fed_available_reset is not None:
+                flow_kwargs["var_fed_available_out_reset"] = flow.fed_available_reset
             # Tempo params (FlowOutTempo). Occurrence-law dicts pass through in
             # SHORT wire form; cod3s' sanitize_occ_law normalises them.
             if flow_type == "tempo":
