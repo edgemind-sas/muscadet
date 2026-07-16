@@ -342,8 +342,50 @@ class FlowOut(FlowModel):
     # flow can start UNAVAILABLE (dormant) and be woken by an effect setting
     # var_fed_available_out True — orthogonally to prod_cond. Default True =
     # byte-identical legacy behaviour. cf. the "POINT À TRANCHER" note above.
+    #
+    # NOTE on "reinitialized": var_fed_available is normally reset to this init
+    # value at EVERY PyCATSHOO step (setReinitialized(True)). The init is always
+    # honoured at t=0 AND at the start of each Monte-Carlo sequence (the engine
+    # restores declared init values between sequences regardless of the flag).
+    # When var_fed_available_out_reset is False the per-step reinitialisation is
+    # disabled (setReinitialized(False)), so this value is NOT re-applied within a
+    # sequence — the gate then keeps whatever value it was last written to.
     var_fed_available_out_init: bool = pydantic.Field(
-        True, description="Initial (and reinitialized) value of var_fed_available_out"
+        True,
+        description=(
+            "Initial value of var_fed_available_out (at t=0 and at the start of "
+            "each MC sequence). Also the per-step reinitialised value UNLESS "
+            "var_fed_available_out_reset is False."
+        ),
+    )
+
+    # Availability-gate reset control. When True (default) var_fed_available is
+    # reinitialised to var_fed_available_out_init at every step
+    # (setReinitialized(True)) — the legacy, byte-identical behaviour. When False
+    # the per-step reinitialisation is disabled (setReinitialized(False)): the
+    # gate is PERSISTENT and MEMORISES its last value within a sequence instead of
+    # reverting to var_fed_available_out_init. Use for persistent detection /
+    # persistent alarm / memorised fault. The init is still honoured at t=0 and
+    # between MC sequences (no inter-sequence leak).
+    #
+    # WRITE-SAFETY INVARIANT (both-pulse): a gate that is not reinitialised
+    # (reset=False) can no longer "fall back to rest" on its own. The ONLY safe
+    # way to write a non-reinitialised gate is a PULSE (a transient state drained
+    # via inst/delay(0)), applied on BOTH polarities (set AND clear). A standing
+    # level clamp of either polarity coexisting with an opposite writer has no
+    # fixpoint -> silent non-deterministic hang on a fraction of MC sequences.
+    # cf. CLAUDE.md.
+    var_fed_available_out_reset: bool = pydantic.Field(
+        True,
+        description=(
+            "If True (default), the availability gate var_fed_available_out is "
+            "reinitialised to its init at every step (setReinitialized(True)) — "
+            "legacy behaviour. If False, it is not reinitialised "
+            "(setReinitialized(False)) and memorises its value within a sequence "
+            "(persistent). Still restored to its init at t=0 and between MC "
+            "sequences. Write a non-reinitialised gate with pulses on both "
+            "polarities only (see docs)."
+        ),
     )
 
     var_prod: typing.Any = pydantic.Field(None, description="Flow production")
@@ -390,7 +432,12 @@ class FlowOut(FlowModel):
             pyc.TVarType.t_bool,
             self.var_fed_available_out_init,
         )
-        self.var_fed_available.setReinitialized(True)
+        # reset=True (default): reinitialise to init at every step (legacy
+        # behaviour). reset=False: keep last value within a sequence (persistent
+        # memory). Inherited by the dynamic subclasses FlowOutTempo /
+        # FlowOutOnTrigger (their var_fed still ANDs var_fed_available), where
+        # persistence is allowed and composable.
+        self.var_fed_available.setReinitialized(self.var_fed_available_out_reset)
 
         self.var_is_active = comp.addVariable(
             f"{self.name}_is_active",
