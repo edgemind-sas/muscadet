@@ -803,16 +803,23 @@ class FlowOut(FlowModel):
 
 class FlowOutTempo(FlowOut):
 
-    occ_enable_flow: typing.Union[dict | cod3s.OccurrenceDistributionModel] = (
-        pydantic.Field(
-            {"cls": "delay", "time": 0}, description="Temporisation law to let flow out"
-        )
+    occ_enable_flow: typing.Optional[
+        typing.Union[dict, cod3s.OccurrenceDistributionModel]
+    ] = pydantic.Field(
+        None,
+        description=(
+            "Temporisation law to let the flow out (any cod3s occurrence "
+            "distribution: delay / exp / inst). None = no enabling temporisation. "
+            "When BOTH occ_enable_flow and occ_disable_flow are None the "
+            "FlowOutTempo carries no automaton and behaves EXACTLY like a plain "
+            "FlowOut."
+        ),
     )
-    occ_disable_flow: typing.Union[dict | cod3s.OccurrenceDistributionModel] = (
-        pydantic.Field(
-            {"cls": "delay", "time": 0},
-            description="Temporisation law to block flow out",
-        )
+    occ_disable_flow: typing.Optional[
+        typing.Union[dict, cod3s.OccurrenceDistributionModel]
+    ] = pydantic.Field(
+        None,
+        description="Temporisation law to block the flow out (see occ_enable_flow).",
     )
     # time_to_start_flow: float = \
     #     pydantic.Field(0, description="Start flow out temporisation")
@@ -847,6 +854,26 @@ class FlowOutTempo(FlowOut):
 
         super().add_automata(comp, **kwargs)
 
+        # No temporisation law at all -> no enable/disable automaton: the flow
+        # behaves EXACTLY like a plain FlowOut (production tracks
+        # var_prod_available, cf. create_sensitive_set_flow_fed_out which falls
+        # back to the FlowOut sensitive method when state_enable_bkd is None).
+        if self.occ_enable_flow is None and self.occ_disable_flow is None:
+            return
+
+        # When only one side is temporised, the other transition is immediate
+        # (delay 0) so the two-state automaton stays well-formed.
+        occ_enable = (
+            self.occ_enable_flow
+            if self.occ_enable_flow is not None
+            else {"cls": "delay", "time": 0}
+        )
+        occ_disable = (
+            self.occ_disable_flow
+            if self.occ_disable_flow is not None
+            else {"cls": "delay", "time": 0}
+        )
+
         aut = cod3s.PycAutomaton(
             name=f"{self.name}_out_tempo",
             states=[self.state_disable_name, self.state_enable_name],
@@ -859,14 +886,14 @@ class FlowOutTempo(FlowOut):
                     "source": self.state_disable_name,
                     "target": self.state_enable_name,
                     "is_interruptible": True,
-                    "occ_law": self.occ_enable_flow,
+                    "occ_law": occ_enable,
                 },
                 {
                     "name": f"{self.name}_disable",
                     "source": self.state_enable_name,
                     "target": self.state_disable_name,
                     "is_interruptible": True,
-                    "occ_law": self.occ_disable_flow,
+                    "occ_law": occ_disable,
                 },
             ],
         )
@@ -908,6 +935,15 @@ class FlowOutTempo(FlowOut):
 
     # Overloaded from class FlowOut
     def create_sensitive_set_flow_fed_out(self):
+
+        # No temporisation law -> no automaton is built (see add_automata) ->
+        # reuse the plain FlowOut sensitive method verbatim: production tracks
+        # var_prod_available, byte-identical to a FlowOut. The condition is on
+        # the LAWS (known now) and not on state_enable_bkd, which add_automata
+        # sets AFTER this method runs during wiring (the tempo closures below
+        # read state_enable_bkd lazily at simulation time, when it is set).
+        if self.occ_enable_flow is None and self.occ_disable_flow is None:
+            return super().create_sensitive_set_flow_fed_out()
 
         if not self.negate:
 
