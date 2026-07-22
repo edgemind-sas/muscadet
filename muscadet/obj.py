@@ -403,28 +403,44 @@ class ObjFlow(cod3s.PycComponent):
 
             def _resolve_operand(op):
                 # A production-condition operand is either a plain string flow
-                # name (non-negated -- the historical form) or a mapping
-                # ``{"name": str, "negate": bool}`` (negated). Returns the
-                # ``(flow_object, negate_bool)`` pair.
+                # name (non-negated, input-first -- the historical form) or a
+                # mapping ``{"name": str, "negate"?: bool, "port"?: "in"|"out"}``.
+                # ``port`` disambiguates a name carried by BOTH an input and an
+                # output flow of this component: "in"/"out" force that side,
+                # absent keeps the historical input-first resolution. Returns
+                # the ``(flow_object, negate_bool)`` pair (``port`` only selects
+                # which flow object, it does not survive into the matrix).
                 if isinstance(op, str):
-                    name, negate = op, False
+                    name, negate, port = op, False, None
                 elif isinstance(op, dict):
                     name = op.get("name")
                     negate = bool(op.get("negate", False))
+                    port = op.get("port")
                     if not isinstance(name, str):
                         raise ValueError(
                             f"Object {self.name()}: production condition operand mapping must carry a string 'name' : {op}"
+                        )
+                    if port not in (None, "in", "out"):
+                        raise ValueError(
+                            f"Object {self.name()}: production condition operand 'port' must be 'in' or 'out', got {port!r}"
                         )
                 else:
                     raise ValueError(
                         f"Bad format for production condition operand : {op}"
                     )
-                if fcond := self.flows_in.get(name):
-                    return fcond, negate
-                elif fcond := self.flows_out.get(name):
+                if port == "in":
+                    fcond = self.flows_in.get(name)
+                    kind = "input"
+                elif port == "out":
+                    fcond = self.flows_out.get(name)
+                    kind = "output"
+                else:  # historical: input first, then output
+                    fcond = self.flows_in.get(name) or self.flows_out.get(name)
+                    kind = "input nor output"
+                if fcond is not None:
                     return fcond, negate
                 raise ValueError(
-                    f"Object {self.name()}: Flow {name} does not exist as input nor output flow (you must create it before using it in a FlowOut condition)"
+                    f"Object {self.name()}: Flow {name} does not exist as {kind} flow (you must create it before using it in a FlowOut condition)"
                 )
 
             # Normalise a bare operand (string or mapping) to the canonical

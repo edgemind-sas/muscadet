@@ -328,6 +328,15 @@ _VALID_FLOW_TYPES = frozenset({"classic", "tempo", "on_trigger"})
 # dropping the negation. Cf. per-operand-negation ADR (2026-07-22).
 _SUPPORTS_PROD_COND_NEGATION = True
 
+# Capability marker (jumeau of _SUPPORTS_PROD_COND_NEGATION): this muscadet
+# resolves a ``prod_cond`` operand carrying a ``"port": "in"|"out"`` hint, which
+# disambiguates a flow name held by BOTH an input and an output of the same
+# component (e.g. a passthrough ``flow`` where a ``ctrl`` output must mirror the
+# OUTPUT, not the raw input). An older muscadet lacks this attribute, so the
+# platform can refuse to simulate a KB that uses ``port`` rather than silently
+# mis-resolving it. Cf. the prod_cond port-disambiguation chantier (2026-07).
+_SUPPORTS_PROD_COND_PORT = True
+
 
 def _parse_interface(interface: Dict[str, Any]) -> FlowSpec:
     """Translate one KB interface dict into a :class:`FlowSpec`.
@@ -1044,23 +1053,39 @@ def _order_outputs_by_deps(
     intra-component dependencies, raising on cycles.
     """
 
-    def _ref_name(ref):
-        # A prod_cond operand is a flow name string or a ``{"name", "negate"}``
-        # mapping (per-operand negation). Dependency ordering only cares about
-        # the referenced flow name, never the negation bit.
-        return ref.get("name") if isinstance(ref, dict) else ref
+    def _ref_name_port(ref):
+        # A prod_cond operand is a flow name string or a
+        # ``{"name", "negate"?, "port"?}`` mapping. Dependency ordering cares
+        # about the referenced name and, when present, the ``port`` hint
+        # ("in"/"out") that disambiguates an input vs an output of the same name.
+        if isinstance(ref, dict):
+            return ref.get("name"), ref.get("port")
+        return ref, None
 
+    input_set = set(input_names)
     by_name = {f.name: f for f in output_flows}
     remaining = dict(by_name)
     ordered: List[FlowSpec] = []
-    available = set(input_names)
+    created_out: set = set()
+
+    def _satisfied(ref):
+        name, port = _ref_name_port(ref)
+        if port == "in":
+            return name in input_set
+        if port == "out":
+            # An explicit output reference depends on that output being created.
+            return name in created_out
+        # Historical input-first resolution: an input satisfies immediately,
+        # otherwise the (same-name) output must already be created.
+        return name in input_set or name in created_out
+
     while remaining:
         # Pick every flow whose deps are all already available.
         ready = [
             f
             for f in remaining.values()
             if all(
-                _ref_name(ref) in available
+                _satisfied(ref)
                 for disj in (f.logic if isinstance(f.logic, list) else [])
                 for ref in (disj if isinstance(disj, list) else [disj])
             )
@@ -1073,7 +1098,7 @@ def _order_outputs_by_deps(
             )
         for f in ready:
             ordered.append(f)
-            available.add(f.name)
+            created_out.add(f.name)
             del remaining[f.name]
     return ordered
 
