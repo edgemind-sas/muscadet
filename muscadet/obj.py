@@ -400,47 +400,72 @@ class ObjFlow(cod3s.PycComponent):
 
         # Postprocess : var_prod_cond
         if var_prod_cond := flow_specs.get("var_prod_cond"):
-            if isinstance(var_prod_cond, str):
-                var_prod_cond = [[var_prod_cond]]
-            elif isinstance(var_prod_cond, (list, set, tuple)):
-                # Prepare production condition structure in conjonctive way
-                # [(C11 or C12 or ... or C1_k1) and (C21 or ... C2_k2) and ...
-                # and (Cn1 or ... or Cn_kn)]
-                var_prod_cond_tiny = []
-                for flow_disj in var_prod_cond:
-                    # Get input flow associated to production conditions
-                    if isinstance(flow_disj, str):
-                        if fcond := self.flows_in.get(flow_disj):
-                            flow_disj_tiny = [fcond]
-                        elif fcond := self.flows_out.get(flow_disj):
-                            flow_disj_tiny = [fcond]
-                        else:
-                            raise ValueError(
-                                f"Object {self.name()}: Flow {flow_disj} does not exist as input nor output flow (you must create it before using it in a FlowOut condition)"
-                            )
-                    elif isinstance(flow_disj, (list, set, tuple)):
-                        flow_disj_tiny = []
-                        for flow_name in list(flow_disj):
-                            if fcond := self.flows_in.get(flow_name):
-                                flow_disj_tiny.append(fcond)
-                            elif fcond := self.flows_out.get(flow_name):
-                                flow_disj_tiny.append(fcond)
-                            else:
-                                raise ValueError(
-                                    f"Object {self.name()}: Flows {flow_name} does not as input nor output flow (you must create it before using it in a FlowOut condition)"
-                                )
 
-                    else:
+            def _resolve_operand(op):
+                # A production-condition operand is either a plain string flow
+                # name (non-negated -- the historical form) or a mapping
+                # ``{"name": str, "negate": bool}`` (negated). Returns the
+                # ``(flow_object, negate_bool)`` pair.
+                if isinstance(op, str):
+                    name, negate = op, False
+                elif isinstance(op, dict):
+                    name = op.get("name")
+                    negate = bool(op.get("negate", False))
+                    if not isinstance(name, str):
                         raise ValueError(
-                            f"Bad format for production condition structure : {flow_disj}"
+                            f"Object {self.name()}: production condition operand mapping must carry a string 'name' : {op}"
                         )
-                    var_prod_cond_tiny.append(flow_disj_tiny)
-            else:
+                else:
+                    raise ValueError(
+                        f"Bad format for production condition operand : {op}"
+                    )
+                if fcond := self.flows_in.get(name):
+                    return fcond, negate
+                elif fcond := self.flows_out.get(name):
+                    return fcond, negate
+                raise ValueError(
+                    f"Object {self.name()}: Flow {name} does not exist as input nor output flow (you must create it before using it in a FlowOut condition)"
+                )
+
+            # Normalise a bare operand (string or mapping) to the canonical
+            # outer-list-of-groups form so a single unified pass resolves it.
+            if isinstance(var_prod_cond, (str, dict)):
+                var_prod_cond = [[var_prod_cond]]
+            if not isinstance(var_prod_cond, (list, set, tuple)):
                 raise ValueError(
                     f"Bad format for main conjonctive format of production condition : {var_prod_cond}"
                 )
 
+            # Prepare production condition structure in conjonctive way
+            # [(C11 or C12 or ... or C1_k1) and (C21 or ... C2_k2) and ...
+            # and (Cn1 or ... or Cn_kn)]
+            var_prod_cond_tiny = []
+            var_prod_cond_negate = []
+            for flow_disj in var_prod_cond:
+                if isinstance(flow_disj, (str, dict)):
+                    operands = [flow_disj]
+                elif isinstance(flow_disj, (list, set, tuple)):
+                    operands = list(flow_disj)
+                else:
+                    raise ValueError(
+                        f"Bad format for production condition structure : {flow_disj}"
+                    )
+                flow_disj_tiny = []
+                negate_disj = []
+                for op in operands:
+                    fcond, negate = _resolve_operand(op)
+                    flow_disj_tiny.append(fcond)
+                    negate_disj.append(negate)
+                var_prod_cond_tiny.append(flow_disj_tiny)
+                var_prod_cond_negate.append(negate_disj)
+
             flow_specs["var_prod_cond"] = var_prod_cond_tiny
+            # Attach the negation matrix only when at least one operand is
+            # negated, so the common (non-negated) case leaves the FlowOut
+            # ``var_prod_cond_negate`` at its empty default -> byte-identical
+            # evaluation to pre-negation muscadet.
+            if any(any(row) for row in var_prod_cond_negate):
+                flow_specs["var_prod_cond_negate"] = var_prod_cond_negate
 
         # Normalise tempo occurrence-law SHORT forms to the long class names so
         # ``ObjCOD3S.from_dict`` (called next in ``add_flow``) can resolve them
@@ -677,10 +702,7 @@ class ObjFlow(cod3s.PycComponent):
         basic ok/nok state machine for each output flow with negligible
         failure rates (1e-100), primarily for testing and demonstration purposes.
         """
-        flow_list = (
-            list(self.flows_in.values())
-            + list(self.flows_out.values())
-        )
+        flow_list = list(self.flows_in.values()) + list(self.flows_out.values())
 
         for flow in flow_list:
             # Complete flow setup process
@@ -1470,7 +1492,6 @@ class ObjFailureMode(cod3s.PycComponent):
             return repair_cond_fun
         else:
             return True
-
 
     # TO BE OVERLOADED IF NEEDED
     def set_default_failure_param_name(self):

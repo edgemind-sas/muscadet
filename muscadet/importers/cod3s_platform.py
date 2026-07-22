@@ -292,8 +292,10 @@ def _detect_payload_shape(payload: Dict[str, Any]) -> str:
         )
     if "kb_embedded" in payload and isinstance(payload["kb_embedded"], dict):
         return "platform_export"
-    if "kb" in payload and isinstance(payload["kb"], dict) and (
-        "component_templates" in payload["kb"]
+    if (
+        "kb" in payload
+        and isinstance(payload["kb"], dict)
+        and ("component_templates" in payload["kb"])
     ):
         return "canonical"
     raise Cod3sPlatformImportError(
@@ -318,6 +320,14 @@ def _resolve_kb(payload: Dict[str, Any]) -> Dict[str, Any]:
 # FlowOutOnTrigger (cf. FlowSpec.flow_type).
 _VALID_FLOW_TYPES = frozenset({"classic", "tempo", "on_trigger"})
 
+# Capability marker probed by the COD3S Platform (jumeau of _VALID_FLOW_TYPES):
+# this muscadet resolves a ``prod_cond`` operand of the ``{"name", "negate"}``
+# mapping form to a per-operand negated flow (ObjFlow.postprocess_flow_specs +
+# FlowOut.var_prod_cond_negate). An older muscadet lacks this attribute, so the
+# platform can refuse to simulate a KB carrying negation rather than silently
+# dropping the negation. Cf. per-operand-negation ADR (2026-07-22).
+_SUPPORTS_PROD_COND_NEGATION = True
+
 
 def _parse_interface(interface: Dict[str, Any]) -> FlowSpec:
     """Translate one KB interface dict into a :class:`FlowSpec`.
@@ -337,9 +347,7 @@ def _parse_interface(interface: Dict[str, Any]) -> FlowSpec:
     """
     name = interface.get("name")
     if not name:
-        raise Cod3sPlatformImportError(
-            f"Interface missing 'name' field: {interface!r}"
-        )
+        raise Cod3sPlatformImportError(f"Interface missing 'name' field: {interface!r}")
     if "logic" in interface:
         raise Cod3sPlatformImportError(
             f"Interface {name!r}: legacy 'logic' field is no longer supported. "
@@ -518,14 +526,18 @@ _OVERRIDE_ROLES: frozenset = frozenset(_ROLE_TO_DIRECTION)
 # Roles that exist on the platform but are NOT instance configuration
 # overrides — they are runtime observables (is_available, fed_out,
 # fed_in, is_active) and the importer ignores them silently.
-_OBSERVABLE_ROLES: frozenset = frozenset({"is_available", "fed_out", "fed_in", "is_active"})
+_OBSERVABLE_ROLES: frozenset = frozenset(
+    {"is_available", "fed_out", "fed_in", "is_active"}
+)
 
 # Type aliases — composite key for instance attribute overrides.
 OverrideKey = Tuple[str, str]  # (flow_name, role)
 OverridesIndex = Dict[OverrideKey, Any]
 
 
-def _parse_input_logic_value(raw: Any, *, flow_name: str, comp_name: str) -> Union[str, int]:
+def _parse_input_logic_value(
+    raw: Any, *, flow_name: str, comp_name: str
+) -> Union[str, int]:
     """Coerce an instance override of an input ``logic`` attribute.
 
     Backend AttributeTemplate for role=logic declares type='string'
@@ -616,7 +628,8 @@ def _build_overrides_index(
             logger.warning(
                 "Unknown attribute role %r on flow %r — ignored. "
                 "Importer may need updating to support this role.",
-                role, name,
+                role,
+                name,
             )
             continue
         if value is None:
@@ -670,7 +683,8 @@ def _apply_instance_overrides(
             if opposite_idx < 0:
                 logger.debug(
                     "Ignoring stale instance override on %s/%s: flow not in current KB",
-                    comp_name, name,
+                    comp_name,
+                    name,
                 )
                 continue
             other = out[opposite_idx]
@@ -681,32 +695,44 @@ def _apply_instance_overrides(
             )
         flow = out[idx]
         if role == "logic_in":
-            new_logic = _parse_input_logic_value(value, flow_name=name, comp_name=comp_name)
+            new_logic = _parse_input_logic_value(
+                value, flow_name=name, comp_name=comp_name
+            )
             out[idx] = replace(flow, logic=new_logic)
         elif role == "var_in_default":
             out[idx] = replace(
                 flow,
-                var_in_default=_parse_init_value(value, flow_name=name, comp_name=comp_name),
+                var_in_default=_parse_init_value(
+                    value, flow_name=name, comp_name=comp_name
+                ),
             )
         elif role == "active_init":
             out[idx] = replace(
                 flow,
-                is_active_default=_parse_init_value(value, flow_name=name, comp_name=comp_name),
+                is_active_default=_parse_init_value(
+                    value, flow_name=name, comp_name=comp_name
+                ),
             )
         elif role == "fed_available_init":
             out[idx] = replace(
                 flow,
-                fed_available_init=_parse_init_value(value, flow_name=name, comp_name=comp_name),
+                fed_available_init=_parse_init_value(
+                    value, flow_name=name, comp_name=comp_name
+                ),
             )
         elif role == "fed_available_reset":
             out[idx] = replace(
                 flow,
-                fed_available_reset=_parse_init_value(value, flow_name=name, comp_name=comp_name),
+                fed_available_reset=_parse_init_value(
+                    value, flow_name=name, comp_name=comp_name
+                ),
             )
         else:  # role == "prod_init"
             out[idx] = replace(
                 flow,
-                init_value=_parse_init_value(value, flow_name=name, comp_name=comp_name),
+                init_value=_parse_init_value(
+                    value, flow_name=name, comp_name=comp_name
+                ),
             )
     return out
 
@@ -738,9 +764,7 @@ def _parse_components(
         name = comp.get("name")
         class_name = comp.get("class_name")
         if not name:
-            raise Cod3sPlatformImportError(
-                f"Component {cid!r} missing 'name' field"
-            )
+            raise Cod3sPlatformImportError(f"Component {cid!r} missing 'name' field")
         if not class_name:
             raise Cod3sPlatformImportError(
                 f"Component {name!r} ({cid}) missing 'class_name' field"
@@ -772,7 +796,11 @@ def _parse_components(
                     flows=list(kb_lookup[class_name]),
                     metadata={"platform_id": cid, "attributes_initial": instance_attrs},
                     gate_kind=gate_kind,
-                    gate_k=(_read_gate_k(instance_attrs, comp_name=name) if gate_kind == "k" else None),
+                    gate_k=(
+                        _read_gate_k(instance_attrs, comp_name=name)
+                        if gate_kind == "k"
+                        else None
+                    ),
                     gate_check_fed=_read_gate_check_fed(instance_attrs, comp_name=name),
                 )
             )
@@ -879,7 +907,9 @@ def _parse_connections(
                 "Connection %s: source/target interface names differ "
                 "(%r != %r); muscadet.System.connect_flow uses a single "
                 "flow_name on both ends — using source name.",
-                conn_id, src_iface, tgt_iface,
+                conn_id,
+                src_iface,
+                tgt_iface,
             )
         if src_iface not in tgt_inputs:
             raise Cod3sPlatformImportError(
@@ -971,7 +1001,9 @@ def parse_platform_export(payload: Dict[str, Any]) -> ImporterContext:
 
     kb_lookup = _build_kb_lookup(kb)
     gate_kinds = _build_gate_kinds(kb)
-    components = _parse_components(elements.get("components") or {}, kb_lookup, gate_kinds)
+    components = _parse_components(
+        elements.get("components") or {}, kb_lookup, gate_kinds
+    )
     connections = _parse_connections(elements.get("connections") or {}, components)
 
     return ImporterContext(
@@ -1011,6 +1043,13 @@ def _order_outputs_by_deps(
     Returns the outputs in a creation order that satisfies all
     intra-component dependencies, raising on cycles.
     """
+
+    def _ref_name(ref):
+        # A prod_cond operand is a flow name string or a ``{"name", "negate"}``
+        # mapping (per-operand negation). Dependency ordering only cares about
+        # the referenced flow name, never the negation bit.
+        return ref.get("name") if isinstance(ref, dict) else ref
+
     by_name = {f.name: f for f in output_flows}
     remaining = dict(by_name)
     ordered: List[FlowSpec] = []
@@ -1018,9 +1057,10 @@ def _order_outputs_by_deps(
     while remaining:
         # Pick every flow whose deps are all already available.
         ready = [
-            f for f in remaining.values()
+            f
+            for f in remaining.values()
             if all(
-                ref in available
+                _ref_name(ref) in available
                 for disj in (f.logic if isinstance(f.logic, list) else [])
                 for ref in (disj if isinstance(disj, list) else [disj])
             )
@@ -1043,7 +1083,9 @@ def _order_outputs_by_deps(
 # ---------------------------------------------------------------------------
 
 
-def _gate_leaf_attr(source_interface: str, *, source_is_gate: bool, check_fed: bool) -> str:
+def _gate_leaf_attr(
+    source_interface: str, *, source_is_gate: bool, check_fed: bool
+) -> str:
     """Resolve the muscadet observable variable a gate ``cond`` leaf reads
     on one of its sources.
 
@@ -1058,7 +1100,11 @@ def _gate_leaf_attr(source_interface: str, *, source_is_gate: bool, check_fed: b
     """
     if source_is_gate:
         return "result"
-    return f"{source_interface}_fed_out" if check_fed else f"{source_interface}_fed_available_out"
+    return (
+        f"{source_interface}_fed_out"
+        if check_fed
+        else f"{source_interface}_fed_available_out"
+    )
 
 
 def _build_gate_cond_and_outputs(
@@ -1117,7 +1163,8 @@ def _order_gates(
         deps[gate.name] = {
             conn.source_component
             for conn in connections
-            if conn.target_component == gate.name and conn.source_component in gate_names
+            if conn.target_component == gate.name
+            and conn.source_component in gate_names
         }
     ordered: List[ComponentSpec] = []
     placed: set = set()
@@ -1135,7 +1182,9 @@ def _order_gates(
     return ordered
 
 
-def _create_logic_gate(gate: ComponentSpec, system: Any, connections: List[ConnectionSpec], gate_names: set) -> None:
+def _create_logic_gate(
+    gate: ComponentSpec, system: Any, connections: List[ConnectionSpec], gate_names: set
+) -> None:
     """Instantiate one ``ObjLogicGate`` on ``system`` from its parse spec."""
     cond, out_elements = _build_gate_cond_and_outputs(gate, connections, gate_names)
     kwargs: Dict[str, Any] = {
@@ -1153,7 +1202,11 @@ def _create_logic_gate(gate: ComponentSpec, system: Any, connections: List[Conne
         raise Cod3sPlatformImportError(
             f"Failed to create logic gate {gate.name!r} (kind={gate.gate_kind!r}): {e}"
         ) from e
-    if comp is not None and hasattr(comp, "metadata") and isinstance(comp.metadata, dict):
+    if (
+        comp is not None
+        and hasattr(comp, "metadata")
+        and isinstance(comp.metadata, dict)
+    ):
         comp.metadata.update(
             {
                 "class_name": gate.class_name,
@@ -1244,9 +1297,7 @@ def apply_to_system(
                 {
                     "class_name": spec.class_name,
                     "platform_id": spec.metadata.get("platform_id"),
-                    "attributes_initial": spec.metadata.get(
-                        "attributes_initial", []
-                    ),
+                    "attributes_initial": spec.metadata.get("attributes_initial", []),
                     "instance_overrides": dict(
                         spec.metadata.get("instance_overrides") or {}
                     ),
@@ -1257,7 +1308,11 @@ def apply_to_system(
         input_names = set()
         for flow in spec.flows:
             if flow.direction == "input":
-                flow_in_kwargs = {"cls": "FlowIn", "name": flow.name, "logic": flow.logic}
+                flow_in_kwargs = {
+                    "cls": "FlowIn",
+                    "name": flow.name,
+                    "logic": flow.logic,
+                }
                 # Only pass var_in_default when explicitly set (role=var_in_default
                 # instance override) ; None leaves the muscadet FlowIn default (False).
                 if flow.var_in_default is not None:

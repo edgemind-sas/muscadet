@@ -7,6 +7,21 @@ import cod3s
 from .common import get_pyc_type
 
 
+def _prod_cond_operand_value(flow_inner, negate_matrix, i, j):
+    """Return the effective boolean of one ``var_prod_cond`` operand.
+
+    ``flow_inner`` is a resolved flow object; ``negate_matrix`` mirrors the
+    shape of ``var_prod_cond`` (list[list[bool]]). When the aligned entry is
+    True the operand is negated (``not var_fed``), otherwise the raw
+    ``var_fed`` value is returned. A missing entry (shorter / empty matrix)
+    defaults to non-negated, so a partial or empty matrix is safe.
+    """
+    value = flow_inner.var_fed.value()
+    if i < len(negate_matrix) and j < len(negate_matrix[i]) and negate_matrix[i][j]:
+        return not value
+    return value
+
+
 class FlowModel(cod3s.ObjCOD3S):
 
     name: str = pydantic.Field(..., description="Flow name")
@@ -396,6 +411,10 @@ class FlowOut(FlowModel):
         [],
         description="Flow production condition [(C11 <BoolOpeA> C12 <BoolOpeA> ... <BoolOpeA> C1_k1) <BoolOpeB> (C21 <BoolOpeA> ... <BoolOpeA> C2_k2) <BoolOpeB> ... <BoolOpeB> (Cn1 <BoolOpeA> ... <BoolOpeA> Cn_kn)] where both <BoolOpeA> and <BoolOpeB> are boolean operators set by attribute 'var_prod_cond_inner_mode'",
     )
+    var_prod_cond_negate: list = pydantic.Field(
+        default_factory=list,
+        description="Per-operand negation matrix aligned index-for-index with 'var_prod_cond' (list[list[bool]]): when var_prod_cond_negate[i][j] is True the j-th operand of the i-th group is evaluated as NOT(flow.var_fed) instead of flow.var_fed. An EMPTY matrix (the default) means no operand is negated -> the evaluation is byte-identical to the historical behaviour. Built index-aligned by ObjFlow.postprocess_flow_specs from the '{name, negate}' operand form; the plain string operand form yields no negation.",
+    )
     var_prod_cond_inner_mode: str = pydantic.Field(
         "or",
         description="Flow production condition expression mode: 'or' means var_prod is evaluated like [(C11 or C12 or ... or C1_k1) and (C21 or ... C2_k2) and ... and (Cn1 or ... or Cn_kn)], 'and' means evaluation like [(C11 and C12 and ... and C1_k1) or (C21 and ... and C2_k2) or ... or (Cn1 and ... and Cn_kn)]",
@@ -481,6 +500,28 @@ class FlowOut(FlowModel):
         """Return the color formatting for FlowOut class name."""
         return f"{fg('steel_blue_1a')}"
 
+    def _prod_cond_operand_label(self, flow_inner, i, j) -> str:
+        """Operand name for the textual condition, prefixed with '¬' when the
+        aligned ``var_prod_cond_negate`` entry marks it negated."""
+        neg = self.var_prod_cond_negate
+        negated = i < len(neg) and j < len(neg[i]) and neg[i][j]
+        return f"¬{flow_inner.name}" if negated else flow_inner.name
+
+    def _prod_cond_text(self, ope_inner: str, ope_outer: str) -> str:
+        """Render ``var_prod_cond`` as a boolean expression, honouring the
+        per-operand negation matrix."""
+        return ope_outer.join(
+            [
+                ope_inner.join(
+                    [
+                        self._prod_cond_operand_label(flow, i, j)
+                        for j, flow in enumerate(flow_inner)
+                    ]
+                )
+                for i, flow_inner in enumerate(self.var_prod_cond)
+            ]
+        )
+
     def __repr__(self) -> str:
         base_str = super().__repr__()
 
@@ -493,7 +534,7 @@ class FlowOut(FlowModel):
             ope_outer = " or "
 
         if self.var_prod_cond:
-            cond_info = f"cond := {ope_outer.join([ope_inner.join([flow.name for flow in flow_inner]) for flow_inner in self.var_prod_cond])}"
+            cond_info = f"cond := {self._prod_cond_text(ope_inner, ope_outer)}"
         else:
             cond_info = "no cond"
 
@@ -516,7 +557,7 @@ class FlowOut(FlowModel):
             ope_outer = " or "
 
         if self.var_prod_cond:
-            cond_info = f"{ope_outer.join([ope_inner.join([flow.name for flow in flow_inner]) for flow_inner in self.var_prod_cond])}"
+            cond_info = self._prod_cond_text(ope_inner, ope_outer)
         else:
             cond_info = "No conditions"
 
@@ -602,39 +643,99 @@ class FlowOut(FlowModel):
 
     def create_sensitive_set_flow_prod_available(self):
 
+        # When no operand is negated (the empty matrix default) keep the
+        # historical closures verbatim: the evaluation is byte-identical to
+        # pre-negation muscadet. The negate-aware closures only run when the
+        # component actually declares a negated operand.
+        negate_matrix = self.var_prod_cond_negate
+
         if self.var_prod_cond_inner_mode == "or":
 
-            def sensitive_set_flow_prod_available_template():
-                # for flow_disj in self.var_prod_cond:
-                #     for flow in flow_disj:
-                #         comp = flow.var_fed.parent().basename()
-                #         flow_val = flow.var_fed.value()
-                #         print(f"{comp}: {flow.name}.var_fed = {flow_val}")
-                #         ipdb.set_trace()
+            if not negate_matrix:
 
-                # [(C11 or C12 or ... or C1_k1) and (C21 or ... C2_k2) and ... and (Cn1 or ... or Cn_kn)]
-                val = all(
-                    [
-                        any([flow_inner.var_fed.value() for flow_inner in flow_outer])
-                        for flow_outer in self.var_prod_cond
-                    ]
-                )
+                def sensitive_set_flow_prod_available_template():
+                    # for flow_disj in self.var_prod_cond:
+                    #     for flow in flow_disj:
+                    #         comp = flow.var_fed.parent().basename()
+                    #         flow_val = flow.var_fed.value()
+                    #         print(f"{comp}: {flow.name}.var_fed = {flow_val}")
+                    #         ipdb.set_trace()
 
-                self.var_prod_available.setValue(val)
+                    # [(C11 or C12 or ... or C1_k1) and (C21 or ... C2_k2) and ... and (Cn1 or ... or Cn_kn)]
+                    val = all(
+                        [
+                            any(
+                                [
+                                    flow_inner.var_fed.value()
+                                    for flow_inner in flow_outer
+                                ]
+                            )
+                            for flow_outer in self.var_prod_cond
+                        ]
+                    )
+
+                    self.var_prod_available.setValue(val)
+
+            else:
+
+                def sensitive_set_flow_prod_available_template():
+                    # Same evaluation, with per-operand negation applied.
+                    val = all(
+                        [
+                            any(
+                                [
+                                    _prod_cond_operand_value(
+                                        flow_inner, negate_matrix, i, j
+                                    )
+                                    for j, flow_inner in enumerate(flow_outer)
+                                ]
+                            )
+                            for i, flow_outer in enumerate(self.var_prod_cond)
+                        ]
+                    )
+
+                    self.var_prod_available.setValue(val)
 
         elif self.var_prod_cond_inner_mode == "and":
 
-            def sensitive_set_flow_prod_available_template():
+            if not negate_matrix:
 
-                # [(C11 and C12 and ... and C1_k1) or (C21 and ... and C2_k2) or ... or (Cn1 and ... and Cn_kn)]
-                val = any(
-                    [
-                        all([flow_inner.var_fed.value() for flow_inner in flow_outer])
-                        for flow_outer in self.var_prod_cond
-                    ]
-                )
+                def sensitive_set_flow_prod_available_template():
 
-                self.var_prod_available.setValue(val)
+                    # [(C11 and C12 and ... and C1_k1) or (C21 and ... and C2_k2) or ... or (Cn1 and ... and Cn_kn)]
+                    val = any(
+                        [
+                            all(
+                                [
+                                    flow_inner.var_fed.value()
+                                    for flow_inner in flow_outer
+                                ]
+                            )
+                            for flow_outer in self.var_prod_cond
+                        ]
+                    )
+
+                    self.var_prod_available.setValue(val)
+
+            else:
+
+                def sensitive_set_flow_prod_available_template():
+                    # Same evaluation, with per-operand negation applied.
+                    val = any(
+                        [
+                            all(
+                                [
+                                    _prod_cond_operand_value(
+                                        flow_inner, negate_matrix, i, j
+                                    )
+                                    for j, flow_inner in enumerate(flow_outer)
+                                ]
+                            )
+                            for i, flow_outer in enumerate(self.var_prod_cond)
+                        ]
+                    )
+
+                    self.var_prod_available.setValue(val)
 
         else:
             raise ValueError("var_prod_cond_inner_mode must be 'and' or 'or'")
@@ -689,6 +790,15 @@ class FlowOut(FlowModel):
                 flow_inner.var_fed.addSensitiveMethod(
                     sm_flow_prod_available_name, sm_flow_prod_available_fun
                 )
+
+        # A negated operand can make the production condition TRUE while every
+        # referenced input stays at its initial (False) value — in which case
+        # none of the change-subscriptions above ever fires and var_prod_available
+        # would be stuck at its default. Seed the correct value at t=0 with a
+        # start method. GATED on negation so a non-negated condition keeps the
+        # exact legacy wiring (change-subscriptions only) -> byte-identical.
+        if self.var_prod_cond_negate:
+            comp.addStartMethod(sm_flow_prod_available_name, sm_flow_prod_available_fun)
 
 
 class FlowOutTempo(FlowOut):
