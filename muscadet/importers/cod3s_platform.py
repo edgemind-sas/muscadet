@@ -337,6 +337,19 @@ _SUPPORTS_PROD_COND_NEGATION = True
 # mis-resolving it. Cf. the prod_cond port-disambiguation chantier (2026-07).
 _SUPPORTS_PROD_COND_PORT = True
 
+# Capability marker (jumeau of _SUPPORTS_PROD_COND_PORT): this muscadet applies
+# PER-INSTANCE tempo overrides — the ``tempo_activation`` / ``tempo_deactivation``
+# attribute roles set the enable/disable occurrence laws of an output flow at the
+# component level, so a model can turn a classic FlowOut into a FlowOutTempo (or
+# back) without editing the KB. The override value is an occurrence-law dict in
+# SHORT wire form (``{"cls": "delay"|"exp"|"inst", ...}``) or the sentinel
+# ``{"cls": "none"}`` meaning "force classic (no law)". An absent value (``None``)
+# is dropped upstream and means "inherit the KB default". An older muscadet lacks
+# this attribute, so the platform can refuse to simulate a model carrying tempo
+# overrides rather than silently ignoring them. Cf. the tempo-in-attributes
+# chantier (2026-07).
+_SUPPORTS_INSTANCE_TEMPO_OVERRIDE = True
+
 
 def _parse_interface(interface: Dict[str, Any]) -> FlowSpec:
     """Translate one KB interface dict into a :class:`FlowSpec`.
@@ -530,6 +543,13 @@ _ROLE_TO_DIRECTION: Dict[str, str] = {
     # Availability-gate reset control (output) →
     # FlowOut.var_fed_available_out_reset. User-facing UI role.
     "fed_available_reset": "output",
+    # Tempo enable/disable occurrence laws (output) → FlowOutTempo
+    # occ_enable_flow / occ_disable_flow. Value is a SHORT-wire occurrence-law
+    # dict or the ``{"cls": "none"}`` sentinel (force classic). Setting a law on
+    # a classic flow promotes it to tempo (flow_type is derived from the laws,
+    # see _derive_output_flow_type). Cf. tempo-in-attributes chantier (2026-07).
+    "tempo_activation": "output",
+    "tempo_deactivation": "output",
 }
 _OVERRIDE_ROLES: frozenset = frozenset(_ROLE_TO_DIRECTION)
 # Roles that exist on the platform but are NOT instance configuration
@@ -647,6 +667,45 @@ def _build_overrides_index(
     return out
 
 
+def _parse_tempo_law_value(
+    value: Any, *, flow_name: str, comp_name: str, role: str
+) -> Optional[dict]:
+    """Parse a ``tempo_activation`` / ``tempo_deactivation`` override value.
+
+    Returns the occurrence-law dict to hand to FlowOutTempo (SHORT wire form,
+    normalised downstream by cod3s' ``sanitize_occ_law``), or ``None`` for the
+    ``{"cls": "none"}`` sentinel meaning "force classic (no law on this side)".
+    Rejects a malformed value (not a law-shaped dict) so a corrupted snapshot
+    surfaces rather than silently degrading the tempo behaviour.
+    """
+    if isinstance(value, dict):
+        if value.get("cls") == "none":
+            return None
+        if value.get("cls"):
+            return value
+    raise Cod3sPlatformImportError(
+        f"Component {comp_name!r}: instance override role={role} on flow "
+        f"{flow_name!r} expects an occurrence-law dict "
+        f"({{'cls': 'delay'|'exp'|'inst', ...}}) or {{'cls': 'none'}}, got {value!r}"
+    )
+
+
+def _derive_output_flow_type(flow: FlowSpec) -> str:
+    """Derive the effective ``flow_type`` of an output flow from its tempo laws.
+
+    A flow bearing an enable OR disable law is ``tempo`` (FlowOutTempo); with
+    neither it is ``classic`` (FlowOut). ``on_trigger`` is preserved verbatim —
+    it is a distinct flow class, not derived from occ laws. This is what makes a
+    per-instance tempo override flip a classic flow to tempo (and back) without
+    touching the KB.
+    """
+    if flow.flow_type == "on_trigger":
+        return "on_trigger"
+    if flow.occ_enable is not None or flow.occ_disable is not None:
+        return "tempo"
+    return "classic"
+
+
 def _apply_instance_overrides(
     flows: List[FlowSpec],
     overrides: OverridesIndex,
@@ -736,6 +795,19 @@ def _apply_instance_overrides(
                     value, flow_name=name, comp_name=comp_name
                 ),
             )
+        elif role in ("tempo_activation", "tempo_deactivation"):
+            # Set the enable/disable occurrence law, then re-derive flow_type so
+            # adding a law promotes a classic flow to tempo and the sentinel
+            # {"cls": "none"} demotes it back. Both sides may be overridden
+            # independently (two entries) — each reads the current out[idx].
+            law = _parse_tempo_law_value(
+                value, flow_name=name, comp_name=comp_name, role=role
+            )
+            if role == "tempo_activation":
+                updated = replace(flow, occ_enable=law)
+            else:
+                updated = replace(flow, occ_disable=law)
+            out[idx] = replace(updated, flow_type=_derive_output_flow_type(updated))
         else:  # role == "prod_init"
             out[idx] = replace(
                 flow,
