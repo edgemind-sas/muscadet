@@ -910,6 +910,11 @@ class FlowOutTempo(FlowOut):
         )
 
         trans_name = f"{self.name}_disable"
+        # Recompute the condition method name for the second transition: reusing the
+        # `_enable` name registered above would advertise a `_disable` transition under
+        # an `_enable` condition, and would break silently should PyCATSHOO ever key
+        # registered conditions by name.
+        cond_method_name = f"cond_{comp.name}_{aut.name}_{trans_name}"
 
         def cond_method_disable():
             return not self.var_prod_available.value()
@@ -918,7 +923,6 @@ class FlowOutTempo(FlowOut):
             cond_method_name, cond_method_disable
         )
 
-        # cond_method_name = f"cond_{comp.name}_{aut.name}_{trans_name}"
         # if self.trigger_logic == "and":
         #     def cond_method_21():
         #         return self.var_trigger_in.andValue(False)
