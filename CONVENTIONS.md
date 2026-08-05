@@ -35,3 +35,9 @@
 - Flow classes should inherit from appropriate base classes
 - Flow classes should implement all required methods
 - Use consistent naming for flow variables (var_fed, var_prod, etc.)
+- Discrete flow classes are canonically named `FlowDiscrete*`; the former
+  `FlowIn` / `FlowOut` / `FlowOutTempo` / `FlowOutOnTrigger` names remain as
+  permanent aliases inside the canonical inheritance chain. Never rewrite
+  existing code from a legacy name to its canonical one.
+- Continuous flow classes are named `FlowContinuous*` and reuse the same
+  `var_fed` naming, plus `var_demand` for the upstream demand channel

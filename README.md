@@ -594,6 +594,459 @@ analyser.printFilteredSeq(100, "sequences.xml", "PySeq.xsl")
 
 The code for this example is available [here](examples/rbd_06/rbd_06.py).
 
+## Flow class names: canonical and legacy
+
+Everything above declares *discrete* flows — boolean signals that are either fed or not. Since MUSCADET 2.0 the discrete flow classes carry an explicit `Discrete` in their name, so that they read as one family beside the continuous one introduced in the next chapter.
+
+| Canonical name             | Legacy name          |
+|----------------------------|----------------------|
+| `FlowDiscreteIn`           | `FlowIn`             |
+| `FlowDiscreteOut`          | `FlowOut`            |
+| `FlowDiscreteOutTempo`     | `FlowOutTempo`       |
+| `FlowDiscreteOutOnTrigger` | `FlowOutOnTrigger`   |
+
+The canonical names on the left are the ones to use in new models. The legacy names on the right are **supported indefinitely**: they carry no removal date, they emit no deprecation warning, and there is no plan to withdraw them. They are real classes placed inside the canonical inheritance chain — not assignment aliases — so a flow declared through a legacy name still reports that name as its runtime class, and every `isinstance` relation that held before the rename still holds.
+
+Concretely:
+
+- **Every example above stays valid and needs no rewriting.** `add_flow_in()`, `add_flow_out()`, `add_flow_out_tempo()` and `add_flow_out_on_trigger()` are unchanged and keep building the legacy-named classes.
+- **Both spellings work in the `cls=` string form** of `add_flow`. These two declare the same output; write one or the other:
+
+  ```python
+  self.add_flow(dict(cls="FlowOut", name="is_ok", var_prod_default=True))          # legacy
+  self.add_flow(dict(cls="FlowDiscreteOut", name="is_ok", var_prod_default=True))  # canonical
+  ```
+
+- Both name sets are importable from the package root and from `muscadet.flow`:
+
+  ```python
+  import muscadet
+
+  muscadet.FlowDiscreteIn, muscadet.FlowDiscreteOut
+  muscadet.FlowIn, muscadet.FlowOut
+  ```
+
+One consequence is worth knowing when mixing the two: because the legacy names sit *below* the canonical ones, a flow declared canonically is **not** an instance of the legacy class. `isinstance(flow, muscadet.FlowOut)` is `True` for a flow declared with `add_flow_out()` or with `cls="FlowOut"`, and `False` for one declared with `cls="FlowDiscreteOut"`. Test against the canonical name — `isinstance(flow, muscadet.FlowDiscreteOut)` — and it holds for both.
+
+## Continuous flows
+
+A discrete flow answers *is this component fed?*. A **continuous flow** carries a real-valued rate instead — litres per hour, kilowatts, kilograms per second — and MUSCADET integrates it over time. The two families sit side by side: a component may declare both, a rule may read a boolean flow, and a boolean output may be driven by a continuous quantity. What a continuous flow may **not** do is be connected to a discrete one; that is refused with an error naming both flows and both components.
+
+### Declaring continuous flows
+
+The declaration methods mirror the discrete ones:
+
+```python
+import muscadet
+
+
+class Pump(muscadet.ObjFlow):
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+
+        self.add_flow_continuous_out(
+            name="water",
+            var_fed_default=10.0,  # the rate it can produce
+        )
+
+
+class Boiler(muscadet.ObjFlow):
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+
+        self.add_flow_continuous_in(
+            name="water",
+            var_demand_default=3.0,  # what it asks for
+        )
+```
+
+Connections are declared exactly as for a discrete flow:
+
+```python
+my_plant = muscadet.System(name="Plant")
+my_plant.add_component(cls="Pump", name="P")
+my_plant.add_component(cls="Boiler", name="B")
+
+my_plant.connect_flow(source="P", target="B", flow_name="water")
+```
+
+One connection wires **both directions**: the quantity travels downstream, and the demand travels back upstream. What is actually delivered on a connection is the lesser of what the producer can produce and what the consumer asks for — so the pump above delivers 3, not 10.
+
+Per continuous flow named `f`, MUSCADET creates:
+
+- `f_fed_out` — on an output flow, the total value delivered downstream
+- `f_demand_in` — on an output flow, the demands published by its consumers
+- `f_fed_in` — on an input flow, the value received (the **sum** of every incoming connection)
+- `f_demand_out` — on an input flow, the demand this consumer publishes upstream
+
+and the values are read back through the flow objects:
+
+```python
+my_plant.comp["P"].flows_out["water"].var_fed.value()          # total delivered
+my_plant.comp["B"].flows_in["water"].get_delivered()           # this consumer's share
+my_plant.comp["B"].flows_in["water"].var_demand.value()        # published upstream
+my_plant.comp["P"].flows_out["water"].get_var_demand_value()   # demand read back
+```
+
+A component declaring continuous flows but **no** transformation rule transfers each input onto the output of the same name.
+
+### Transformation rules
+
+A component that turns inputs into outputs declares an ordered set of **rules** with `add_rules`. Each rule carries a guard (`cond`), a `cons` map of consumed input coefficients and a `prod` map of produced output coefficients:
+
+```python
+class Mixer(muscadet.ObjFlow):
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+
+        self.add_flow_in(name="run", logic="and")
+        self.add_flow_continuous_in(name="water")
+        self.add_flow_continuous_in(name="sugar")
+        self.add_flow_continuous_out(name="syrup")
+
+        self.add_rules(
+            name="recipe",
+            rules=[
+                # 2 of water + 1 of sugar make 1 of syrup, while "run" holds
+                dict(
+                    name="mixing",
+                    cond="run",
+                    cons={"water": 2, "sugar": 1},
+                    prod={"syrup": 1},
+                ),
+                # ... and nothing at all once it drops
+                dict(name="idle", cond="not run", prod={"syrup": 0}),
+            ],
+        )
+```
+
+Key points:
+
+- A rule set is declared **on the component**, not on an output flow. A reaction with correlated outputs cannot be stated one output at a time: declaring `prod={"x": 5, "y": 2}` keeps `x` and `y` in that proportion whatever the scale.
+- `cons` names resolve against the component's **input** flows, `prod` names against its **output** flows. A coefficient left out of a map defaults to `1`.
+- The **scarcest input sets the scale**. With the recipe above, water delivered at 10 and sugar at 2 produce 2 of syrup, not 5: sugar is the limiting reagent.
+- A rule declared **without a guard** is the *default rule* of its set and applies when no other rule matches. A set may declare at most one; declaring two is refused at declaration time.
+- A set with no default rule and no guard holding produces **zero** — it does not fall back on whichever rule it happens to carry.
+- **At most one guard may hold at a time.** Two holding together is a model error, raised at evaluation and naming both rules.
+- The flows a rule names must already be declared, so call `add_rules` *after* the `add_flow_*` calls.
+
+#### Guards
+
+A guard is a **conjunction** of operands. It may be written as a string, which is normalised into structured operands at declaration time, or given structurally in the first place. These two rules are identical:
+
+```python
+dict(cond="run and level >= 10", cons={"water": 3}, prod={"syrup": 1})
+
+dict(
+    cond=[
+        {"name": "run"},
+        {"name": "level", "op": ">=", "value": 10},
+    ],
+    cons={"water": 3},
+    prod={"syrup": 1},
+)
+```
+
+An operand mapping carries:
+
+- `name` — a flow of this component (a discrete flow, or a continuous one)
+- `negate` — `True` reads the boolean operand inverted; the string form spells it `not name` or `!name`
+- `op` and `value` — given together, they make the operand a **comparison** of the quantity that name carries against a threshold. The six operators are `<`, `<=`, `>`, `>=`, `==`, `!=`. A comparison cannot also be negated: use the opposite operator.
+- `port` — `"in"` or `"out"`, to disambiguate a name carried by both an input and an output flow of the component. Left out, the input is resolved first.
+
+The string grammar is deliberately minimal: a flat conjunction joined by `and`, with `not` / `!` and the six comparison operators. There is no disjunction, no parenthesis and no arithmetic — express a disjunction as several rules.
+
+Guards compile into a **watched mode automaton**, one state per rule. Two consequences matter to a modeller: a threshold such as `level >= 10` fires *at* the crossing rather than at the next integration step, and the coefficients are frozen while the mode holds. The active rule is readable back:
+
+```python
+my_plant.comp["MIXER"].rule_sets["recipe"].active_rule().name  # -> "mixing"
+```
+
+`active_rule()` returns `None` when the set declares no default and no guard holds.
+
+### Capacities
+
+A **capacity** is a volume a component holds over one or more of its continuous flows. It is declared independently of the transformation rules, so a buffer can be added to an existing model without touching its logic:
+
+```python
+import math
+
+
+class Tank(muscadet.ObjFlow):
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+
+        self.add_flow_continuous_in(name="water")
+        self.add_flow_continuous_out(name="water")
+
+        self.add_capacity(
+            name="tank",
+            flow="water",
+            capacity=1000.0,
+            side="in",
+            fill_rate=math.inf,
+            content_init={"water": 200.0},
+        )
+```
+
+The parameters are:
+
+- `name` — the capacity name, unique on the component. It is also the name of the **measurement channel** a sensor observes it through.
+- `flow` / `flows` — the held flows. `flow` is the single-flow short form; `flows` takes a list of names, or of mappings carrying `name` and `weight`.
+- `capacity` — the volume the held flows **share**, a single strictly positive scalar.
+- `side` — `"in"` places the whole capacity upstream of the component's rules, `"out"` downstream. Left out, it is resolved from the held flows and defaults to `"in"` for a flow carried by both sides. Every held flow must resolve to the same side.
+- `fill_rate` — what the volume claims **for itself** while it has room, on top of the demand crossing it. The default `0` is a pure pass-through buffer: it asks for exactly what passes through it, and therefore never stocks up. `math.inf` means "whatever the producer can deliver" — a tank connected to a pump fills at the pump's rate.
+- `content_init` — the initial raw quantity per held flow; an omitted flow starts empty.
+
+The bounds are what a capacity is for, and they are watched by the solver so they are reached exactly:
+
+- a **full** capacity accepts only what leaves it, so the demand it publishes upstream collapses and its producer delivers less;
+- an **empty** one serves only what currently transits through it.
+
+**Weights and composition.** Several constituents may share one volume. Each carries a `weight`, the volume one unit of it occupies:
+
+```python
+self.add_capacity(
+    name="vessel",
+    flows=[
+        {"name": "m1", "weight": 1},
+        {"name": "m2", "weight": 3},
+        {"name": "m3", "weight": 5},
+    ],
+    capacity=1000.0,
+    side="out",
+    content_init={"m1": 30.0, "m2": 10.0, "m3": 10.0},
+)
+```
+
+A draw on such a volume is composed at the constituents' **raw quantity** share — not at the share of the volume they occupy. A mixture therefore cannot serve a pure constituent: asking for more of one than its share of the draw allows serves only that share.
+
+What a capacity reports:
+
+```python
+tank = my_plant.comp["TANK"].capacities["tank"]
+
+tank.get_quantity("water")   # raw quantity held, of one flow
+tank.get_quantity()          # ... or of the capacity as a whole
+tank.get_fill("water")       # weighted fill
+tank.total_fill()            # total weighted fill, in [0, 1]
+tank.is_empty, tank.is_full
+tank.get_inflow("water"), tank.get_outflow("water")
+tank.weight_of("water")
+```
+
+### Allocation policies
+
+When the demands of several consumers exceed what a producer can supply, the output flow decides how to split what there is. The policy is declared on the continuous output:
+
+```python
+# Proportional to the demands -- the default, and the only policy that stays
+# meaningful when consumers come and go.
+self.add_flow_continuous_out(name="q", var_fed_default=10.0)
+
+# Fixed shares, keyed by CONSUMER COMPONENT NAME. They must sum to 1.
+self.add_flow_continuous_out(
+    name="q",
+    var_fed_default=10.0,
+    allocation="shares",
+    allocation_shares={"C1": 0.7, "C2": 0.3},
+)
+
+# Ordered priorities: the lowest number is served first, and a consumer no
+# priority is declared for is served last.
+self.add_flow_continuous_out(
+    name="q",
+    var_fed_default=10.0,
+    allocation="priority",
+    allocation_priorities={"C1": 1, "C2": 2, "C3": 3},
+)
+```
+
+Whatever the policy, a consumer proposed more than it demanded is capped at its demand and the policy is applied again to what is left, until no consumer exceeds its demand. A declaration that cannot be applied — an unknown policy name, shares that do not sum to 1, `"shares"` without an `allocation_shares` map — is refused at declaration time rather than showing up as a slightly wrong split inside a run.
+
+When none of the three policies expresses what a component needs, `allocation_fun` takes a Python callable `split(available, demands) -> {consumer: quantity}` and is used **in preference** to the declared policy. It only proposes a split; the surplus redistribution above still applies to it:
+
+```python
+def split_evenly(available, demands):
+    """One each, whatever is asked for."""
+    if not demands:
+        return {}
+    return {key: available / len(demands) for key in demands}
+
+
+self.add_flow_continuous_out(name="q", var_fed_default=10.0, allocation_fun=split_evenly)
+```
+
+### Failure modes on a continuous output: deratings
+
+A continuous output carries an **effective rate**, defaulting to 1, by which whatever it produces is multiplied. A failure mode declares its effect against the output flow, giving the rate it leaves:
+
+```python
+my_plant.comp["P"].add_delay_failure_mode(
+    name="wear",
+    failure_time=13.0,
+    failure_effects=[("water", 0.4)],  # 40 % of nominal while the mode holds
+    repair_time=1e6,
+)
+
+my_plant.comp["P"].add_exp_failure_mode(
+    name="cavitation",
+    failure_rate=1e-3,
+    failure_effects=[("water", 0.0)],  # a total loss of production
+    repair_rate=1e-2,
+)
+```
+
+- The effect pattern is matched on the flow name **and** on the name of the variable it exports, so `"water"` and `"water_fed_out"` designate the same output.
+- A rate of `0` expresses a **total loss of production**. Continuous flows carry no separate boolean availability gate: the one number expresses both the cut and the degradation.
+- A mode that derates on one state returns the output to its nominal rate on the other, unless it declares a value there itself (a mode repairing to a degraded rather than an as-new state is a legitimate model).
+- The same declaration works with `add_atm2states`, and the effect-string form carries numeric values: `comp.compute_effects_tuples("water=0.25")` yields `[("water", 0.25)]`.
+
+#### Concurrent deratings compose by minimum
+
+**When several failure modes derate the same continuous output at once, the effective rate is the minimum of the active deratings.** Two modes leaving 0.5 and 0.8 of an output give an effective rate of 0.5 — not 0.4, their product, and not whichever value the mode that fired last happened to write.
+
+MUSCADET computes that minimum itself, and allocates **one derating variable per (mode, output flow) pair**, named `{mode}_derating_{flow}`. A mode therefore clamps the variable *it* owns and never a shared one, which is what makes the rule order-independent and, more importantly, safe on repair: when the mode leaving 0.5 repairs while the mode leaving 0.8 still holds, the effective rate becomes 0.8. On a single shared variable the repair would have written 1 back and hidden a degradation that never went away.
+
+The rate and the per-mode variables are readable back:
+
+```python
+flow = my_plant.comp["P"].flows_out["water"]
+
+flow.get_effective_rate()                  # the minimum over the active deratings
+flow.derating                              # {mode name: variable}
+my_plant.comp["P"].derating_vars_of("wear")  # {variable basename: variable}
+```
+
+### Driving a discrete output from a continuous value
+
+A boolean output may be conditioned on a continuous quantity: `var_prod_cond` accepts the very same `{name, op, value}` comparison operand a rule guard uses. That is the whole declaration of a threshold alarm — no component code reads the level, and no equation is written by hand:
+
+```python
+class Alarm(muscadet.ObjFlow):
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+
+        self.add_flow_continuous_in(name="level")
+        self.add_flow(
+            dict(
+                cls="FlowDiscreteOut",
+                name="high",
+                var_prod_cond=[{"name": "level", "op": ">=", "value": 80.0}],
+            )
+        )
+```
+
+The same operand thresholds a level read over a **measurement link** — a read-only channel through which a component observes another component's capacity. It carries no quantity and enters no allocation:
+
+```python
+class LevelAlarm(muscadet.ObjFlow):
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+
+        self.add_measurement_in(name="tank")
+        self.add_flow(
+            dict(
+                cls="FlowDiscreteOut",
+                name="high",
+                var_prod_cond=[{"name": "tank", "op": ">=", "value": 80.0}],
+            )
+        )
+```
+
+and it is wired with an ordinary `connect`, from the capacity holder's exported level to the observer's imported one:
+
+```python
+my_plant.connect("TANK", "tank_level_out", "ALARM", "tank_level_in")
+```
+
+### The sensor pattern: gating production on a level
+
+A rule guard may read a flow, but **not** a capacity level. To make production depend on a level — a pump that refills a tank, a battery that stops charging when full — read the level over a measurement link and drive a discrete control output, which a producing component's rule guard then reads. That is the sensor pattern, and the shipped `SensorContinuous` is its ready-made form.
+
+Because a control loop closed through a single threshold oscillates around it, a sensor carries a **deadband**: `activate` is the level at which the control output comes on, `release` the level at which it goes off, and between them the output holds whatever it already was. Declaring no `release` makes the two coincide — the degenerate single-threshold case.
+
+```python
+import muscadet
+from muscadet.kb.continuous import (
+    CapacityContinuous,
+    ConsumerContinuous,
+    SensorContinuous,
+    SourceContinuous,
+)
+
+my_loop = muscadet.System(name="Sensor pattern")
+
+# A source whose rate is gated by a discrete control port
+my_loop.add_component(name="SRC", cls="SourceContinuous", flow="q", rate=2.0, control="fill")
+# The tank it fills, holding 10 to start with
+my_loop.add_component(
+    name="CAP",
+    cls="CapacityContinuous",
+    flow="q",
+    capacity=100.0,
+    capacity_name="tank",
+    content_init={"q": 10.0},
+)
+# What drains it
+my_loop.add_component(name="SINK", cls="ConsumerContinuous", flow="q", demand=1.0)
+# ... and the sensor closing the loop: call for water below 4, release above 8
+my_loop.add_component(
+    name="SENS",
+    cls="SensorContinuous",
+    measurement="tank",
+    control="fill",
+    direction="below",
+    activate=4.0,
+    release=8.0,
+)
+
+my_loop.connect_flow(source="SRC", target="CAP", flow_name="q")
+my_loop.connect_flow(source="CAP", target="SINK", flow_name="q")
+my_loop.connect("CAP", "tank_level_out", "SENS", "tank_level_in")
+my_loop.connect_flow(source="SENS", target="SRC", flow_name="fill")
+```
+
+`direction` says which way the level activates the sensor: `"above"` for a high-level detector, in which case `release` must not exceed `activate`, and `"below"` for a low-level one, in which case it must not fall below it. A band declared the wrong way round is refused at declaration time.
+
+The connection graph above carries a loop — source to capacity, capacity to sensor, sensor back to source — and the system starts all the same: neither a measurement link nor a discrete control port is a continuous flow, so neither takes part in the acyclicity check that continuous flows are subject to.
+
+### The shipped continuous components
+
+MUSCADET ships five domain-neutral continuous components in `muscadet.kb.continuous`. Import them, and they resolve by name in `add_component(cls=...)`:
+
+| Class                    | What it is                                                                    |
+|--------------------------|-------------------------------------------------------------------------------|
+| `SourceContinuous`       | a continuous output delivering a declared `rate`, optionally gated by a `control` port |
+| `TransformerContinuous`  | continuous inputs turned into continuous outputs by rules given as a **parameter** |
+| `CapacityContinuous`     | a volume held over one or more flows: buffer (`ports="both"`), accumulator (`"in"`) or reservoir (`"out"`) |
+| `ConsumerContinuous`     | a continuous input publishing a declared `demand`                             |
+| `SensorContinuous`       | a capacity level read over a measurement link, driving a discrete control output |
+
+A transformer takes its rules as a parameter, so a two-in two-out reaction needs no subclass at all:
+
+```python
+my_plant.add_component(
+    name="T",
+    cls="TransformerContinuous",
+    flows_in=["a", "b"],
+    flows_out=["x", "y"],
+    rules=[dict(cons={"a": 10, "b": 50}, prod={"x": 5, "y": 2})],
+)
+```
+
+Anything carrying domain knowledge — an electrolyser with a membrane leak percentage, a battery with a start-up policy — stays with the project that needs it.
+
+### A worked example
+
+[`examples/continuous_01`](examples/continuous_01/continuous_01.py) puts rules, a capacity, a sensor and a derating failure mode into one model: a bottling line whose pump is gated by a level sensor, degraded mid-run by a derating mode until the tank empties and the line is short-served, then idled by a discrete command. Run it with:
+
+```sh
+python examples/continuous_01/continuous_01.py
+```
+
+It prints one row per event the solver stopped at, and a summary of what the trace shows.
+
 ## More Examples
 
 [here](examples/datacenter/README.md).

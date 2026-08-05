@@ -243,6 +243,7 @@ Except where stated otherwise, these use a component with discrete input `F4`, c
 **Deferred to implementation and validation** — does not block starting work.
 
 - Whether R13's mutual exclusivity proves too strict on real models. First-match-wins is the fallback, to be settled while rebuilding the hydrogen model.
+- Whether a derating should also reduce what a component consumes. It currently scales production only, so a degraded transformer draws full input for reduced output. That is defensible — a degraded process wastes feedstock — but it is unstated and surprising, and the shipped example sidesteps it by derating a source instead. Settle it against the hydrogen model, where leak percentages make the question concrete.
 
 ---
 
