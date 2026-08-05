@@ -5,6 +5,7 @@ from .flow_continuous import FlowContinuous
 from .ordering import (
     CAPACITY_ORDER_BASE,
     EquationRegistration,
+    component_is_continuous,
     register_equation_order,
 )
 import re
@@ -92,13 +93,14 @@ class System(cod3s.PycSystem):
 
     @staticmethod
     def component_has_continuous_flow(comp):
-        """True when ``comp`` declares at least one continuous flow."""
-        for flows_attr in ("flows_in", "flows_out"):
-            flows = getattr(comp, flows_attr, None) or {}
-            for flow in flows.values():
-                if isinstance(flow, FlowContinuous):
-                    return True
-        return False
+        """True when ``comp`` declares at least one continuous flow.
+
+        Delegates to :func:`muscadet.ordering.component_is_continuous` so that
+        "this component is continuous" has ONE definition: a component could
+        otherwise count as continuous for the PDMP manager created here and as
+        discrete for the equation graph, or the reverse.
+        """
+        return component_is_continuous(comp)
 
     def add_component(self, **comp_specs):
         """Add a component, creating the PDMP manager on the first continuous one.
@@ -182,6 +184,26 @@ class System(cod3s.PycSystem):
         """
         manager = self.get_or_create_pdmp_manager()
         manager.addWatchedTransition(self._unwrap_bkd(transition))
+        return manager
+
+    def pdmp_add_watched_automaton(self, automaton):
+        """Register EVERY transition of ``automaton`` as a stop condition.
+
+        The three automata muscadet builds to catch a crossing -- a rule set's
+        mode automaton (R12), a capacity's empty/full bounds (R7) and the
+        threshold automaton of a discrete production condition (R22) -- differ
+        in shape but register identically: all of their transitions are
+        watched, so the solver stops the integration AT the crossing instead of
+        noticing it at the following step.
+
+        Returns
+        -------
+        The PDMP manager, or None for an automaton carrying no transition --
+        which registers nothing and therefore creates no manager either.
+        """
+        manager = None
+        for transition in automaton.transitions:
+            manager = self.pdmp_add_watched_transition(transition)
         return manager
 
     @staticmethod

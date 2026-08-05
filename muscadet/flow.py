@@ -4,7 +4,7 @@ import pydantic
 from colored import fg, attr
 
 import cod3s
-from .common import get_pyc_type
+from .common import fresh_instant_occ_law, get_pyc_type
 
 
 def _prod_cond_matrix_entry(matrix, i, j, default=None):
@@ -748,8 +748,11 @@ class FlowDiscreteOut(FlowModel):
         variables lazily, so a flow whose variables are declared after this
         runs is still read correctly.
         """
-        # Local import: rules imports flow_continuous, which imports this
-        # module -- one comparison vocabulary, and no import cycle.
+        # Local import, and NOT a cycle break: ``rules`` imports nothing from
+        # muscadet, so a module-level import would work. It is deferred because
+        # this module is the discrete-flow layer and only this one method needs
+        # the rules unit -- for its comparison vocabulary, so a guard (R21) and
+        # a discrete production condition (R22) compare a quantity the same way.
         from .rules import comparator as get_comparator
 
         readers = []
@@ -965,8 +968,11 @@ class FlowDiscreteOut(FlowModel):
         if not self.var_prod_cond_compare:
             return []
 
-        # Local import: rules imports flow_continuous, which imports this
-        # module -- one comparison vocabulary, and no import cycle.
+        # Local import, and NOT a cycle break: ``rules`` imports nothing from
+        # muscadet, so a module-level import would work. It is deferred because
+        # this module is the discrete-flow layer and only this one method needs
+        # the rules unit -- for its comparison vocabulary, so a guard (R21) and
+        # a discrete production condition (R22) compare a quantity the same way.
         from .rules import comparator as get_comparator
 
         system = comp.system()
@@ -1008,14 +1014,14 @@ class FlowDiscreteOut(FlowModel):
                             "is_interruptible": True,
                             # A fresh mapping per transition: cod3s rewrites the
                             # 'cls' entry in place while sanitizing it.
-                            "occ_law": {"cls": "delay", "time": 0},
+                            "occ_law": fresh_instant_occ_law(),
                         },
                         {
                             "name": trans_down,
                             "source": st_above,
                             "target": st_below,
                             "is_interruptible": True,
-                            "occ_law": {"cls": "delay", "time": 0},
+                            "occ_law": fresh_instant_occ_law(),
                         },
                     ],
                 )
@@ -1033,8 +1039,7 @@ class FlowDiscreteOut(FlowModel):
                         self.sm_prod_available_name, self.sm_prod_available_fun
                     )
 
-                for transition in aut.transitions:
-                    system.pdmp_add_watched_transition(transition)
+                system.pdmp_add_watched_automaton(aut)
 
                 comp.automata_d[aut.name] = aut
                 automata.append(aut)

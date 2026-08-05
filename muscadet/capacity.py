@@ -81,22 +81,10 @@ from colored import attr, fg
 
 import cod3s
 
+from .common import entity_label, fresh_instant_occ_law
+
 #: The two sides a capacity may sit on, relative to the component's rules.
 SIDES = ("in", "out")
-
-#: Occurrence law of the empty/full transitions: they fire as soon as their
-#: condition holds. Registered as watched transitions, so the solver stops the
-#: integration exactly at the crossing rather than at the following step (R7).
-_INSTANT_OCC_LAW = {"cls": "delay", "time": 0}
-
-
-def _fresh_instant_occ_law():
-    """A private copy of the instantaneous law.
-
-    ``TransitionModel.sanitize_occ_law`` rewrites the ``cls`` entry in place,
-    so a shared mapping would be capitalised twice.
-    """
-    return dict(_INSTANT_OCC_LAW)
 
 
 class CapacityFlow(cod3s.ObjCOD3S):
@@ -122,18 +110,22 @@ class CapacityFlow(cod3s.ObjCOD3S):
 
     @pydantic.field_validator("weight")
     @classmethod
-    def check_weight(cls, value):
+    def check_weight(cls, value, info):
         if not (value > 0):
             raise ValueError(
-                f"Capacity flow weight must be strictly positive, got {value}"
+                f"{entity_label('Capacity flow', info)}: weight must be strictly "
+                f"positive, got {value}"
             )
         return value
 
     @pydantic.field_validator("side")
     @classmethod
-    def check_side(cls, value):
+    def check_side(cls, value, info):
         if value is not None and value not in SIDES:
-            raise ValueError(f"Capacity flow side must be 'in' or 'out', got {value!r}")
+            raise ValueError(
+                f"{entity_label('Capacity flow', info)}: side must be 'in' or "
+                f"'out', got {value!r}"
+            )
         return value
 
     def __repr__(self) -> str:
@@ -233,6 +225,10 @@ class Capacity(cod3s.ObjCOD3S):
         None, exclude=True, repr=False, description="Backend 'full' state"
     )
 
+    #: Memoised :attr:`flow_names`. A private attribute rather than a field: it
+    #: is derived from ``flows`` and must never reach a dump.
+    _flow_names: typing.Optional[typing.List[str]] = pydantic.PrivateAttr(default=None)
+
     # ------------------------------------------------------------------
     # Declaration-time validation
     # ------------------------------------------------------------------
@@ -260,24 +256,31 @@ class Capacity(cod3s.ObjCOD3S):
 
     @pydantic.field_validator("capacity")
     @classmethod
-    def check_capacity(cls, value):
+    def check_capacity(cls, value, info):
         if not (value > 0):
-            raise ValueError(f"Capacity volume must be strictly positive, got {value}")
+            raise ValueError(
+                f"{entity_label('Capacity', info)}: volume must be strictly "
+                f"positive, got {value}"
+            )
         return value
 
     @pydantic.field_validator("side")
     @classmethod
-    def check_side(cls, value):
+    def check_side(cls, value, info):
         if value not in SIDES:
-            raise ValueError(f"Capacity side must be 'in' or 'out', got {value!r}")
+            raise ValueError(
+                f"{entity_label('Capacity', info)}: side must be 'in' or 'out', "
+                f"got {value!r}"
+            )
         return value
 
     @pydantic.field_validator("fill_rate")
     @classmethod
-    def check_fill_rate(cls, value):
+    def check_fill_rate(cls, value, info):
         if value < 0 or value != value:  # negative or NaN
             raise ValueError(
-                f"Capacity fill rate must be positive or zero, got {value}"
+                f"{entity_label('Capacity', info)}: fill rate must be positive "
+                f"or zero, got {value}"
             )
         return value
 
@@ -313,8 +316,16 @@ class Capacity(cod3s.ObjCOD3S):
 
     @property
     def flow_names(self) -> typing.List[str]:
-        """The held flow names, in declaration order."""
-        return [entry.name for entry in self.flows]
+        """The held flow names, in declaration order.
+
+        Memoised: the held flows are settled once :meth:`check_declaration` has
+        validated them -- nothing reassigns ``flows`` afterwards, and the only
+        thing resolution writes back is each entry's ``side`` -- while this is
+        read once per held flow per equation evaluation.
+        """
+        if self._flow_names is None:
+            self._flow_names = [entry.name for entry in self.flows]
+        return self._flow_names
 
     def flow_entry(self, flow_name) -> CapacityFlow:
         """The declaration entry of one held flow."""
@@ -405,28 +416,28 @@ class Capacity(cod3s.ObjCOD3S):
                     "source": st_empty,
                     "target": st_partial,
                     "is_interruptible": True,
-                    "occ_law": _fresh_instant_occ_law(),
+                    "occ_law": fresh_instant_occ_law(),
                 },
                 {
                     "name": trans_names["partial_empty"],
                     "source": st_partial,
                     "target": st_empty,
                     "is_interruptible": True,
-                    "occ_law": _fresh_instant_occ_law(),
+                    "occ_law": fresh_instant_occ_law(),
                 },
                 {
                     "name": trans_names["partial_full"],
                     "source": st_partial,
                     "target": st_full,
                     "is_interruptible": True,
-                    "occ_law": _fresh_instant_occ_law(),
+                    "occ_law": fresh_instant_occ_law(),
                 },
                 {
                     "name": trans_names["full_partial"],
                     "source": st_full,
                     "target": st_partial,
                     "is_interruptible": True,
-                    "occ_law": _fresh_instant_occ_law(),
+                    "occ_law": fresh_instant_occ_law(),
                 },
             ],
         )
@@ -464,8 +475,7 @@ class Capacity(cod3s.ObjCOD3S):
         system.pdmp_add_ode_variable(self.var_qty_total)
         system.pdmp_add_explicit_variable(self.var_fill_total)
 
-        for transition in self.automaton.transitions:
-            system.pdmp_add_watched_transition(transition)
+        system.pdmp_add_watched_automaton(self.automaton)
 
     # ------------------------------------------------------------------
     # The capacity's own equation

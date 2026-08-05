@@ -105,6 +105,8 @@ import pydantic
 
 import cod3s
 
+from .common import entity_label, fresh_instant_occ_law
+
 #: The six comparison operators a numeric guard operand may carry.
 COMPARISON_OPERATORS = ("<", "<=", ">", ">=", "==", "!=")
 
@@ -122,11 +124,6 @@ UNCONSTRAINED_SCALE = 1.0
 #: no default rule. Production is zero there (R14).
 NO_RULE = "none"
 
-#: Occurrence law of a mode transition: it fires as soon as its guard holds.
-#: Registered as a watched transition, so a threshold is crossed exactly rather
-#: than at the following integration step (R12).
-_INSTANT_OCC_LAW = {"cls": "delay", "time": 0}
-
 #: The comparison operators of a numeric guard operand, as callables.
 _COMPARATORS = {
     "<": operator.lt,
@@ -136,15 +133,6 @@ _COMPARATORS = {
     "==": operator.eq,
     "!=": operator.ne,
 }
-
-
-def _fresh_instant_occ_law():
-    """A private copy of the instantaneous law.
-
-    ``TransitionModel.sanitize_occ_law`` rewrites the ``cls`` entry in place,
-    so a shared mapping would be capitalised twice.
-    """
-    return dict(_INSTANT_OCC_LAW)
 
 
 # One operand of a guard string: an optional negation ("not x" / "!x"), a flow
@@ -330,20 +318,21 @@ class RuleOperand(cod3s.ObjCOD3S):
 
     @pydantic.field_validator("op")
     @classmethod
-    def check_op(cls, value):
+    def check_op(cls, value, info):
         if value is not None and value not in COMPARISON_OPERATORS:
             raise ValueError(
-                f"Guard operand 'op' must be one of "
-                f"{', '.join(COMPARISON_OPERATORS)}, got {value!r}"
+                f"{entity_label('Guard operand', info, quote=True)}: 'op' must "
+                f"be one of {', '.join(COMPARISON_OPERATORS)}, got {value!r}"
             )
         return value
 
     @pydantic.field_validator("port")
     @classmethod
-    def check_port(cls, value):
+    def check_port(cls, value, info):
         if value is not None and value not in PORTS:
             raise ValueError(
-                f"Guard operand 'port' must be 'in' or 'out', got {value!r}"
+                f"{entity_label('Guard operand', info, quote=True)}: 'port' "
+                f"must be 'in' or 'out', got {value!r}"
             )
         return value
 
@@ -621,6 +610,16 @@ class RuleSet(cod3s.ObjCOD3S):
         ),
     )
 
+    #: Memoised :attr:`consumed_flows` / :attr:`produced_flows`. Private
+    #: attributes rather than fields: they are derived from ``rules`` and must
+    #: never reach a dump.
+    _consumed_flows: typing.Optional[typing.List[str]] = pydantic.PrivateAttr(
+        default=None
+    )
+    _produced_flows: typing.Optional[typing.List[str]] = pydantic.PrivateAttr(
+        default=None
+    )
+
     @pydantic.field_validator("rules", mode="before")
     @classmethod
     def normalize_rules(cls, value):
@@ -661,6 +660,15 @@ class RuleSet(cod3s.ObjCOD3S):
         """The guarded rules, in declaration order."""
         return [rule for rule in self.rules if not rule.is_default]
 
+    def _footprint(self, side: str) -> typing.List[str]:
+        """Deduplicated flow names of one coefficient map, in declaration order."""
+        names = []
+        for rule in self.rules:
+            for name in getattr(rule, side):
+                if name not in names:
+                    names.append(name)
+        return names
+
     @property
     def consumed_flows(self) -> typing.List[str]:
         """Every input flow name ANY rule of the set consumes, in order.
@@ -668,23 +676,25 @@ class RuleSet(cod3s.ObjCOD3S):
         The whole set's footprint, not the active rule's: a flow the previously
         active mode drew on must be brought back to zero when another mode takes
         over, or it would keep the rate that mode left on it.
+
+        Memoised: a rule's ``cons`` map is settled at declaration -- resolution
+        only binds guard operands to flow objects, and nothing writes a
+        coefficient map afterwards -- while both sweeps read this once per rule
+        set per equation evaluation.
         """
-        names = []
-        for rule in self.rules:
-            for name in rule.cons:
-                if name not in names:
-                    names.append(name)
-        return names
+        if self._consumed_flows is None:
+            self._consumed_flows = self._footprint("cons")
+        return self._consumed_flows
 
     @property
     def produced_flows(self) -> typing.List[str]:
-        """Every output flow name ANY rule of the set produces, in order."""
-        names = []
-        for rule in self.rules:
-            for name in rule.prod:
-                if name not in names:
-                    names.append(name)
-        return names
+        """Every output flow name ANY rule of the set produces, in order.
+
+        Memoised for the same reason as :attr:`consumed_flows`.
+        """
+        if self._produced_flows is None:
+            self._produced_flows = self._footprint("prod")
+        return self._produced_flows
 
     def active_rule(self) -> typing.Optional[Rule]:
         """The rule whose production is evaluated, or None to produce zero.
@@ -902,7 +912,7 @@ class RuleMode:
                         "source": self.state_name(source),
                         "target": self.state_name(target),
                         "is_interruptible": True,
-                        "occ_law": _fresh_instant_occ_law(),
+                        "occ_law": fresh_instant_occ_law(),
                     }
                 )
                 conditions[name] = self._condition(target)
@@ -929,8 +939,7 @@ class RuleMode:
 
     def register(self, system):
         """Register every mode transition as a watched transition (R12)."""
-        for transition in self.automaton.transitions:
-            system.pdmp_add_watched_transition(transition)
+        system.pdmp_add_watched_automaton(self.automaton)
 
     # ------------------------------------------------------------------
     # Representation

@@ -1,15 +1,32 @@
 """
 Muscadet Object Flow Module
 
-This module provides the core classes for modeling components in discrete stochastic flow systems.
-It defines the fundamental building blocks for creating complex system models with flows, automata,
-and failure modes.
+This module provides the core classes for modeling components in stochastic flow
+systems, discrete and continuous alike. It defines the fundamental building
+blocks for creating complex system models with flows, transformation rules,
+capacities, automata and failure modes.
+
+A component declares two families of flow, and may carry both at once:
+
+- **discrete** flows, boolean signals combined by ``and`` / ``or`` logic and
+  gated by a production condition;
+- **continuous** flows, real-valued rates that the PDMP solver integrates.
+
+What a component does with its continuous flows is declared on the component
+itself, in three independent layers (KD14): **rules** transform inputs into
+outputs at a scale set by the scarcest of them, **capacities** buffer a flow
+upstream or downstream of those rules, and **measurement links** let another
+component read a capacity's level without exchanging any quantity. A component
+declaring no rule at all transfers each continuous input to the output of the
+same name (R31).
 
 Main Classes
 ------------
 ObjFlow : cod3s.PycComponent
-    The primary component class for modeling flow-based systems. Supports input/output flows,
-    automata, and failure modes with rich visualization capabilities.
+    The primary component class for modeling flow-based systems. Supports
+    discrete and continuous input/output flows, transformation rules,
+    capacities, measurement links, automata and failure modes, with rich
+    visualization capabilities.
 
 ObjFailureMode : cod3s.PycComponent
     Base class for modeling failure modes that can affect multiple target components
@@ -29,7 +46,21 @@ FailureModeExp : cod3s.ObjCOD3S
 
 Key Features
 ------------
-- Flow-based component modeling with input/output flows
+- Flow-based component modeling with input/output flows, discrete (boolean) and
+  continuous (real-valued)
+- Transformation rules with guards, selected through a watched mode automaton so
+  a threshold is crossed exactly rather than at the following step (KD7, R12)
+- Capacities: a volume held over one or more continuous flows, upstream or
+  downstream of the rules, which buffers, throttles and fills (R7, R35, R36)
+- Measurement links: a read-only export of a capacity's level, which carries no
+  quantity and enters no allocation (R33)
+- Two-sweep evaluation -- demand upstream, then production downstream -- ordered
+  automatically from the connection graph, so no model ever writes an equation
+  order down (R8, R30)
+- Allocation policies splitting what an output delivers among its consumers,
+  declared or overridden in Python (R16, R17)
+- Derating: what the failure modes bearing on a continuous output leave of its
+  rate, the minimum over their per-mode variables (R18, R20)
 - Automata-based state management and transitions
 - Multiple failure mode types (exponential, delay-based)
 - Rich colored console output for debugging and visualization
@@ -125,6 +156,13 @@ import typing
 import pydantic
 
 
+def _filter_continuous(flows):
+    """The continuous entries of a flow dict, in declaration order."""
+    return {
+        name: flow for name, flow in flows.items() if isinstance(flow, FlowContinuous)
+    }
+
+
 class ObjFlow(cod3s.PycComponent):
     """
     A class to represent a component in a discrete stochastic flow system.
@@ -215,12 +253,22 @@ class ObjFlow(cod3s.PycComponent):
         # with add_capacity, INDEPENDENTLY of the rules (KD14).
         self.capacities = {}
 
+        # The same capacities, keyed by (held flow name, side): the index
+        # get_capacity_of_flow answers KTD13's counterparty substitution from.
+        # Built by register_capacity, at declaration time.
+        self._capacity_index = {}
+
         # Measurement links this component imports, keyed by channel name.
         self.measurements_in = {}
 
         # True once ``compute_capacities`` was registered as a PDMP equation
         # method for this component: one registration covers every capacity.
         self._capacity_equation_registered = False
+
+        # Demand bounds read by the demand sweep, for the production sweep of
+        # the SAME evaluation to reuse. Emptied at the head of compute_demand;
+        # see get_output_request for why the two sweeps may share a reading.
+        self._demand_bound = {}
 
         self.params = {}
         self.has_default_out_automata = create_default_out_automata
@@ -815,6 +863,10 @@ class ObjFlow(cod3s.PycComponent):
         else:
             raise ValueError(f"Output (on trigger) flow {flow_name} already exists")
 
+    # ------------------------------------------------------------------
+    # Continuous flow declaration (U2, R5, R16)
+    # ------------------------------------------------------------------
+
     def add_flow_continuous_in(self, **params):
         """
         Adds a continuous (real-valued) input flow to the component.
@@ -823,10 +875,34 @@ class ObjFlow(cod3s.PycComponent):
         so that ``auto_connect`` / ``connect_flow`` keep finding it by name; use
         ``flows_continuous_in`` to enumerate only the continuous ones.
 
+        A continuous input aggregates its connections by SUM -- each producer
+        contributing the share it allocated to this consumer, not the total it
+        publishes (R16) -- and publishes a demand back over those same
+        connections (R5).
+
         Parameters
         ----------
+        name : str
+            Flow name. Must be unique among the component's input flows, and is
+            what ``connect_flow`` matches an output of the same name against.
+        var_in_default : float, optional
+            What the flow reads while nothing is connected to it. Defaults to
+            ``0.0``.
+        var_demand_default : float, optional
+            The demand this input claims when the component derives none for it
+            -- the DECLARED demand of a pure consumer, which has no output to
+            map a demand back from (R34). Also what is published before the
+            first demand sweep has run. Defaults to ``0.0``.
+        component_authorized : list of dict, optional
+            Connection authorization patterns, as on a discrete flow.
         **params : dict
-            Parameters for the continuous input flow.
+            Any other :class:`~muscadet.flow_continuous.FlowContinuousIn`
+            field.
+
+        Raises
+        ------
+        ValueError
+            If an input flow of that name already exists.
         """
         flow_name = params.get("name")
         if not (flow_name in self.flows_in):
@@ -842,10 +918,52 @@ class ObjFlow(cod3s.PycComponent):
         ``var_prod_cond`` boolean production condition it normalises belongs to
         the discrete family only.
 
+        One variable is exported to every connection, so it carries the TOTAL
+        delivered and the split among the consumers is held on the flow. How
+        that split is computed is declared here, with the allocation keys below
+        (R16) or with a Python rule of the component's own (R17).
+
         Parameters
         ----------
+        name : str
+            Flow name. Must be unique among the component's output flows.
+        var_fed_default : float, optional
+            The rate the output can produce when no rule and no transfer names
+            it -- i.e. what makes it a pure SOURCE. Defaults to ``0.0``.
+        var_demand_in_default : float, optional
+            Aggregated demand read while no consumer is connected. Defaults to
+            ``0.0``; note that an output with NO connection at all is unbounded
+            rather than this value, and throttles nothing.
+        allocation : str, optional
+            How an insufficient supply is split among the consumers (R16):
+            ``"proportional"`` to their demands (the default), ``"shares"`` at
+            the fixed shares of ``allocation_shares``, or ``"priority"`` in the
+            order of ``allocation_priorities``.
+        allocation_shares : dict, optional
+            ``{consumer component name: share}`` of the ``"shares"`` policy.
+            Must sum to 1; a consumer no share is declared for takes none.
+        allocation_priorities : dict, optional
+            ``{consumer component name: priority}`` of the ``"priority"``
+            policy. The lowest number is served first, consumers sharing a
+            priority split their allotment proportionally to their demands, and
+            a consumer no priority is declared for is served last.
+        allocation_fun : callable, optional
+            The Python extension point of R17: ``split(available, demands) ->
+            {consumer: quantity}``, used in PREFERENCE to the declared policy.
+            It proposes a split and inherits the surplus redistribution, so it
+            never has to reimplement the convergence.
+        component_authorized : list of dict, optional
+            Connection authorization patterns, as on a discrete flow.
         **params : dict
-            Parameters for the continuous output flow.
+            Any other :class:`~muscadet.flow_continuous.FlowContinuousOut`
+            field.
+
+        Raises
+        ------
+        ValueError
+            If an output flow of that name already exists, or if the declared
+            allocation policy cannot be applied -- an unknown policy name, or a
+            share map that does not sum to 1.
         """
         flow_name = params.get("name")
         if not (flow_name in self.flows_out):
@@ -855,21 +973,47 @@ class ObjFlow(cod3s.PycComponent):
 
     @property
     def flows_continuous_in(self):
-        """Continuous input flows only, in declaration order."""
-        return {
-            name: flow
-            for name, flow in self.flows_in.items()
-            if isinstance(flow, FlowContinuous)
-        }
+        """Continuous input flows only, in declaration order.
+
+        Frozen by :meth:`freeze_continuous_flows`, filtered on the fly while
+        the component is still declaring its flows.
+        """
+        cached = getattr(self, "_flows_continuous_in", None)
+        return _filter_continuous(self.flows_in) if cached is None else cached
 
     @property
     def flows_continuous_out(self):
-        """Continuous output flows only, in declaration order."""
-        return {
-            name: flow
-            for name, flow in self.flows_out.items()
-            if isinstance(flow, FlowContinuous)
-        }
+        """Continuous output flows only, in declaration order.
+
+        Frozen by :meth:`freeze_continuous_flows`, filtered on the fly while
+        the component is still declaring its flows.
+        """
+        cached = getattr(self, "_flows_continuous_out", None)
+        return _filter_continuous(self.flows_out) if cached is None else cached
+
+    def freeze_continuous_flows(self):
+        """Filter the continuous-flow views once, at the end of declaration.
+
+        Both views are read several times per component per equation
+        evaluation -- i.e. on every integration step of every sequence of every
+        run -- and what they filter is closed by then: every declaration entry
+        point (:meth:`add_flow` and the ``add_flow_*`` helpers) refuses a name
+        already present, so a flow is never added twice nor replaced, and a
+        flow declared after :meth:`set_flows` would carry no backend variable
+        at all. Filtering once here is what keeps ``isinstance`` over every
+        declared flow off the hot path.
+
+        Called at the end of :meth:`set_flows`, which is the one point both
+        construction paths go through: the constructor's own call, and the
+        explicit call a ``partial_init=True`` caller makes once it has added
+        its flows.
+        """
+        self._flows_continuous_in = _filter_continuous(self.flows_in)
+        self._flows_continuous_out = _filter_continuous(self.flows_out)
+
+    # ------------------------------------------------------------------
+    # Capacity declaration (KD14, R28, R33)
+    # ------------------------------------------------------------------
 
     def add_capacity(
         self,
@@ -1090,7 +1234,14 @@ class ObjFlow(cod3s.PycComponent):
         empty/full transitions are registered as WATCHED so a bound is crossed
         exactly rather than at the next integration step (R7). One equation
         method covers every capacity of the component.
+
+        This is also where the ``(flow, side)`` index :meth:`get_capacity_of_flow`
+        answers from is built: ``resolve_capacity`` has settled the capacity's
+        side and its held flows by now, and neither changes afterwards.
         """
+        for flow_name in capacity.flow_names:
+            self._capacity_index[(flow_name, capacity.side)] = capacity
+
         system = self.system()
 
         capacity.register(system)
@@ -1143,11 +1294,12 @@ class ObjFlow(cod3s.PycComponent):
 
         This is the lookup KTD13's counterparty substitution rests on: with a
         capacity interposed, the rules face it instead of the flow.
+
+        Answered from the index :meth:`register_capacity` builds rather than by
+        scanning the declared capacities: both sweeps reach here several times
+        per flow per equation evaluation.
         """
-        for capacity in self.capacities.values():
-            if capacity.side == side and flow_name in capacity.flow_names:
-                return capacity
-        return None
+        return self._capacity_index.get((flow_name, side))
 
     def add_measurement_in(self, name, **params):
         """
@@ -1182,6 +1334,10 @@ class ObjFlow(cod3s.PycComponent):
         self.measurements_in[name] = measurement
 
         return measurement
+
+    # ------------------------------------------------------------------
+    # Rule declaration (KD7, R12, R13, R14)
+    # ------------------------------------------------------------------
 
     def add_rules(self, name, rules=None, **params):
         """
@@ -1418,6 +1574,11 @@ class ObjFlow(cod3s.PycComponent):
         must stay a pure function of the current variable values and must not
         create or register anything.
         """
+        # This evaluation's demand bounds, discarded from the previous one. It
+        # is filled by get_output_demand below and consulted by the production
+        # sweep -- a per-evaluation hand-off, never a memo across evaluations.
+        self._demand_bound.clear()
+
         self.apply_demand(self.evaluate_demand())
 
     def evaluate_demand(self):
@@ -1552,6 +1713,10 @@ class ObjFlow(cod3s.PycComponent):
             return UNBOUNDED
 
         demand = flow.get_demand_bound()
+
+        # Kept for the production sweep of this same evaluation, which needs
+        # the bound BEFORE the capacity claim below (see get_output_request).
+        self._demand_bound[flow_name] = demand
 
         capacity = self.get_capacity_of_flow(flow_name, "out")
         if capacity is not None:
@@ -2064,8 +2229,21 @@ class ObjFlow(cod3s.PycComponent):
         what a buffered one produces travels straight through the volume rather
         than accumulating in it. A tank stocks up when what DRAWS on it asks for
         less than what arrives, which is what a fill claim arranges (R36).
+
+        Reuses the bound :meth:`get_output_demand` already read this evaluation
+        rather than asking the flow again. The two readings cannot differ:
+        ``muscadet.ordering.register_equation_order`` allocates the WHOLE demand
+        band below the WHOLE production band, and a demand variable is written
+        by nothing but :meth:`apply_demand` -- so every demand in the system is
+        settled before the first production equation runs.
+
+        The fallback is not a safety net but a real case: a rule-less pure
+        source has no transferable flow, so the demand sweep never looks at its
+        output at all and there is nothing to reuse.
         """
-        demand = flow.get_demand_bound()
+        demand = self._demand_bound.get(flow.name)
+        if demand is None:
+            demand = flow.get_demand_bound()
 
         return rate if math.isinf(demand) else max(float(demand), 0.0)
 
@@ -2220,6 +2398,10 @@ class ObjFlow(cod3s.PycComponent):
                     occ_interruptible_21=True,
                     effects_21=[],
                 )
+
+        # Declaration is over: the two sweeps may now read the continuous-flow
+        # views without filtering the flow dicts again on every evaluation.
+        self.freeze_continuous_flows()
 
     def add_automaton_flow(self, aut):
         """

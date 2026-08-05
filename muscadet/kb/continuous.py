@@ -407,7 +407,7 @@ class SensorContinuous(muscadet.ObjFlow):
         ):
             self.add_flow(
                 dict(
-                    cls="FlowOut",
+                    cls="FlowDiscreteOut",
                     name=f"{control}_{suffix}",
                     var_prod_cond=[{"name": measurement, "op": op, "value": value}],
                 )
@@ -418,7 +418,7 @@ class SensorContinuous(muscadet.ObjFlow):
         # in survives inside the band.
         self.add_flow(
             dict(
-                cls="FlowOut",
+                cls="FlowDiscreteOut",
                 name=control,
                 var_prod_default=True,
                 var_fed_available_out_init=False,
