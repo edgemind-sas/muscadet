@@ -60,6 +60,15 @@ Policy           What it does
 and :attr:`FlowContinuousOut.allocation_fun` is the Python extension point of
 R17, used in preference to the declared policy.
 
+A demand published upstream is not always the demand of a consumer: a capacity
+crossed on the way adds what it claims for its own filling and subtracts what it
+can no longer accept (:meth:`muscadet.capacity.Capacity.demand_claim`), which is
+how a tank stocks up (R36) and how a full one throttles its producer (R7). Such a
+claim may be :data:`UNBOUNDED` -- "whatever you can deliver" -- which needs no
+bound of its own: a delivery is the lesser of production and demand, so the
+producer's capability is what bounds it, and :func:`regularize_demands` turns it
+into a finite share before any split is proposed.
+
 Whatever the policy, :func:`allocate` wraps it in the **surplus redistribution**
 loop of F2: a consumer capped at its demand releases what it did not take, and
 the policy is applied again to the rest, until no consumer exceeds its demand.
@@ -461,11 +470,12 @@ class FlowContinuousIn(FlowContinuous):
         repr=False,
         description=(
             "What the component needs from this input, written by the demand "
-            "sweep BEFORE any capacity bound is applied. This is what the rules "
-            "may draw (a full capacity reduces what is published upstream, not "
-            "what the rules take from it). Unbounded until a sweep computes it, "
-            "so a component whose demand equation never runs produces exactly "
-            "what its inputs allow."
+            "sweep BEFORE any input capacity claims on it. This is what the "
+            "rules may draw: an input capacity changes what is published "
+            "upstream -- less once full (R7), more while it fills (R36) -- "
+            "never what the rules take from it. Unbounded until a sweep "
+            "computes it, so a component whose demand equation never runs "
+            "produces exactly what its inputs allow."
         ),
     )
 

@@ -87,7 +87,7 @@ flowchart TB
 - R5. A continuous input propagates a demand upstream, aggregated over the connections feeding it.
 - R6. The quantity delivered on a connection is the lesser of what the producer can produce and what the consumer demands.
 - R7. A capacity that has reached its volume reduces the demand propagated upstream. A capacity that is empty limits what its side can serve onward to what currently transits through it.
-- R36. A capacity that is not full claims its free headroom in the demand it propagates upstream, so it accumulates whatever its producer can deliver beyond what its consumers draw. Without this a buffer's inflow can never exceed its outflow and a standalone tank never fills.
+- R36. A capacity declares a fill rate at which it claims free headroom in the demand it propagates upstream, so it accumulates what its producer delivers beyond what its consumers draw. An unbounded rate means "whatever you can deliver" and is bounded by the producer, since delivery is already the lesser of production and demand. Declaring no rate leaves the capacity a pass-through buffer whose inflow never exceeds its outflow. The claim collapses when the capacity fills.
 - R8. Equation evaluation order is derived from the continuous-flow connection graph. A model author never declares an order, and adding a component never requires editing another component's declaration.
 - R34. A component maps the demand aggregated on an output back onto its inputs through the active rule's `prod` and `cons` coefficients. The mapping uses the declared coefficients, not the quantities actually available.
 
@@ -252,7 +252,7 @@ Except where stated otherwise, these use a component with discrete input `F4`, c
 
 Changed: R4, R7, R9, R14, R28-R32 — the declaration unit moved from the output flow to component-level transformation rules, capacities became independently declared with per-flow weights, the acyclicity, sensor and identity-transfer rules were added, and MUSCADET now ships five continuous components (R32). KD3, KD6 and KD13 were rewritten on the same dimension they already owned; KD14-KD18 are new. Every change was proposed and confirmed with the user during planning. R1-R3, R5, R6, R8, R10-R13, R15-R27 keep their original meaning.
 
-Corrected during implementation: R31's unmatched-flow error was written to fire on any missing counterpart, which would have rejected a pure source and a pure sink — neither has one by construction. It now scopes to wired flows on two-sided components.
+Corrected during implementation: R36 was first written as an unconditional claim. Implementation showed that makes a buffer compete with a real consumer on a shared source, and a declared fill rate is the more faithful shape anyway — the reference workload's battery charges at a nominal rate, not at infinite speed. R31's unmatched-flow error was written to fire on any missing counterpart, which would have rejected a pure source and a pure sink — neither has one by construction. It now scopes to wired flows on two-sided components.
 
 Added after the pre-implementation audit: R35 brings shared-volume composition extraction into scope, because the reference model turned out to depend on it in its control path rather than incidentally.
 

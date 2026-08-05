@@ -197,7 +197,9 @@ class CapacityContinuous(muscadet.ObjFlow):
     * ``"both"`` -- a **buffer**. Each flow is declared on both sides, so what
       the volume does not hold back it transfers unchanged. What it takes in is
       what is asked of it downstream, so it smooths a shortage rather than
-      stocking up.
+      stocking up -- unless a ``fill_rate`` is declared, in which case it also
+      claims that rate for itself and accumulates whatever its producer delivers
+      beyond what its consumers draw, until it is full (R36).
     * ``"in"`` -- an **accumulator**. Inputs only: it claims a declared
       ``demand`` of its own rather than one mapped from a downstream, and once
       at its volume it accepts only what leaves it, so the demand it publishes
@@ -224,6 +226,12 @@ class CapacityContinuous(muscadet.ObjFlow):
         implies.
     demand : float, optional
         Demand claimed on every input, for an accumulator. Defaults to 0.
+    fill_rate : float, optional
+        Rate the volume claims for ITSELF while it has room, on top of the
+        demand crossing it (R36). Defaults to 0 -- a pure buffer, which asks
+        for exactly what passes through it. ``math.inf`` means "whatever the
+        producer can deliver": a tank connected to a pump fills at the pump's
+        rate, since a delivery is already the lesser of production and demand.
     content_init : dict, optional
         Initial raw quantity per held flow.
     capacity_name : str, optional
@@ -267,6 +275,7 @@ class CapacityContinuous(muscadet.ObjFlow):
             capacity=kwargs.get("capacity"),
             side=kwargs.get("side", CAPACITY_PORTS[ports]),
             content_init=kwargs.get("content_init"),
+            fill_rate=float(kwargs.get("fill_rate", 0.0)),
         )
 
 

@@ -1524,9 +1524,16 @@ class ObjFlow(cod3s.PycComponent):
 
         - what the consumers ask for, :data:`~muscadet.flow_continuous.UNBOUNDED`
           when none is connected;
-        - what an interposed output capacity can still accept: once full it
+        - what an interposed output capacity makes of it
+          (:meth:`~muscadet.capacity.Capacity.demand_claim`): while it has room
+          it adds its own fill claim, so the rules run beyond what the consumers
+          draw and the buffer accumulates the difference (R36); once full it
           accepts only what currently leaves it, which is how a full capacity
           reduces the demand propagated upstream (R7).
+
+        The claim is ADDITIONAL to the R34 mapping and never replaces it: this
+        is the demand the rules face, which :meth:`get_demand_scale` then carries
+        back onto the inputs through the active rule's declared coefficients.
 
         Parameters
         ----------
@@ -1548,22 +1555,25 @@ class ObjFlow(cod3s.PycComponent):
 
         capacity = self.get_capacity_of_flow(flow_name, "out")
         if capacity is not None:
-            demand = min(demand, capacity.accept_limit(flow_name))
+            demand = capacity.demand_claim(demand, flow_name)
 
         return demand
 
     def apply_demand(self, demands):
         """
-        Publishes the demands upstream, throttled by the input capacities (R7).
+        Publishes the demands upstream, as the input capacities claim them (R7, R36).
 
         Two quantities, deliberately kept apart:
 
         - what the rules may draw, kept on the flow as ``demand_required`` and
-          read back by :meth:`get_input_available`;
-        - what is PUBLISHED upstream, which a full input capacity limits to what
-          currently leaves it -- the producer feeding a capacity at its volume
-          therefore delivers less (AE11), while the rules keep drawing from the
-          stock the capacity holds.
+          read back by :meth:`get_input_available`. It is the R34 mapping, and
+          an input capacity never changes it;
+        - what is PUBLISHED upstream, which the input capacity claims through
+          :meth:`~muscadet.capacity.Capacity.demand_claim`: with room left it
+          asks for its fill rate on top, and what arrives beyond what the rules
+          draw stays in the volume (R36); once full it asks only for what
+          currently leaves it, so the producer feeding a capacity at its volume
+          delivers less (AE11) while the rules keep drawing from the stock.
 
         Parameters
         ----------
@@ -1584,7 +1594,7 @@ class ObjFlow(cod3s.PycComponent):
 
             capacity = self.get_capacity_of_flow(flow_name, "in")
             if capacity is not None:
-                required = min(required, capacity.accept_limit(flow_name))
+                required = capacity.demand_claim(required, flow_name)
 
             flow.set_demand(required)
 
@@ -2049,7 +2059,11 @@ class ObjFlow(cod3s.PycComponent):
 
         The demand published by the consumers, and the produced ``rate`` when
         nothing is connected: an output nobody asks anything of delivers what it
-        produces, exactly as it did before demand existed.
+        produces, exactly as it did before demand existed. A capacity behind it
+        does not change that -- an unconnected output is a modelled sink, so
+        what a buffered one produces travels straight through the volume rather
+        than accumulating in it. A tank stocks up when what DRAWS on it asks for
+        less than what arrives, which is what a fill claim arranges (R36).
         """
         demand = flow.get_demand_bound()
 

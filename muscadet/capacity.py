@@ -66,8 +66,10 @@ Scope
 This module is the capacity's own declaration, integration and bookkeeping.
 Demand computation, allocation, rule evaluation and equation ordering live in
 later units; :meth:`Capacity.serve_limit` and :meth:`Capacity.accept_limit` are
-the bounds those units read, and :meth:`Capacity.split_draw` is the composition
-rule they apply to a withdrawal.
+the bounds those units read, :meth:`Capacity.demand_claim` is what a capacity
+makes of the demand crossing it -- filling while it has room (R36), throttling
+once full (R7) -- and :meth:`Capacity.split_draw` is the composition rule they
+apply to a withdrawal.
 """
 
 import math
@@ -165,6 +167,19 @@ class Capacity(cod3s.ObjCOD3S):
         description="Initial raw quantity per held flow; omitted flows start at 0",
     )
 
+    fill_rate: float = pydantic.Field(
+        0.0,
+        description=(
+            "Rate this capacity claims for itself, on EACH held flow, over and "
+            "above the demand it already carries, for as long as it has room "
+            "(R36). 0 -- the default -- is a pure buffer: it asks for exactly "
+            "what passes through it and therefore never stocks up. math.inf is "
+            "'whatever the producer can deliver', which needs no bound of its "
+            "own since a delivery is already the lesser of production and "
+            "demand (R6)."
+        ),
+    )
+
     # -- Backend handles. Never serialised: the declaration above is enough to
     # -- rebuild them, and they hold PyCATSHOO objects.
     var_qty: typing.Dict[str, typing.Any] = pydantic.Field(
@@ -255,6 +270,15 @@ class Capacity(cod3s.ObjCOD3S):
     def check_side(cls, value):
         if value not in SIDES:
             raise ValueError(f"Capacity side must be 'in' or 'out', got {value!r}")
+        return value
+
+    @pydantic.field_validator("fill_rate")
+    @classmethod
+    def check_fill_rate(cls, value):
+        if value < 0 or value != value:  # negative or NaN
+            raise ValueError(
+                f"Capacity fill rate must be positive or zero, got {value}"
+            )
         return value
 
     @pydantic.model_validator(mode="after")
@@ -565,6 +589,53 @@ class Capacity(cod3s.ObjCOD3S):
         if not self.is_full:
             return math.inf
         return self.get_outflow(flow_name)
+
+    def fill_claim(self, flow_name=None) -> float:
+        """What the capacity claims for ITSELF, on top of what it passes on (R36).
+
+        Its declared :attr:`fill_rate` for as long as there is room, and zero
+        once full -- the moment the throttling half of R7 takes over and cuts
+        the demand down to what currently leaves it.
+
+        A capacity is entitled to claim while any room is left, so the claim
+        does NOT taper with the remaining headroom: a claim shrinking to zero as
+        the level approaches the volume would make a tank fill asymptotically
+        and never reach the bound its own automaton watches.
+        """
+        if self.is_full:
+            return 0.0
+        return float(self.fill_rate)
+
+    def demand_claim(self, demand, flow_name=None) -> float:
+        """The demand the capacity carries upstream, given the one it holds.
+
+        The two halves of a capacity's effect on demand, in one closed-form
+        expression of values the reverse sweep already knows (KTD12):
+
+        - **filling** (R36) -- while there is room it ADDS its declared fill
+          rate to the demand passing through it, so it accumulates whatever its
+          producer delivers beyond what its consumers draw. Nothing here bounds
+          that claim: the delivery is already the lesser of production and
+          demand (R6), so the producer's own capability is what a tank fills at;
+        - **throttling** (R7) -- once full the claim collapses to zero and the
+          accept bound cuts the demand down to what currently leaves it, so the
+          producer feeding a capacity at its volume delivers less (AE11).
+
+        Parameters
+        ----------
+        demand : float
+            The demand already carried through the capacity -- what the
+            downstream asks of an output capacity, what the rules ask of an
+            input one. Possibly ``math.inf``.
+        flow_name : str, optional
+            The held flow the demand bears on.
+
+        Returns
+        -------
+        float
+            The demand to carry further upstream, possibly ``math.inf``.
+        """
+        return min(demand + self.fill_claim(flow_name), self.accept_limit(flow_name))
 
     # ------------------------------------------------------------------
     # Extraction (R35)
