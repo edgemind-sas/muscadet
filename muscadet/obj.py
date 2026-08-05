@@ -93,11 +93,13 @@ from .flow import (
     FlowOutTempo,
 )
 from .flow_continuous import (
+    UNBOUNDED,
     FlowContinuous,
     FlowContinuousIn,
     FlowContinuousOut,
 )
 from .rules import (
+    UNCONSTRAINED_SCALE,
     Rule,
     RuleMode,
     RuleSet,
@@ -111,6 +113,7 @@ from .capacity import (
     allocate_capacity_equation_order,
 )
 import cod3s
+import math
 import re
 import warnings
 import copy
@@ -1324,6 +1327,217 @@ class ObjFlow(cod3s.PycComponent):
         return flow, port
 
     # ------------------------------------------------------------------
+    # Demand -- the reverse sweep (R5, R7, R34)
+    # ------------------------------------------------------------------
+
+    def compute_demand(self):
+        """
+        PDMP equation: what this component asks its producers for.
+
+        Named after ``muscadet.ordering.DEMAND_EQUATION_METHOD``: the ordering
+        module looks this method up BY NAME on every node of the continuous-flow
+        graph and registers it with a graph-derived order on the **reverse**
+        sweep, so a consumer publishes its demand before the component feeding
+        it computes its own (R8). Nothing here, and nothing in a model, ever
+        writes an order down.
+
+        Demand travels the graph in the opposite direction to production (KD4):
+        each continuous input publishes upstream what the component needs from
+        it, and the producer then delivers the lesser of what it can produce and
+        what was asked for (R6).
+
+        Notes
+        -----
+        Evaluated by the solver, repeatedly, inside one integration step: it
+        must stay a pure function of the current variable values and must not
+        create or register anything.
+        """
+        self.apply_demand(self.evaluate_demand())
+
+    def evaluate_demand(self):
+        """
+        Computes what the component needs from each of its continuous inputs.
+
+        The mapping of R34: the demand aggregated on an output is carried back
+        onto the inputs through the active rule's ``prod`` and ``cons``
+        coefficients. It uses the **declared** coefficients, never the
+        quantities actually available -- a component capped by a scarce input
+        therefore still claims its nominal demand on the others, and over-claims
+        a shared upstream supply. Correcting it needs a second demand pass or an
+        iterative solve, both outside the two-sweep ordering; Scope Boundaries
+        records it.
+
+        A component declaring no rule transfers each input to the output of the
+        same name (R31), so its demand crosses it unchanged. An input no rule
+        and no transfer covers is a pure consumer's input: it claims the demand
+        it was DECLARED with, ``var_demand_default``.
+
+        Returns
+        -------
+        dict
+            ``{input flow name: demand}``, possibly ``math.inf`` where nothing
+            bounds it -- an output no consumer is connected to throttles no
+            input of the component producing it.
+
+        Raises
+        ------
+        ValueError
+            When two guards of one rule set hold at once (R13). The R31 mismatch
+            of a rule-less component is deliberately NOT raised here: it belongs
+            to the production sweep, where it was already reported, and a
+            component replacing that sweep with an equation of its own must not
+            be refused by the demand sweep instead.
+        """
+        demands = {}
+
+        def accumulate(flow_name, quantity):
+            demands[flow_name] = demands.get(flow_name, 0.0) + quantity
+
+        if self.rule_sets:
+            for rule_set in self.rule_sets.values():
+                # Every flow the SET consumes starts at zero, whichever of its
+                # rules is active: a rule set selecting nothing demands nothing,
+                # exactly as it produces nothing (R14).
+                for flow_name in rule_set.consumed_flows:
+                    accumulate(flow_name, 0.0)
+
+                rule = self.get_active_rule(rule_set)
+                if rule is None:
+                    continue
+
+                scale = self.get_demand_scale(rule)
+                for flow_name, coefficient in rule.cons.items():
+                    accumulate(flow_name, coefficient * scale)
+        else:
+            for flow_name in self.get_transferable_flows():
+                accumulate(flow_name, self.get_output_demand(flow_name))
+
+        # A continuous input no rule and no transfer covers claims what it was
+        # declared with: a pure consumer has no output to map a demand back from.
+        for flow_name, flow in self.flows_continuous_in.items():
+            demands.setdefault(flow_name, float(flow.var_demand_default))
+
+        return demands
+
+    def get_demand_scale(self, rule):
+        """
+        Returns the scale ``rule`` would have to run at to satisfy its outputs.
+
+        The scale is taken over the ``prod`` coefficients, as a **maximum**: the
+        rule's outputs are correlated by construction, so the scale that serves
+        them all is the one the most demanding of them needs. An output nothing
+        is connected to demands without bound, and a rule producing nothing at
+        all is limited by no output, so both fall back to the nominal scale.
+
+        Parameters
+        ----------
+        rule : muscadet.rules.Rule
+            The active rule of one of the component's rule sets.
+
+        Returns
+        -------
+        float
+            The scale, possibly ``math.inf``.
+        """
+        scales = [
+            self.get_output_demand(flow_name) / coefficient
+            for flow_name, coefficient in rule.prod.items()
+            if coefficient > 0
+        ]
+
+        if not scales:
+            return UNCONSTRAINED_SCALE
+
+        return max(scales)
+
+    def get_output_demand(self, flow_name):
+        """
+        Returns the demand an output carries back into the component.
+
+        Two bounds compose here:
+
+        - what the consumers ask for, :data:`~muscadet.flow_continuous.UNBOUNDED`
+          when none is connected;
+        - what an interposed output capacity can still accept: once full it
+          accepts only what currently leaves it, which is how a full capacity
+          reduces the demand propagated upstream (R7).
+
+        Parameters
+        ----------
+        flow_name : str
+            Name of an output flow of the component.
+
+        Returns
+        -------
+        float
+            The demand, possibly ``math.inf``. A discrete output carries no
+            demand channel and never throttles anything.
+        """
+        flow = self.flows_out.get(flow_name)
+
+        if not isinstance(flow, FlowContinuousOut):
+            return UNBOUNDED
+
+        demand = flow.get_demand_bound()
+
+        capacity = self.get_capacity_of_flow(flow_name, "out")
+        if capacity is not None:
+            demand = min(demand, capacity.accept_limit(flow_name))
+
+        return demand
+
+    def apply_demand(self, demands):
+        """
+        Publishes the demands upstream, throttled by the input capacities (R7).
+
+        Two quantities, deliberately kept apart:
+
+        - what the rules may draw, kept on the flow as ``demand_required`` and
+          read back by :meth:`get_input_available`;
+        - what is PUBLISHED upstream, which a full input capacity limits to what
+          currently leaves it -- the producer feeding a capacity at its volume
+          therefore delivers less (AE11), while the rules keep drawing from the
+          stock the capacity holds.
+
+        Parameters
+        ----------
+        demands : dict
+            ``{input flow name: demand}``, as returned by
+            :meth:`evaluate_demand`.
+        """
+        for flow_name, demand in demands.items():
+            flow = self.flows_in.get(flow_name)
+
+            # Only a continuous input carries a demand channel. A discrete input
+            # named by a rule is a gate, not a quantity.
+            if not isinstance(flow, FlowContinuousIn):
+                continue
+
+            required = max(float(demand), 0.0)
+            flow.demand_required = required
+
+            capacity = self.get_capacity_of_flow(flow_name, "in")
+            if capacity is not None:
+                required = min(required, capacity.accept_limit(flow_name))
+
+            flow.set_demand(required)
+
+    def get_input_required_demand(self, flow_name):
+        """
+        Returns what the rules may draw from an input, as the demand sweep sees it.
+
+        Unbounded for a discrete input, and for a continuous one whose demand
+        equation has not run: the production sweep then behaves exactly as it
+        did before demand existed, producing whatever the inputs allow.
+        """
+        flow = self.flows_in.get(flow_name)
+
+        if not isinstance(flow, FlowContinuousIn):
+            return UNBOUNDED
+
+        return flow.demand_required
+
+    # ------------------------------------------------------------------
     # Rule evaluation -- the production sweep (R3, R15, R31)
     # ------------------------------------------------------------------
 
@@ -1350,10 +1564,27 @@ class ObjFlow(cod3s.PycComponent):
         must stay a pure function of the current variable values and must not
         create or register anything.
         """
+        self.refresh_continuous_inputs()
+
         consumption, production = self.evaluate_production()
 
         self.apply_consumption(consumption)
         self.apply_production(production)
+
+    def refresh_continuous_inputs(self):
+        """
+        Mirrors what each continuous input receives onto its ``var_fed`` (R6).
+
+        The mirror is otherwise refreshed by a sensitive method, which the
+        solver runs when the value a producer EXPORTS changes -- and an
+        allocation can move without that value moving at all, when a producer
+        keeps delivering the same total and only the split among its consumers
+        changes. Rewriting it here, at the head of the forward sweep and
+        therefore after every producer has been evaluated, is what keeps the
+        input a model reads equal to the share it was allocated.
+        """
+        for flow in self.flows_continuous_in.values():
+            flow.var_fed.setValue(flow.get_delivered())
 
     def evaluate_production(self):
         """
@@ -1409,6 +1640,13 @@ class ObjFlow(cod3s.PycComponent):
                 transferred = self.get_input_transferred(flow_name)
                 accumulate(consumption, {flow_name: transferred})
                 accumulate(production, {flow_name: transferred})
+
+        # A continuous output no rule and no transfer names is a SOURCE: the
+        # value it was declared with is what it can produce. It appears here so
+        # that what it delivers is reconciled with the demand like any other
+        # production -- an output holding a rate nobody asks for delivers less.
+        for flow_name, flow in self.flows_continuous_out.items():
+            production.setdefault(flow_name, float(flow.var_fed_default))
 
         return consumption, production
 
@@ -1466,7 +1704,10 @@ class ObjFlow(cod3s.PycComponent):
         flow = self.flows_in[flow_name]
 
         if isinstance(flow, FlowContinuousIn):
-            return float(flow.var_in.sumValue(flow.var_in_default))
+            # Not the raw sum of the connections: a producer exports ONE value
+            # to all its consumers, so what this one receives is the share its
+            # producers allocated to it (R16).
+            return float(flow.get_delivered())
 
         return float(flow.var_fed.value())
 
@@ -1481,6 +1722,12 @@ class ObjFlow(cod3s.PycComponent):
         through it once empty (R7). Without one, the rules face the flow
         directly and draw what it delivers.
 
+        **Demand is the other bound.** A capacity holding stock serves without
+        limit and an entirely unbounded rule would run at its nominal scale, so
+        what the component actually needs from this input -- computed by the
+        demand sweep, before any capacity bound (R7) -- is what caps the draw. A
+        component asked for nothing draws nothing, however much stock it sits on.
+
         Parameters
         ----------
         flow_name : str
@@ -1489,31 +1736,35 @@ class ObjFlow(cod3s.PycComponent):
         Returns
         -------
         float
-            The drawable quantity, possibly ``math.inf`` when a capacity holding
-            stock serves without limit. :func:`muscadet.rules.rule_scale` turns
-            an entirely unbounded rule into its nominal production; the demand
-            published by the consumers is what will bound it for real.
+            The drawable quantity, still ``math.inf`` when NOTHING bounds it: a
+            capacity holding stock, and no demand computed either.
+            :func:`muscadet.rules.rule_scale` then turns the unbounded rule into
+            its nominal production.
         """
         delivered = self.get_input_delivered(flow_name)
 
         capacity = self.get_capacity_of_flow(flow_name, "in")
         if capacity is None:
-            return delivered
+            available = delivered
+        else:
+            # Hop 1: whatever the flow delivers enters the capacity.
+            capacity.set_inflow(flow_name, delivered)
+            available = capacity.serve_limit(flow_name)
 
-        # Hop 1: whatever the flow delivers enters the capacity.
-        capacity.set_inflow(flow_name, delivered)
-
-        return capacity.serve_limit(flow_name)
+        return min(available, self.get_input_required_demand(flow_name))
 
     def get_input_transferred(self, flow_name):
         """
         Returns what an identity transfer moves from an input to its output.
 
-        The transfer moves what arrives, and never more than its counterparty
-        can serve. A capacity holding stock could serve more than what arrives,
-        but nothing asks it to until demand is propagated -- so the transfer of
-        a buffered flow is what enters it, and the extra a stocked capacity
-        could release is what the demand sweep will claim.
+        The transfer moves what is asked for, and never more than its
+        counterparty can serve: a capacity holding stock now releases what the
+        demand sweep claims, which is more than what enters it (R7).
+
+        When nothing bounds the draw at all -- a stocked capacity, and no demand
+        either -- the transfer falls back to what arrives. An unbounded demand
+        is a downstream that asked for nothing in particular, not a downstream
+        asking for everything, so it must not drain a tank.
 
         Parameters
         ----------
@@ -1528,7 +1779,10 @@ class ObjFlow(cod3s.PycComponent):
         # Called for its side effect too: the input capacity is filled here.
         available = self.get_input_available(flow_name)
 
-        return min(available, self.get_input_delivered(flow_name))
+        if math.isinf(available):
+            return self.get_input_delivered(flow_name)
+
+        return max(available, 0.0)
 
     def get_identity_transfer_flows(self):
         """
@@ -1598,6 +1852,26 @@ class ObjFlow(cod3s.PycComponent):
 
         return [name for name in flows_in if name in flows_out]
 
+    def get_transferable_flows(self):
+        """
+        Returns the continuous flow names carried on BOTH sides, judging nothing.
+
+        The same list :meth:`get_identity_transfer_flows` returns, without the
+        R31 model check: the check belongs to the production sweep, which is
+        where a lost quantity actually happens and where it is already reported.
+        The demand sweep uses this one, so that a component replacing production
+        with an equation of its own -- and therefore never transferring anything
+        -- is not refused for a mismatch that has no consequence.
+
+        Returns
+        -------
+        list of str
+            The matched flow names, in input declaration order.
+        """
+        flows_out = self.flows_continuous_out
+
+        return [name for name in self.flows_continuous_in if name in flows_out]
+
     @staticmethod
     def continuous_flow_is_connected(flow, port):
         """
@@ -1650,11 +1924,20 @@ class ObjFlow(cod3s.PycComponent):
         capacity, and the output flow carries what the capacity serves onward.
         Without one, the flow carries the production directly.
 
+        What a flow carries is the lesser of what was produced and what the
+        consumers asked for (R6, KD4), and that quantity is then split among
+        them by the output's allocation policy (R16).
+
         Parameters
         ----------
         production : dict
             ``{flow name: rate produced}``.
         """
+        # Grouped by capacity: several flows held in ONE volume are drawn from
+        # it together, so their requests must all be known before any of them is
+        # served (R35).
+        buffered = {}
+
         for flow_name, rate in production.items():
             flow = self.flows_out.get(flow_name)
 
@@ -1663,23 +1946,111 @@ class ObjFlow(cod3s.PycComponent):
             if not isinstance(flow, FlowContinuous):
                 continue
 
+            request = self.get_output_request(flow, float(rate))
             capacity = self.get_capacity_of_flow(flow_name, "out")
 
             if capacity is None:
-                flow.var_fed.setValue(float(rate))
+                self.deliver_output(flow, min(float(rate), request))
                 continue
 
             # Hop 3: production enters the capacity.
             capacity.set_inflow(flow_name, float(rate))
+            buffered.setdefault(capacity.name, (capacity, {}))[1][flow_name] = request
 
-            # Hop 4: the output flow draws on the capacity, and an empty one
-            # only serves what transits through it (R7). What the consumers
-            # demand is what will let a stocked capacity serve more than what
-            # currently enters it.
-            served = min(float(rate), capacity.serve_limit(flow_name))
-            capacity.set_outflow(flow_name, served)
+        # Hop 4: the output flows draw on their capacity.
+        for capacity, requests in buffered.values():
+            for flow_name, served in self.draw_from_capacity(
+                capacity, requests
+            ).items():
+                capacity.set_outflow(flow_name, served)
+                self.deliver_output(self.flows_out[flow_name], served)
 
-            flow.var_fed.setValue(served)
+    def get_output_request(self, flow, rate):
+        """
+        Returns what an output is asked to deliver this step.
+
+        The demand published by the consumers, and the produced ``rate`` when
+        nothing is connected: an output nobody asks anything of delivers what it
+        produces, exactly as it did before demand existed.
+        """
+        demand = flow.get_demand_bound()
+
+        return rate if math.isinf(demand) else max(float(demand), 0.0)
+
+    def draw_from_capacity(self, capacity, requests):
+        """
+        Returns what an output capacity serves for each flow it holds (R7, R35).
+
+        What currently transits through the capacity passes straight on; anything
+        asked for BEYOND that comes out of the stock, and a stock of several
+        flows is drawn at its raw-quantity composition (R35). One volume holding
+        several constituents therefore cannot serve a pure one: asking for more
+        of one than its share of the draw allows serves only that share.
+
+        Reduces exactly to "an empty capacity serves what transits through it,
+        a stocked one serves what is asked for" when it holds a single flow.
+
+        Parameters
+        ----------
+        capacity : muscadet.capacity.Capacity
+            The capacity sitting on the output side.
+        requests : dict
+            ``{flow name: quantity asked for}``, over the flows it holds.
+
+        Returns
+        -------
+        dict
+            ``{flow name: quantity served}``.
+        """
+        transit = {name: capacity.get_inflow(name) for name in requests}
+
+        # What the stock is asked for, over and above what transits.
+        beyond = sum(max(requests[name] - transit[name], 0.0) for name in requests)
+        draw = capacity.split_draw(beyond)
+
+        return {
+            name: max(min(requests[name], transit[name] + draw.get(name, 0.0)), 0.0)
+            for name in requests
+        }
+
+    def deliver_output(self, flow, quantity):
+        """
+        Delivers ``quantity`` on a continuous output and splits it (R16, R17).
+
+        The flow's variable carries the TOTAL delivered -- one variable is
+        exported to every connection -- and the split among the consumers is
+        held on the flow itself, for each of them to read its own share back.
+        """
+        quantity = max(float(quantity), 0.0)
+
+        flow.var_fed.setValue(quantity)
+        self.allocate_output(flow, quantity)
+
+        return quantity
+
+    def allocate_output(self, flow, available):
+        """
+        Splits what an output delivers among its consumers (R16, R17).
+
+        The component-level override point of the allocation: a component whose
+        split depends on something no policy can express -- its own state, a
+        measurement it reads -- overrides this rather than declaring a policy.
+        The declared policies and the flow-level Python rule both live on the
+        flow, in ``FlowContinuousOut.get_allocation_split``.
+
+        Parameters
+        ----------
+        flow : muscadet.flow_continuous.FlowContinuousOut
+            The output being delivered.
+        available : float
+            What it delivers this step.
+
+        Returns
+        -------
+        dict
+            ``{consumer component name: quantity}``.
+        """
+        return flow.allocate(available)
 
     def set_flows(self, **kwargs):
         """
@@ -1733,6 +2104,13 @@ class ObjFlow(cod3s.PycComponent):
                 # register -- a purely discrete model must stay what it was,
                 # PDMP manager included.
                 self.system().pdmp_add_explicit_variable(flow.var_fed)
+
+            if isinstance(flow, FlowContinuousIn):
+                # Same reason, for the same solver: the demand sweep writes the
+                # demand an input publishes upstream. Only an INPUT holds a
+                # demand variable -- an output holds a reference on the demands
+                # its consumers publish, and a reference is never written.
+                self.system().pdmp_add_explicit_variable(flow.var_demand)
 
             # Add default failure automata for output flows if enabled
             if self.has_default_out_automata and isinstance(flow, FlowDiscreteOut):
