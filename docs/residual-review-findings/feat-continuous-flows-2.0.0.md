@@ -124,8 +124,10 @@ otherwise clamp one variable — the last-writer-wins failure R18 exists to
 prevent. And `release_deratings_on` gives the direction that names nothing a
 return to nominal, a derating having no per-step reset; it is the standalone
 counterpart of `ObjFlow.release_deratings`. The automaton's name is therefore
-now computed BEFORE its effects are resolved, which is the only reordering in
-the block.
+now computed BEFORE its effects are resolved, which was the only reordering in
+the block. (Since R-9 the resolution happens inside `_build_fm_automaton`,
+which the engine calls with the name already settled — the same ordering,
+obtained structurally instead of by hand.)
 
 The pattern-matched-nothing guard fires correctly again: `fo_found` used to be
 set even where the effect produced was unusable, which suppressed it on exactly
@@ -249,6 +251,85 @@ branch-added over-length lines in `obj.py` — at 212, 187, 169 and 143 characte
 place. `git diff 30a0f97 -- muscadet/obj.py` now reports **zero** added lines
 over 88. The ~47 pre-existing ones were left alone.
 
+### R-9. `ObjFailureMode*` was a fork of `cod3s.ObjFM*` (P2, maintainability) — FIXED
+
+*Fixed by re-converging on the engine, not by re-deriving it.* The three
+classes reimplemented the whole `cod3s.ObjFM` family on top of
+`cod3s.PycComponent`: the same template hook names (`set_occ_law_failure`,
+`get_failure_cond`, `set_default_failure_param_name`, …), the same common-cause
+combinatorics, the same `trans_name_prefix` mechanics, the same per-order
+parameter naming. They are now subclasses of it:
+
+```
+cod3s.ObjMode2S -> cod3s.ObjFM      -> muscadet.ObjFailureMode
+                   cod3s.ObjFMExp   -> muscadet.ObjFailureModeExp(ObjFailureMode, cod3s.ObjFMExp)
+                   cod3s.ObjFMDelay -> muscadet.ObjFailureModeDelay(ObjFailureMode, cod3s.ObjFMDelay)
+```
+
+The double base keeps both `isinstance(fm, ObjFailureMode)` — the 1.x relation
+— and `isinstance(fm, cod3s.ObjFMExp)`; C3 linearises it as
+`[ObjFailureModeExp, ObjFailureMode, ObjFMExp, ObjFM, ObjMode2S, …]`, which is
+the order the condition composition needs (the muscadet dict shorthand
+compiles *under* `ObjFMExp`'s rate gate, not over it). `obj.py` lost 723 lines;
+what replaced them is `muscadet/failure_mode.py`, whose executable content is
+five methods.
+
+**The seam for the regex effects.** muscadet spells its effects as a regular
+expression over the target's **flow** names, resolved to what each match
+offers a mode (the availability variable of a discrete output, the derating
+variable of a continuous one). The engine resolves effect keys as **exact
+variable basenames**, inline in `ObjMode2S.__init__`, with no override point —
+so the two contracts could not be reconciled there. The seam used instead is
+`_build_fm_automaton`, the documented extension hook of the ObjFM family,
+called once per built combination: the engine is handed **empty** effect dicts
+(it would refuse a flow name as an unknown variable), the declared ones are
+resolved in the hook, and they are restored onto `fm.failure_effects` /
+`fm.repair_effects` — legacy views on the engine's storage — once construction
+is over.
+
+The hook carries the automaton's *name* but not the combination it was built
+for, which the resolution needs (the effects bear on that combination's targets
+only). The combination is recovered from the name through
+`cod3s.pycatshoo.fm_wiring.cc_comb_suffix`, the same helper the engine names it
+with, fed the same `trans_name_prefix` / `trans_name_prefix_fun` — so the
+inversion cannot drift from the naming. It is exercised on both the
+format-string path (`tests/test_comp_failure_008/009.py`) and the callable path
+with dropped orders (`tests/test_comp_failure_010.py`, 5 targets, 16 of 31
+combinations built).
+
+**Nothing about the deratings changed.** One variable per (automaton, output),
+keyed `{fm component basename}__{automaton}`, folded by minimum at read time,
+alongside the shared `{flow}_out_rate` of KD10. `resolve_effects_on` and
+`release_deratings_on` moved without an edit.
+
+**Name identity, verified mechanically** — the bar R-6 set. A pytest plugin
+wrapping `PycComponent.add_aut2st` and `PycSystem.deleteSys` records, for every
+model the suite builds: every automaton name, its state names, its transition
+names and their occurrence laws (down to the parameter *variable* each law
+points at), every effect record with its component-qualified target variable
+and value, and every component's full variable list. 977 records, confirmed
+bit-reproducible by capturing it twice before the change. Diffed before and
+after: **every valid model is byte-identical**, 7 of the 977 records differ, in
+two classes, neither of them a name:
+
+1. `cond_12` / `cond_21` on the four `ObjFailureModeDelay` automata whose
+   condition is a bare `True` go from the literal `True` to a callable
+   returning it. That is `cod3s.ObjFM`'s deliberate late-bound constant, which
+   makes rebinding `fm.failure_cond` after construction take effect; the native
+   `cod3s.ObjFMDelay` path in this same suite already behaves that way. Exact
+   parity was reachable only by introspecting which subclass hook wrapped the
+   condition, which is more fragile than the delta it would remove.
+2. Three components in `tests/test_objfailuremode_deprecation.py` — modes
+   deliberately declared against a component that does not exist, whose
+   exception the test swallows — lose their `lambda` / `mu` / `ttf` / `ttr`
+   variables. The engine's `_dry_run_resolve_effects` refuses a missing target
+   *before* allocating anything, instead of leaving a half-built component
+   behind. See the limitation recorded below.
+
+Regression tests in `tests/test_fm_cod3s_engine_001.py` (hierarchy, the regex
+spelling, the name inversion under a custom prefix, the derating key, the dict
+condition, the refused keywords). No pre-existing test file was modified.
+
 ---
 
 ## Test coverage gaps worth closing
@@ -268,3 +349,5 @@ over 88. The ~47 pre-existing ones were left alone.
 - `accept_limit` is read during the demand sweep but the outflow it reads is written during the production sweep, so a full capacity throttles on the previous evaluation's figure. Inherent to the two-sweep design and absorbed by repeated evaluation, but it is a read before the sweep that writes it.
 - The custom allocation extension point never clamps a proposed split's total to what is available; a rule that over-proposes creates quantity.
 - The pre-run step is one-shot per engine system, so components added after the first run cycle never have their sweep equations registered and run inert, with no diagnostic.
+- **(R-9)** A standalone failure mode declared against a component that does not exist yet now raises at construction (`Mode 'X': target component 'Y' not found in the system. Create the targets before the mode.`) instead of building a parameter-less shell. Inherited from the engine's fail-fast resolution, and a fix rather than a regression — but a model that declared its modes before their targets *and* left every occurrence rate at zero used to build silently and no longer does.
+- **(R-9)** `behaviour`, `failure_effects_trans` and `repair_effects_trans` are refused by `ObjFailureMode*`. The engine routes all three through its exact-variable-name effect resolution, which a muscadet flow pattern never matches, so accepting them would build a silently effect-less mode. Supporting them would mean giving `ObjMode2S` an overridable effect-resolution hook for the external and trans-based paths — the same seam the level effects found in `_build_fm_automaton`, which those two paths do not go through. `cod3s.ObjFM*` covers them today.

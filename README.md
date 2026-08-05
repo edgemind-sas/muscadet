@@ -970,6 +970,13 @@ my_plant.add_component(
 
 Each automaton the mode builds owns its own derating variable on each target, so the two combinations a second-order mode makes over one component compose by minimum rather than overwriting one another, and the direction that names nothing releases the rate it took. A pattern matching no output flow at all is still refused at declaration time.
 
+`ObjFailureMode`, `ObjFailureModeExp` and `ObjFailureModeDelay` are **thin subclasses of `cod3s.ObjFM`, `cod3s.ObjFMExp` and `cod3s.ObjFMDelay`** since 2.0 — the common-cause combinatorics, the per-order parameter variables and the automaton build are the cod3s engine's, and the generated automaton, state and transition names are unchanged from 1.x. What MUSCADET still owns is the two spellings a 1.x model uses and a native cod3s mode does not:
+
+- **effects named by flow, matched as a regex** — `{"f.*": False}`, `{".*": 0.4}` — resolved to what each matching output flow offers a mode: the availability variable of a discrete output, the derating variable of a continuous one. A native `cod3s.ObjFM*` names the target's variables by their exact basename instead (`{"f1_fed_available_out": False}`, `{"water_out_rate": 0.5}`); both contracts are supported, each by its own class;
+- **the dict shorthand for a condition** — `failure_cond={"c1": True}` requires every named *input* flow of every target of the combination to be fed with that value. cod3s structured condition lists and plain callables work too.
+
+The classes stay available indefinitely under their own names, and keep emitting a `DeprecationWarning` at construction pointing at the `cod3s.ObjFM*` equivalent. Two `cod3s.ObjFM` keywords are **refused** rather than silently honoured with no effect, because they route effects through the engine's exact-variable-name path that a flow pattern never matches: `behaviour` and `failure_effects_trans` / `repair_effects_trans`. A model needing them wants `cod3s.ObjFM*` directly.
+
 ### Driving a discrete output from a continuous value
 
 A boolean output may be conditioned on a continuous quantity: `var_prod_cond` accepts the very same `{name, op, value}` comparison operand a rule guard uses. That is the whole declaration of a threshold alarm — no component code reads the level, and no equation is written by hand:
