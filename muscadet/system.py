@@ -2,6 +2,11 @@ import cod3s
 
 from .obj_logic import LogicOr, LogicAnd
 from .flow_continuous import FlowContinuous
+from .ordering import (
+    CAPACITY_ORDER_BASE,
+    EquationRegistration,
+    register_equation_order,
+)
 import re
 import copy
 
@@ -35,11 +40,30 @@ class System(cod3s.PycSystem):
     ``prepare_simu``, while :meth:`isimu_start` calls the engine directly.
     Both are overridden here so they call :meth:`prerun` first.
 
-    :meth:`prerun` is the idempotent driver; :meth:`prerun_step` is the
-    extension point that does the actual work (empty here, filled by the
-    ordering unit). ``prerun_done`` / ``prerun_count`` are the inspection
-    accessors.
+    :meth:`prerun` is the idempotent driver; :meth:`prerun_step` derives the
+    evaluation order from the connection graph and registers the sweep
+    equations. ``prerun_done`` / ``prerun_count`` are the inspection accessors,
+    and ``equation_order`` is the derived order itself.
+
+    Equation ordering (R8, R30)
+    ---------------------------
+    The order is never declared by a model author: :mod:`muscadet.ordering`
+    reads the topology back from the engine, sorts it, and hands every equation
+    a distinct integer. Those integers are banded -- the demand sweep from 0,
+    the production sweep straight after, and the capacity equations from
+    :data:`~muscadet.ordering.CAPACITY_ORDER_BASE`, so they integrate last.
+    ``_capacity_equation_order_next`` below is what makes the capacity unit's
+    provisional counter draw from that top band instead of from 0.
     """
+
+    #: Read by ``muscadet.capacity.allocate_capacity_equation_order`` at
+    #: capacity *declaration* time, long before any graph exists. Starting it at
+    #: the capacity band is how the ordering module's allocation supersedes that
+    #: provisional counter: capacity equations stay distinct from one another
+    #: AND from every graph-derived order, and they run after both sweeps.
+    #: Read here resolves to the class attribute; the first allocation writes an
+    #: instance attribute, so systems never share a counter.
+    _capacity_equation_order_next = CAPACITY_ORDER_BASE
 
     # ------------------------------------------------------------------
     # PDMP manager ownership
@@ -127,7 +151,27 @@ class System(cod3s.PycSystem):
             )
         manager = self.get_or_create_pdmp_manager()
         manager.addEquationMethod(method_name, comp, order)
+
+        # Recorded here rather than at each call site: this is the one funnel
+        # every equation goes through -- the two graph-derived sweeps, the
+        # capacity equations, and anything a model registers by hand -- so it is
+        # the only place where "no two equations share an order" is checkable.
+        self.equation_registrations.append(
+            EquationRegistration(comp=comp.basename(), method=method_name, order=order)
+        )
+
         return manager
+
+    @property
+    def equation_registrations(self):
+        """Every PDMP equation registered on this system, in registration order.
+
+        A list of :class:`~muscadet.ordering.EquationRegistration`. Cleared by
+        :meth:`deleteSys`, like everything else bound to the engine system.
+        """
+        if not hasattr(self, "_equation_registrations"):
+            self._equation_registrations = []
+        return self._equation_registrations
 
     def pdmp_add_watched_transition(self, transition):
         """Register ``transition`` as a stop condition of the integration.
@@ -185,17 +229,38 @@ class System(cod3s.PycSystem):
 
         return True
 
-    def prerun_step(self):
-        """The work done once, at the start of the first run.
+    @property
+    def equation_order(self):
+        """The order derived at the pre-run step, or None before it ran.
 
-        Extension point: this is where the evaluation order is computed from
-        the connection graph and registered on the PDMP manager. It sees the
-        fully connected system and no equation has run yet.
-
-        A purely discrete system reaches this too, and it must stay a no-op
-        there -- no manager, no registration, nothing observable.
+        A :class:`~muscadet.ordering.EquationOrder`: the graph it was derived
+        from, the two sweep sequences, and what each equation was registered
+        with. This is the inspection surface -- the derived order is asserted
+        directly rather than inferred from simulation output.
         """
-        return None
+        return getattr(self, "_equation_order", None)
+
+    def prerun_step(self):
+        """Derive the evaluation order and register the sweep equations.
+
+        Runs once, at the start of the first run: every connection exists and
+        no equation has run yet. The continuous-flow graph is read back from
+        the engine, sorted twice -- demand in reverse-topological order,
+        production in topological order -- and each sweep equation is
+        registered with a distinct increasing integer.
+
+        A purely discrete system reaches this too and stays a no-op there: an
+        empty graph registers nothing and never creates a PDMP manager.
+
+        Raises
+        ------
+        muscadet.ordering.ContinuousFlowCycleError
+            When the continuous-flow graph is cyclic (R30). Measurement links
+            and the discrete control flows built on them are not continuous
+            flows and never take part in the check.
+        """
+        self._equation_order = register_equation_order(self)
+        return self._equation_order
 
     # ------------------------------------------------------------------
     # Run entry points -- both must go through the pre-run step
@@ -218,11 +283,14 @@ class System(cod3s.PycSystem):
     def deleteSys(self, *args, **kwargs):
         """Delete the engine system and release everything bound to it.
 
-        Dropping the manager handle and the pre-run flag is what lets a
-        following test module build a clean system in the same process.
+        Dropping the manager handle, the pre-run flag, the derived order and
+        the equation registry is what lets a following test module build a
+        clean system in the same process.
         """
         self._pdmp_manager = None
         self._prerun_done = False
+        self._equation_order = None
+        self._equation_registrations = []
         return super().deleteSys(*args, **kwargs)
 
     def auto_connect(
