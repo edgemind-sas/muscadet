@@ -92,6 +92,11 @@ from .flow import (
     FlowOutOnTrigger,
     FlowOutTempo,
 )
+from .flow_continuous import (
+    FlowContinuous,
+    FlowContinuousIn,
+    FlowContinuousOut,
+)
 import cod3s
 import re
 import warnings
@@ -133,6 +138,10 @@ class ObjFlow(cod3s.PycComponent):
         Adds a temporized output flow to the component.
     add_flow_out_on_trigger(**params):
         Adds an output flow that is triggered by an input flow.
+    add_flow_continuous_in(**params):
+        Adds a continuous (real-valued) input flow to the component.
+    add_flow_continuous_out(**params):
+        Adds a continuous (real-valued) output flow to the component.
     set_flows(**kwargs):
         Sets up the flows for the component.
     pat_to_var_value(*pat_value_list):
@@ -525,7 +534,8 @@ class ObjFlow(cod3s.PycComponent):
             - cls: Flow class name, canonical ("FlowDiscreteIn",
               "FlowDiscreteOut", "FlowDiscreteOutTempo",
               "FlowDiscreteOutOnTrigger") or legacy ("FlowIn", "FlowOut",
-              "FlowOutTempo", "FlowOutOnTrigger")
+              "FlowOutTempo", "FlowOutOnTrigger"), or continuous
+              ("FlowContinuousIn", "FlowContinuousOut")
             - name: Flow name
             - Additional parameters specific to the flow type
 
@@ -556,12 +566,15 @@ class ObjFlow(cod3s.PycComponent):
         flow_specs = self.postprocess_flow_specs(flow_specs)
         flow = cod3s.ObjCOD3S.from_dict(flow_specs)
 
-        if isinstance(flow, FlowDiscreteIn):
+        # NOTE: the continuous family is parallel to the discrete one (both
+        # derive from FlowModel, neither from the other), so the branch order
+        # below carries no precedence -- the four tests are mutually exclusive.
+        if isinstance(flow, (FlowDiscreteIn, FlowContinuousIn)):
             if flow.name in self.flows_in:
                 raise ValueError(f"Input flow {flow.name} already exists")
             else:
                 self.flows_in[flow.name] = flow
-        elif isinstance(flow, FlowDiscreteOut):
+        elif isinstance(flow, (FlowDiscreteOut, FlowContinuousOut)):
             if flow.name in self.flows_out:
                 raise ValueError(f"Output flow {flow.name} already exists")
             else:
@@ -697,6 +710,62 @@ class ObjFlow(cod3s.PycComponent):
             self.flows_out[flow_name] = FlowOutOnTrigger(**params)
         else:
             raise ValueError(f"Output (on trigger) flow {flow_name} already exists")
+
+    def add_flow_continuous_in(self, **params):
+        """
+        Adds a continuous (real-valued) input flow to the component.
+
+        The flow is stored in ``flows_in`` alongside the discrete input flows,
+        so that ``auto_connect`` / ``connect_flow`` keep finding it by name; use
+        ``flows_continuous_in`` to enumerate only the continuous ones.
+
+        Parameters
+        ----------
+        **params : dict
+            Parameters for the continuous input flow.
+        """
+        flow_name = params.get("name")
+        if not (flow_name in self.flows_in):
+            self.flows_in[flow_name] = FlowContinuousIn(**params)
+        else:
+            raise ValueError(f"Input flow {flow_name} already exists")
+
+    def add_flow_continuous_out(self, **params):
+        """
+        Adds a continuous (real-valued) output flow to the component.
+
+        Note that ``prepare_flow_out_params`` is deliberately NOT applied: the
+        ``var_prod_cond`` boolean production condition it normalises belongs to
+        the discrete family only.
+
+        Parameters
+        ----------
+        **params : dict
+            Parameters for the continuous output flow.
+        """
+        flow_name = params.get("name")
+        if not (flow_name in self.flows_out):
+            self.flows_out[flow_name] = FlowContinuousOut(**params)
+        else:
+            raise ValueError(f"Output flow {flow_name} already exists")
+
+    @property
+    def flows_continuous_in(self):
+        """Continuous input flows only, in declaration order."""
+        return {
+            name: flow
+            for name, flow in self.flows_in.items()
+            if isinstance(flow, FlowContinuous)
+        }
+
+    @property
+    def flows_continuous_out(self):
+        """Continuous output flows only, in declaration order."""
+        return {
+            name: flow
+            for name, flow in self.flows_out.items()
+            if isinstance(flow, FlowContinuous)
+        }
 
     def set_flows(self, **kwargs):
         """
