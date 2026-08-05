@@ -100,6 +100,7 @@ from .flow_continuous import (
     FlowContinuousOut,
 )
 from .rules import (
+    COMPARISON_OPERATORS,
     UNCONSTRAINED_SCALE,
     Rule,
     RuleMode,
@@ -458,6 +459,10 @@ class ObjFlow(cod3s.PycComponent):
         >>> # AND of ORs condition
         >>> specs = {"var_prod_cond": [["flow1", "flow2"], ["flow3"]]}
         >>> # Becomes: [["flow1_object", "flow2_object"], ["flow3_object"]]
+
+        >>> # A comparison against a continuous quantity (R22)
+        >>> specs = {"var_prod_cond": [{"name": "level", "op": ">=", "value": 10}]}
+        >>> # Becomes: [["level_object"]] plus the aligned comparison matrix
         """
         flow_specs = copy.deepcopy(flow_specs)
 
@@ -467,18 +472,29 @@ class ObjFlow(cod3s.PycComponent):
             def _resolve_operand(op):
                 # A production-condition operand is either a plain string flow
                 # name (non-negated, input-first -- the historical form) or a
-                # mapping ``{"name": str, "negate"?: bool, "port"?: "in"|"out"}``.
+                # mapping ``{"name": str, "negate"?: bool, "port"?: "in"|"out",
+                # "op"?: str, "value"?: float}`` -- the very vocabulary a rule
+                # guard operand uses (muscadet.rules.RuleOperand), so ONE
+                # comparison syntax serves both directions of the
+                # discrete/continuous interoperation.
                 # ``port`` disambiguates a name carried by BOTH an input and an
                 # output flow of this component: "in"/"out" force that side,
-                # absent keeps the historical input-first resolution. Returns
-                # the ``(flow_object, negate_bool)`` pair (``port`` only selects
-                # which flow object, it does not survive into the matrix).
+                # absent keeps the historical input-first resolution.
+                # ``op`` / ``value`` make the operand a COMPARISON of the
+                # quantity that name carries against a threshold (R22) instead
+                # of a read of its boolean state.
+                # Returns the ``(source_object, negate_bool, compare_or_None)``
+                # triple (``port`` only selects which object, it does not
+                # survive into the matrices).
                 if isinstance(op, str):
                     name, negate, port = op, False, None
+                    compare_op, compare_value = None, None
                 elif isinstance(op, dict):
                     name = op.get("name")
                     negate = bool(op.get("negate", False))
                     port = op.get("port")
+                    compare_op = op.get("op")
+                    compare_value = op.get("value")
                     if not isinstance(name, str):
                         raise ValueError(
                             f"Object {self.name()}: production condition operand mapping must carry a string 'name' : {op}"
@@ -487,10 +503,38 @@ class ObjFlow(cod3s.PycComponent):
                         raise ValueError(
                             f"Object {self.name()}: production condition operand 'port' must be 'in' or 'out', got {port!r}"
                         )
+                    # Same shape checks as RuleOperand.check_operand_shape, and
+                    # for the same reasons.
+                    if (compare_op is None) != (compare_value is None):
+                        raise ValueError(
+                            f"Object {self.name()}: production condition operand {name!r}: 'op' and 'value' must be given together (a comparison against a continuous quantity) or both omitted (a boolean operand)"
+                        )
+                    if compare_op is not None:
+                        if compare_op not in COMPARISON_OPERATORS:
+                            raise ValueError(
+                                f"Object {self.name()}: production condition operand {name!r}: 'op' must be one of {', '.join(COMPARISON_OPERATORS)}, got {compare_op!r}"
+                            )
+                        if negate:
+                            raise ValueError(
+                                f"Object {self.name()}: production condition operand {name!r}: 'negate' cannot be combined with a comparison; use the opposite comparison operator instead"
+                            )
+                        try:
+                            compare_value = float(compare_value)
+                        except (TypeError, ValueError):
+                            raise ValueError(
+                                f"Object {self.name()}: production condition operand {name!r}: 'value' must be a number, got {compare_value!r}"
+                            )
                 else:
                     raise ValueError(
                         f"Bad format for production condition operand : {op}"
                     )
+
+                compare = (
+                    None
+                    if compare_op is None
+                    else {"op": compare_op, "value": compare_value}
+                )
+
                 if port == "in":
                     fcond = self.flows_in.get(name)
                     kind = "input"
@@ -500,8 +544,14 @@ class ObjFlow(cod3s.PycComponent):
                 else:  # historical: input first, then output
                     fcond = self.flows_in.get(name) or self.flows_out.get(name)
                     kind = "input nor output"
+                    if fcond is None and compare is not None:
+                        # A comparison may also read a MEASUREMENT link: what a
+                        # sensor thresholds is the capacity level it observes
+                        # (R22, R33). A boolean operand never resolves there --
+                        # a level carries no state to read.
+                        fcond = self.measurements_in.get(name)
                 if fcond is not None:
-                    return fcond, negate
+                    return fcond, negate, compare
                 raise ValueError(
                     f"Object {self.name()}: Flow {name} does not exist as {kind} flow (you must create it before using it in a FlowOut condition)"
                 )
@@ -520,6 +570,7 @@ class ObjFlow(cod3s.PycComponent):
             # and (Cn1 or ... or Cn_kn)]
             var_prod_cond_tiny = []
             var_prod_cond_negate = []
+            var_prod_cond_compare = []
             for flow_disj in var_prod_cond:
                 if isinstance(flow_disj, (str, dict)):
                     operands = [flow_disj]
@@ -531,12 +582,15 @@ class ObjFlow(cod3s.PycComponent):
                     )
                 flow_disj_tiny = []
                 negate_disj = []
+                compare_disj = []
                 for op in operands:
-                    fcond, negate = _resolve_operand(op)
+                    fcond, negate, compare = _resolve_operand(op)
                     flow_disj_tiny.append(fcond)
                     negate_disj.append(negate)
+                    compare_disj.append(compare)
                 var_prod_cond_tiny.append(flow_disj_tiny)
                 var_prod_cond_negate.append(negate_disj)
+                var_prod_cond_compare.append(compare_disj)
 
             flow_specs["var_prod_cond"] = var_prod_cond_tiny
             # Attach the negation matrix only when at least one operand is
@@ -545,6 +599,11 @@ class ObjFlow(cod3s.PycComponent):
             # evaluation to pre-negation muscadet.
             if any(any(row) for row in var_prod_cond_negate):
                 flow_specs["var_prod_cond_negate"] = var_prod_cond_negate
+            # Same gating for the comparison matrix: a condition carrying no
+            # comparison leaves it empty, and the evaluation stays the purely
+            # boolean one it has always been.
+            if any(entry is not None for row in var_prod_cond_compare for entry in row):
+                flow_specs["var_prod_cond_compare"] = var_prod_cond_compare
 
         # Normalise tempo occurrence-law SHORT forms to the long class names so
         # ``ObjCOD3S.from_dict`` (called next in ``add_flow``) can resolve them

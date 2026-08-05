@@ -105,8 +105,6 @@ import pydantic
 
 import cod3s
 
-from .flow_continuous import FlowContinuousIn
-
 #: The six comparison operators a numeric guard operand may carry.
 COMPARISON_OPERATORS = ("<", "<=", ">", ">=", "==", "!=")
 
@@ -485,15 +483,31 @@ class Rule(cod3s.ObjCOD3S):
         return self.to_expression()
 
 
+def comparator(op):
+    """The callable implementing comparison operator ``op``.
+
+    Exposed so a discrete production condition compares a continuous quantity
+    (R22) through the very operators a rule guard uses (R21): one comparison
+    vocabulary for both directions of the interoperation, one implementation.
+    """
+    try:
+        return _COMPARATORS[op]
+    except KeyError:
+        raise ValueError(
+            f"Comparison operator must be one of "
+            f"{', '.join(COMPARISON_OPERATORS)}, got {op!r}"
+        )
+
+
 def operand_value(operand: RuleOperand):
     """The value ``operand`` currently reads on the flow it was bound to.
 
-    A continuous input is read from its **reference** rather than from the
-    ``var_fed`` mirror: the mirror is refreshed by a sensitive method, which the
-    solver runs between integration steps and not while it root-finds a
-    crossing. A guard reading it would therefore lag one step behind the value
-    it watches -- exactly what R12 forbids. Every other flow carries its value
-    in ``var_fed``, a discrete one as a boolean (R21).
+    Delegates to :meth:`muscadet.flow.FlowModel.live_value`, so a guard and a
+    discrete production condition read a given flow exactly the same way. A
+    continuous input is read there from its **reference** rather than from the
+    ``var_fed`` mirror, which lags one integration step behind (R12); every
+    other flow carries its value in ``var_fed``, a discrete one as a boolean
+    (R21).
     """
     flow = operand.flow
 
@@ -503,10 +517,7 @@ def operand_value(operand: RuleOperand):
             "ObjFlow.add_rules resolves every operand at declaration time"
         )
 
-    if isinstance(flow, FlowContinuousIn):
-        return float(flow.var_in.sumValue(flow.var_in_default))
-
-    return flow.var_fed.value()
+    return flow.live_value()
 
 
 def operand_holds(operand: RuleOperand) -> bool:

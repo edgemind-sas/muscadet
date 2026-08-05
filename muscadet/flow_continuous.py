@@ -356,6 +356,16 @@ class FlowContinuous(FlowModel):
         ),
     )
 
+    @property
+    def is_continuous(self) -> bool:
+        """True: this flow's value moves between integration steps.
+
+        What makes a comparison operand reading it a WATCHED threshold, whether
+        it is declared on a rule guard (R21) or on a discrete production
+        condition (R22).
+        """
+        return True
+
     def add_variables(self, comp, **kwargs):
         # Recorded here rather than passed around: an allocation is keyed by
         # consumer component name, and a flow is reached from both ends -- from
@@ -480,6 +490,18 @@ class FlowContinuousIn(FlowContinuous):
         comp.addMessageBoxExport(
             f"{self.name}_in", self.var_demand, f"{self.name}_demand"
         )
+
+    def live_value(self):
+        """What the incoming connections carry RIGHT NOW.
+
+        Read from the reference rather than from the ``var_fed`` mirror: the
+        mirror is refreshed by a sensitive method, which the solver runs between
+        integration steps and not while it root-finds a crossing. A threshold
+        read from it would therefore lag one step behind the value it watches --
+        exactly what R12 forbids, on a rule guard (R21) and on a discrete
+        production condition (R22) alike.
+        """
+        return float(self.var_in.sumValue(self.var_in_default))
 
     def get_var_demand_value(self):
         """Return the demand this consumer currently publishes upstream."""
