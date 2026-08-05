@@ -54,12 +54,28 @@ minimal -- a conjunction of operands, an optional negation, the six comparison
 operators -- and is NOT a general expression language: no disjunction, no
 parentheses, no arithmetic.
 
+Evaluation
+----------
+Beyond the declaration model, this module carries the arithmetic of ONE rule:
+:func:`rule_scale` computes the limiting-reagent scale, :func:`rule_consumption`
+and :func:`rule_production` apply it to the two coefficient maps. The scale is
+computed once per rule and shared by every ``prod`` entry, which is what keeps a
+reaction's correlated outputs in their declared proportion (R15).
+
+The arithmetic is deliberately kept free of any backend object: it takes an
+``available`` mapping and returns rate mappings, so it is testable on its own and
+the component only has to decide *what* counts as available (KTD13) and *where*
+production is written. That split is what :meth:`muscadet.ObjFlow.compute_production`
+implements.
+
 Scope
 -----
-This module is **declaration and validation only**. Rule evaluation and the
-compilation of guards into mode automata live in later units.
+Rule *selection* -- evaluating guards and compiling them into a mode automaton
+-- is not here: :meth:`RuleSet.active_rule` is the seam the guard-compilation
+layer replaces.
 """
 
+import math
 import re
 import typing
 
@@ -72,6 +88,13 @@ COMPARISON_OPERATORS = ("<", "<=", ">", ">=", "==", "!=")
 
 #: The two sides a guard operand may be resolved against.
 PORTS = ("in", "out")
+
+#: Scale of a rule nothing constrains: an empty ``cons`` map, or one whose
+#: inputs are all served by an unbounded counterparty (a capacity holding stock
+#: serves without limit, R7). Such a rule produces exactly its declared ``prod``
+#: quantities -- what finally bounds it is the demand of the consumers, which
+#: the demand sweep computes.
+UNCONSTRAINED_SCALE = 1.0
 
 # One operand of a guard string: an optional negation ("not x" / "!x"), a flow
 # name, and an optional comparison against a numeric literal. Anything else --
@@ -409,6 +432,64 @@ class Rule(cod3s.ObjCOD3S):
         return self.to_expression()
 
 
+def rule_scale(rule: Rule, available: typing.Mapping[str, float]) -> float:
+    """The scale at which ``rule`` runs, set by its scarcest input (R15).
+
+    ``available`` maps each consumed flow name to the quantity the component
+    may actually draw from it this step -- which is *not* always what the input
+    flow delivers: with a capacity interposed, it is what that capacity can
+    serve (KTD13).
+
+    The scale is the smallest ``available / coefficient`` ratio over the
+    ``cons`` map: the limiting reagent. It is computed ONCE per rule, so every
+    ``prod`` entry is produced at that same scale and correlated outputs keep
+    their declared proportion.
+
+    An input delivered in excess of its coefficient therefore raises nothing:
+    the scale is a minimum, so a surplus on one input cannot compensate a
+    shortage on another. An input delivered at 0 -- or absent from
+    ``available`` altogether -- yields a scale of 0, hence no production.
+
+    Returns :data:`UNCONSTRAINED_SCALE` when nothing constrains the rule: an
+    empty ``cons`` map, or one whose inputs are all served without limit.
+
+    Parameters
+    ----------
+    rule : Rule
+        The rule being evaluated.
+    available : mapping
+        ``{flow name: quantity available}``. A missing name counts as 0.
+
+    Returns
+    -------
+    float
+        The scale, never negative.
+    """
+    scale = math.inf
+
+    for name, coefficient in rule.cons.items():
+        if coefficient <= 0:
+            # A rule consuming nothing of a flow is not limited by it.
+            continue
+        scale = min(scale, float(available.get(name, 0.0)) / coefficient)
+
+    if math.isinf(scale):
+        return UNCONSTRAINED_SCALE
+
+    # A negative availability is not a production in reverse.
+    return max(scale, 0.0)
+
+
+def rule_consumption(rule: Rule, scale: float) -> typing.Dict[str, float]:
+    """What ``rule`` draws from each of its inputs at ``scale``."""
+    return {name: coefficient * scale for name, coefficient in rule.cons.items()}
+
+
+def rule_production(rule: Rule, scale: float) -> typing.Dict[str, float]:
+    """What ``rule`` produces on each of its outputs at ``scale``."""
+    return {name: coefficient * scale for name, coefficient in rule.prod.items()}
+
+
 class RuleSet(cod3s.ObjCOD3S):
     """An ordered set of transformation rules declared on a component."""
 
@@ -458,6 +539,33 @@ class RuleSet(cod3s.ObjCOD3S):
     def guarded_rules(self) -> typing.List[Rule]:
         """The guarded rules, in declaration order."""
         return [rule for rule in self.rules if not rule.is_default]
+
+    def active_rule(self) -> typing.Optional[Rule]:
+        """The rule whose production is evaluated, or None to produce zero.
+
+        **This is the seam guard compilation replaces.** Selecting a rule means
+        evaluating guards, and a guard must be watched by the solver so a
+        threshold is crossed exactly rather than at the following integration
+        step (R12) -- which makes rule selection a mode automaton, not a
+        Python comparison. Until that automaton exists, this returns what needs
+        no guard at all:
+
+        - the default (unguarded) rule when the set declares one;
+        - the single rule of a one-rule set;
+        - None otherwise, and a rule set that selects nothing produces zero
+          (R14), which is exactly what a guarded set does before its guards are
+          compiled.
+
+        ``ObjFlow.get_active_rule`` is where a component overrides this.
+        """
+        default = self.default_rule
+        if default is not None:
+            return default
+
+        if len(self.rules) == 1:
+            return self.rules[0]
+
+        return None
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}({self.name}, {len(self.rules)} rules)"

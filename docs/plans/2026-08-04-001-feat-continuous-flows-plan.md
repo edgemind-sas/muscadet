@@ -100,7 +100,7 @@ flowchart TB
 - R14. A rule declared without a guard is the default and applies when no other rule matches. A rule set with no default produces zero when no guard is true.
 - R15. Within the active rule, production is the largest quantity the `cons` coefficients allow given the inputs actually available, and every entry of `prod` is produced at that same scale.
 - R29. Rule guards cannot reference a capacity level. Gating production on a level goes through a sensor component that reads the capacity and drives a control port.
-- R31. A component that declares continuous flows and no rules performs an identity transfer, matching each input to the output of the same name. An input with no matching output, or an output with no matching input, raises a model error naming the component and the unmatched flow. With a capacity interposed, the transfer takes that capacity as its counterparty per KTD13.
+- R31. A component that declares continuous flows and no rules performs an identity transfer, matching each input to the output of the same name. A component whose continuous flows all sit on one side is a source or a sink and transfers nothing. On a two-sided component, a wired continuous flow with no counterpart of the same name raises a model error naming the component and the flow. With a capacity interposed, the transfer takes that capacity as its counterparty per KTD13.
 
 **Capacities**
 
@@ -250,6 +250,8 @@ Except where stated otherwise, these use a component with discrete input `F4`, c
 ### Product Contract preservation
 
 Changed: R4, R7, R9, R14, R28-R32 — the declaration unit moved from the output flow to component-level transformation rules, capacities became independently declared with per-flow weights, the acyclicity, sensor and identity-transfer rules were added, and MUSCADET now ships five continuous components (R32). KD3, KD6 and KD13 were rewritten on the same dimension they already owned; KD14-KD18 are new. Every change was proposed and confirmed with the user during planning. R1-R3, R5, R6, R8, R10-R13, R15-R27 keep their original meaning.
+
+Corrected during implementation: R31's unmatched-flow error was written to fire on any missing counterpart, which would have rejected a pure source and a pure sink — neither has one by construction. It now scopes to wired flows on two-sided components.
 
 Added after the pre-implementation audit: R35 brings shared-volume composition extraction into scope, because the reference model turned out to depend on it in its control path rather than incidentally.
 

@@ -97,7 +97,13 @@ from .flow_continuous import (
     FlowContinuousIn,
     FlowContinuousOut,
 )
-from .rules import Rule, RuleSet
+from .rules import (
+    Rule,
+    RuleSet,
+    rule_consumption,
+    rule_production,
+    rule_scale,
+)
 from .capacity import (
     Capacity,
     MeasurementIn,
@@ -1019,6 +1025,16 @@ class ObjFlow(cod3s.PycComponent):
 
         capacity.register(system)
 
+        # The two transit hooks are written by the sweeps, i.e. from inside an
+        # equation method, and PyCATSHOO refuses ``setValue`` on a variable its
+        # solver does not know about while the differential system is being
+        # resolved. Declared EXPLICIT here, alongside the fills, they can be
+        # written at each integration step -- which is what makes an interposed
+        # capacity the counterparty of the rules (KTD13).
+        for flow_name in capacity.flow_names:
+            system.pdmp_add_explicit_variable(capacity.var_inflow[flow_name])
+            system.pdmp_add_explicit_variable(capacity.var_outflow[flow_name])
+
         if not self._capacity_equation_registered:
             system.pdmp_add_equation_method(
                 "compute_capacities",
@@ -1262,6 +1278,346 @@ class ObjFlow(cod3s.PycComponent):
 
         return flow, port
 
+    # ------------------------------------------------------------------
+    # Rule evaluation -- the production sweep (R3, R15, R31)
+    # ------------------------------------------------------------------
+
+    def compute_production(self):
+        """
+        PDMP equation: what this component produces at this integration step.
+
+        Named after ``muscadet.ordering.PRODUCTION_EQUATION_METHOD``: the
+        ordering module looks this method up BY NAME on every node of the
+        continuous-flow graph and registers it with a graph-derived order, so
+        nothing here -- and nothing in a model -- ever writes an order down
+        (R8).
+
+        One equation covers every rule set of the component: the active rule of
+        each is evaluated at the scale its scarcest input allows (R15), and a
+        component declaring no rule at all transfers each input to the output
+        of the same name (R31). The four hops of KTD13 are crossed in order:
+        the input flows fill their capacity, the rules draw from it, production
+        enters the output capacity, and the output flows draw from that.
+
+        Notes
+        -----
+        Evaluated by the solver, repeatedly, inside one integration step: it
+        must stay a pure function of the current variable values and must not
+        create or register anything.
+        """
+        consumption, production = self.evaluate_production()
+
+        self.apply_consumption(consumption)
+        self.apply_production(production)
+
+    def evaluate_production(self):
+        """
+        Computes what the component draws from its inputs and what it produces.
+
+        Returns
+        -------
+        tuple of dict
+            ``(consumption, production)``, both ``{flow name: rate}``. Rule
+            sets accumulate: a flow named by two of them carries their sum.
+
+        Raises
+        ------
+        ValueError
+            When the component declares no rule and its continuous flows do not
+            match name for name (R31).
+        """
+        consumption = {}
+        production = {}
+
+        def accumulate(target, quantities):
+            for flow_name, quantity in quantities.items():
+                target[flow_name] = target.get(flow_name, 0.0) + quantity
+
+        if self.rule_sets:
+            for rule_set in self.rule_sets.values():
+                rule = self.get_active_rule(rule_set)
+                if rule is None:
+                    # A rule set selecting nothing produces nothing (R14).
+                    continue
+
+                available = {
+                    flow_name: self.get_input_available(flow_name)
+                    for flow_name in rule.cons
+                }
+                scale = rule_scale(rule, available)
+
+                accumulate(consumption, rule_consumption(rule, scale))
+                accumulate(production, rule_production(rule, scale))
+        else:
+            for flow_name in self.get_identity_transfer_flows():
+                transferred = self.get_input_transferred(flow_name)
+                accumulate(consumption, {flow_name: transferred})
+                accumulate(production, {flow_name: transferred})
+
+        return consumption, production
+
+    def get_active_rule(self, rule_set):
+        """
+        Returns the rule of ``rule_set`` whose production is evaluated, or None.
+
+        The override point for rule selection: guards are compiled into a mode
+        automaton, and the automaton's active state is what designates the rule.
+        Defers to :meth:`muscadet.rules.RuleSet.active_rule` for the selection
+        that needs no guard at all -- the default rule, or the single rule of a
+        one-rule set.
+
+        Parameters
+        ----------
+        rule_set : muscadet.rules.RuleSet
+            The rule set to select a rule from.
+
+        Returns
+        -------
+        muscadet.rules.Rule or None
+            None means "produce nothing for this rule set" (R14).
+        """
+        return rule_set.active_rule()
+
+    def get_input_delivered(self, flow_name):
+        """
+        Returns what an input flow currently delivers to the component.
+
+        Read from the flow's REFERENCE rather than from its ``var_fed`` mirror:
+        the mirror is refreshed by a sensitive method, which the solver runs
+        between integration steps and not between two equations of the same
+        step. Reading the reference is what makes a chain of components settle
+        within a single step instead of lagging one step per hop.
+
+        Parameters
+        ----------
+        flow_name : str
+            Name of an input flow of the component.
+
+        Returns
+        -------
+        float
+            The delivered quantity; the declared default when nothing is
+            connected. A discrete input consumed by a rule reads as 1 when fed
+            and 0 otherwise.
+        """
+        flow = self.flows_in[flow_name]
+
+        if isinstance(flow, FlowContinuousIn):
+            return float(flow.var_in.sumValue(flow.var_in_default))
+
+        return float(flow.var_fed.value())
+
+    def get_input_available(self, flow_name):
+        """
+        Returns what the rules may draw from an input flow at this step.
+
+        This is KTD13's counterparty substitution on the input side: **an
+        interposed capacity replaces the flow it buffers**. With one, the input
+        flow fills the capacity and the rules draw from what the capacity can
+        serve -- unbounded while it holds something, limited to what transits
+        through it once empty (R7). Without one, the rules face the flow
+        directly and draw what it delivers.
+
+        Parameters
+        ----------
+        flow_name : str
+            Name of an input flow of the component.
+
+        Returns
+        -------
+        float
+            The drawable quantity, possibly ``math.inf`` when a capacity holding
+            stock serves without limit. :func:`muscadet.rules.rule_scale` turns
+            an entirely unbounded rule into its nominal production; the demand
+            published by the consumers is what will bound it for real.
+        """
+        delivered = self.get_input_delivered(flow_name)
+
+        capacity = self.get_capacity_of_flow(flow_name, "in")
+        if capacity is None:
+            return delivered
+
+        # Hop 1: whatever the flow delivers enters the capacity.
+        capacity.set_inflow(flow_name, delivered)
+
+        return capacity.serve_limit(flow_name)
+
+    def get_input_transferred(self, flow_name):
+        """
+        Returns what an identity transfer moves from an input to its output.
+
+        The transfer moves what arrives, and never more than its counterparty
+        can serve. A capacity holding stock could serve more than what arrives,
+        but nothing asks it to until demand is propagated -- so the transfer of
+        a buffered flow is what enters it, and the extra a stocked capacity
+        could release is what the demand sweep will claim.
+
+        Parameters
+        ----------
+        flow_name : str
+            Name of an input flow carried on both sides of the component.
+
+        Returns
+        -------
+        float
+            The transferred quantity, always finite.
+        """
+        # Called for its side effect too: the input capacity is filled here.
+        available = self.get_input_available(flow_name)
+
+        return min(available, self.get_input_delivered(flow_name))
+
+    def get_identity_transfer_flows(self):
+        """
+        Returns the flow names a rule-less component transfers, input to output.
+
+        A component that declares continuous flows and no transformation rule
+        performs an identity transfer, matching each input to the output of the
+        same name (R31, KD18): without it every plain tank would need a
+        ceremonial same-in-same-out rule.
+
+        A flow declared on one side only is not part of any transfer, and what
+        it means depends on whether the component transforms at all:
+
+        - a component carrying continuous flows on a SINGLE side transfers
+          nothing. Its outputs are sources holding their declared rate and its
+          inputs are sinks -- there is no counterpart for them to match, and
+          demanding one would outlaw every source and every consumer;
+        - on a two-sided component, an unmatched flow is a hole in the model:
+          a quantity arrives and vanishes, or an output is expected to carry
+          something nothing produces. It raises, naming the component and the
+          flow.
+
+        The check is scoped to the flows the model actually WIRES. An
+        unconnected continuous flow exchanges nothing -- an input reads its
+        declared default, an output holds its own -- so it can neither lose nor
+        invent a quantity, and refusing it would reject models still being
+        assembled.
+
+        Returns
+        -------
+        list of str
+            The transferred flow names, in input declaration order. Empty when
+            the component transfers nothing.
+
+        Raises
+        ------
+        ValueError
+            When a wired continuous flow of a two-sided rule-less component has
+            no counterpart of the same name. The message names the component
+            and every unmatched flow.
+        """
+        flows_in = self.flows_continuous_in
+        flows_out = self.flows_continuous_out
+
+        if not flows_in or not flows_out:
+            return []
+
+        unmatched = [
+            f"input flow {name}"
+            for name, flow in flows_in.items()
+            if name not in flows_out and self.continuous_flow_is_connected(flow, "in")
+        ]
+        unmatched += [
+            f"output flow {name}"
+            for name, flow in flows_out.items()
+            if name not in flows_in and self.continuous_flow_is_connected(flow, "out")
+        ]
+
+        if unmatched:
+            raise ValueError(
+                f"Object {self.name()}: declares continuous flows and no "
+                f"transformation rule, so it transfers each input to the output "
+                f"of the same name, but {', '.join(unmatched)} has no flow of "
+                f"the same name on the other side. Declare the missing flow, or "
+                f"declare what this component transforms with add_rules"
+            )
+
+        return [name for name in flows_in if name in flows_out]
+
+    @staticmethod
+    def continuous_flow_is_connected(flow, port):
+        """
+        Tells whether anything is wired to a continuous flow's port.
+
+        Read through the flow's reference, the only endpoint carrying a
+        connection count: the values arriving on an input, the demands
+        published by the consumers on an output. Both travel over the single
+        bidirectional message box of the port, so either one counts the
+        connections of the port itself.
+
+        Parameters
+        ----------
+        flow : muscadet.flow_continuous.FlowContinuous
+            The flow to test.
+        port : str
+            ``"in"`` or ``"out"``.
+
+        Returns
+        -------
+        bool
+        """
+        reference = flow.var_in if port == "in" else flow.var_demand
+
+        return reference is not None and reference.nbCnx() > 0
+
+    def apply_consumption(self, consumption):
+        """
+        Writes what the rules drew from the input capacities (KTD13, hop 2).
+
+        A flow the rules consume without a capacity buffering it has nothing to
+        record: it was drawn straight from the connections feeding it.
+
+        Parameters
+        ----------
+        consumption : dict
+            ``{flow name: rate drawn}``.
+        """
+        for flow_name, rate in consumption.items():
+            capacity = self.get_capacity_of_flow(flow_name, "in")
+            if capacity is not None:
+                capacity.set_outflow(flow_name, float(rate))
+
+    def apply_production(self, production):
+        """
+        Writes production onto the output flows (KTD13, hops 3 and 4).
+
+        With a capacity interposed on the output side, **the capacity replaces
+        the flow as the counterparty of the rules**: production enters the
+        capacity, and the output flow carries what the capacity serves onward.
+        Without one, the flow carries the production directly.
+
+        Parameters
+        ----------
+        production : dict
+            ``{flow name: rate produced}``.
+        """
+        for flow_name, rate in production.items():
+            flow = self.flows_out.get(flow_name)
+
+            # Only a continuous output carries a rate. A discrete output named
+            # by a rule keeps its boolean production condition.
+            if not isinstance(flow, FlowContinuous):
+                continue
+
+            capacity = self.get_capacity_of_flow(flow_name, "out")
+
+            if capacity is None:
+                flow.var_fed.setValue(float(rate))
+                continue
+
+            # Hop 3: production enters the capacity.
+            capacity.set_inflow(flow_name, float(rate))
+
+            # Hop 4: the output flow draws on the capacity, and an empty one
+            # only serves what transits through it (R7). What the consumers
+            # demand is what will let a stocked capacity serve more than what
+            # currently enters it.
+            served = min(float(rate), capacity.serve_limit(flow_name))
+            capacity.set_outflow(flow_name, served)
+
+            flow.var_fed.setValue(served)
+
     def set_flows(self, **kwargs):
         """
         Finalizes flow setup by configuring variables, message boxes, and automata.
@@ -1302,6 +1658,18 @@ class ObjFlow(cod3s.PycComponent):
             flow.add_mb(self)
             flow.update_sensitive_methods(self)
             flow.add_automata(self)
+
+            if isinstance(flow, FlowContinuous):
+                # A continuous flow's value is written from inside an equation
+                # method -- by the production sweep on an output, by the
+                # aggregating sensitive method on an input. PyCATSHOO refuses
+                # ``setValue`` on a variable its solver does not know about
+                # while the differential system is being resolved, so both
+                # endpoints are declared EXPLICIT: computed alongside the ODE
+                # system, exactly like a capacity's fill. Discrete flows never
+                # register -- a purely discrete model must stay what it was,
+                # PDMP manager included.
+                self.system().pdmp_add_explicit_variable(flow.var_fed)
 
             # Add default failure automata for output flows if enabled
             if self.has_default_out_automata and isinstance(flow, FlowDiscreteOut):
