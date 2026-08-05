@@ -93,6 +93,7 @@ from .flow import (
     FlowOutTempo,
 )
 from .flow_continuous import (
+    NOMINAL_RATE,
     UNBOUNDED,
     FlowContinuous,
     FlowContinuousIn,
@@ -172,6 +173,12 @@ class ObjFlow(cod3s.PycComponent):
         Adds an automaton to the component.
     compute_effects_tuples(effects_str=None):
         Computes the effects tuples from a string.
+    add_derating(mode_name, flow_name):
+        Allocates the derating variable a mode owns on a continuous output.
+    derating_vars_of(mode_name):
+        Returns the derating variables a mode owns, keyed by basename.
+    resolve_mode_effects(mode_name, effects):
+        Resolves a mode's effects, rewriting deratings onto its own variables.
     add_atm2states(name, st1="absent", st2="present", init_st2=False, cond_occ_12=True, occ_law_12={"cls": "delay", "time": 0}, occ_interruptible_12=True, effects_12=[], cond_occ_21=True, occ_law_21={"cls": "delay", "time": 0}, occ_interruptible_21=True, effects_21=[]):
         Adds a two-state automaton to the component.
     add_exp_failure_mode(name, failure_cond=True, failure_rate=0, failure_effects=[], failure_param_name="lambda", repair_cond=True, repair_rate=0, repair_effects=[], repair_param_name="mu"):
@@ -1928,6 +1935,12 @@ class ObjFlow(cod3s.PycComponent):
         consumers asked for (R6, KD4), and that quantity is then split among
         them by the output's allocation policy (R16).
 
+        Each rate is first multiplied by the **effective rate** of the output it
+        is produced on (R18): what the failure modes bearing on that output
+        leave of it, the minimum over their derating variables (R20). A rate of
+        0 is a total loss of production -- a continuous output carries no
+        separate boolean availability gate (R19, KD10).
+
         Parameters
         ----------
         production : dict
@@ -1946,15 +1959,21 @@ class ObjFlow(cod3s.PycComponent):
             if not isinstance(flow, FlowContinuous):
                 continue
 
-            request = self.get_output_request(flow, float(rate))
+            # Derating (R18): what the rules computed, times what the failure
+            # modes bearing on this output leave of it. Applied HERE, before the
+            # demand is reconciled and before a capacity is filled, so a derated
+            # output fills its buffer more slowly rather than draining it faster.
+            rate = float(rate) * flow.get_effective_rate()
+
+            request = self.get_output_request(flow, rate)
             capacity = self.get_capacity_of_flow(flow_name, "out")
 
             if capacity is None:
-                self.deliver_output(flow, min(float(rate), request))
+                self.deliver_output(flow, min(rate, request))
                 continue
 
             # Hop 3: production enters the capacity.
-            capacity.set_inflow(flow_name, float(rate))
+            capacity.set_inflow(flow_name, rate)
             buffered.setdefault(capacity.name, (capacity, {}))[1][flow_name] = request
 
         # Hop 4: the output flows draw on their capacity.
@@ -2148,6 +2167,18 @@ class ObjFlow(cod3s.PycComponent):
         """
         Computes the effects tuples from a string.
 
+        Two forms of entry, comma-separated:
+
+        * **boolean** -- ``"f1"`` sets every matching variable True, ``"!f1"``
+          sets it False. Resolved against the component's variable basenames,
+          exactly as in 1.x.
+        * **numeric** -- ``"X=0.5"`` carries the value 0.5 (R18). Resolved
+          against the CONTINUOUS OUTPUT flow names first, since a number
+          declared against a flow is a derating declaration and
+          :meth:`resolve_mode_effects` rewrites it onto the declaring mode's own
+          derating variable; a pattern matching no continuous output falls back
+          to the variable basenames, so a numeric parameter stays reachable.
+
         Parameters
         ----------
         effects_str : str, optional
@@ -2156,7 +2187,7 @@ class ObjFlow(cod3s.PycComponent):
         Returns
         -------
         list of tuples
-            The effects tuples.
+            The effects tuples, ``(pattern or variable basename, value)``.
         """
         if not effects_str:
             return []
@@ -2165,6 +2196,37 @@ class ObjFlow(cod3s.PycComponent):
 
         effects_tuplelist = []
         for effects in effects_strlist:
+            pattern, sep, value_str = effects.partition("=")
+
+            if sep:
+                pattern = pattern.strip()
+                try:
+                    effects_val = float(value_str)
+                except ValueError:
+                    raise ValueError(
+                        f"Object {self.name()}: effect {effects!r} declares a "
+                        f"non-numeric value {value_str.strip()!r}; the "
+                        "'pattern=value' form carries a number (a derating "
+                        "rate), the boolean form is written 'pattern' or "
+                        "'!pattern'"
+                    )
+
+                effects_tuplelist_cur = [
+                    (flow_name, effects_val)
+                    for flow_name in self.flows_continuous_out
+                    if re.search(pattern, flow_name)
+                ]
+
+                if not effects_tuplelist_cur:
+                    effects_tuplelist_cur = [
+                        (var.basename(), effects_val)
+                        for var in self.variables()
+                        if re.search(pattern, var.basename())
+                    ]
+
+                effects_tuplelist += effects_tuplelist_cur
+                continue
+
             effects_val = not effects.startswith("!")
             effects_bis = effects.replace("!", "")
             effects_tuplelist_cur = [
@@ -2176,6 +2238,199 @@ class ObjFlow(cod3s.PycComponent):
             effects_tuplelist += effects_tuplelist_cur
 
         return effects_tuplelist
+
+    # ------------------------------------------------------------------
+    # Derating: what a failure mode leaves of a continuous output
+    # ------------------------------------------------------------------
+
+    def match_continuous_outputs(self, pattern):
+        """
+        Returns the continuous outputs an effect pattern bears on (R18).
+
+        Matched on the flow NAME and on the name of the variable it exports, so
+        ``"X"`` and ``"X_fed_out"`` designate the same output -- the two
+        spellings a 1.x effect string uses for a discrete flow.
+
+        Parameters
+        ----------
+        pattern : str
+            The effect pattern, a regular expression as everywhere else.
+
+        Returns
+        -------
+        list of str
+            The matching continuous output flow names, in declaration order.
+            Empty for a purely discrete component, which is what leaves boolean
+            effects resolved exactly as they were.
+        """
+        return [
+            flow_name
+            for flow_name in self.flows_continuous_out
+            if re.search(pattern, flow_name)
+            or re.search(pattern, f"{flow_name}_fed_out")
+        ]
+
+    def add_derating(self, mode_name, flow_name):
+        """
+        Allocates the derating variable a mode owns on a continuous output.
+
+        One variable per (mode, output flow) pair (R18), named
+        ``{mode}_derating_{flow}`` and created at 1 -- the rate of an output
+        nothing derates. Two modes derating the same output therefore own two
+        variables, and the effective rate is the minimum over them (R20, KTD8)
+        rather than whatever the mode that fired last wrote.
+
+        Called by :meth:`resolve_mode_effects` at declaration time, and public
+        so that a mode declared OUTSIDE the component -- a standalone
+        ``cod3s.ObjFM*`` naming variables by their exact basename -- can
+        allocate the variable it needs and target it.
+
+        Parameters
+        ----------
+        mode_name : str
+            The declaring mode, unique per component.
+        flow_name : str
+            A continuous output of this component.
+
+        Returns
+        -------
+        The PyCATSHOO variable to clamp, at the rate the mode leaves.
+
+        Raises
+        ------
+        ValueError
+            When ``flow_name`` is not a continuous output of this component:
+            only a continuous output carries a rate (R19).
+        """
+        flow = self.flows_out.get(flow_name)
+
+        if not isinstance(flow, FlowContinuousOut):
+            raise ValueError(
+                f"Object {self.name()}: cannot derate {flow_name!r}: it is not "
+                "a continuous output flow of this component -- only a "
+                "continuous output carries a rate"
+            )
+
+        return flow.register_derating(self, mode_name)
+
+    def derating_vars_of(self, mode_name):
+        """
+        Returns the derating variables ``mode_name`` owns, keyed by basename.
+
+        The discovery side of R18: an output knows which modes derate it, so a
+        mode can be asked back what it derates without holding a registry of
+        its own.
+        """
+        return {
+            flow.derating[mode_name].basename(): flow.derating[mode_name]
+            for flow in self.flows_continuous_out.values()
+            if mode_name in flow.derating
+        }
+
+    def continuous_endpoint_names(self):
+        """
+        Returns the basenames of the continuous variables the sweeps own.
+
+        What a continuous flow carries, and what an input demands: written by
+        the production and demand equations at every integration step. A mode
+        clamping one of them would be overwritten within the step, so a mode
+        reaches a continuous output through its derating variable and nowhere
+        else (R19).
+        """
+        names = set()
+
+        for flow in list(self.flows_in.values()) + list(self.flows_out.values()):
+            if not isinstance(flow, FlowContinuous):
+                continue
+            for var in (flow.var_fed, flow.var_demand):
+                if var is not None:
+                    names.add(var.basename())
+
+        return names
+
+    def resolve_mode_effects(self, mode_name, effects):
+        """
+        Resolves one direction of a mode's effects into (variable, value) pairs.
+
+        A pattern naming a CONTINUOUS OUTPUT is a derating declaration (R18): it
+        is rewritten, here at declaration time, onto the variable ``mode_name``
+        owns on that output. Two modes declaring the same effect string
+        therefore write two variables and compose by minimum (R20, KD11, KTD8)
+        instead of overwriting one another -- which is the whole point, since a
+        shared variable would be last-writer-wins and the first mode to repair
+        would restore the rate while the other degradation still stood.
+
+        Everything else keeps the 1.x resolution: a regex over the component's
+        variable basenames, through ``pat_to_var_value_list``.
+
+        Parameters
+        ----------
+        mode_name : str
+            The declaring mode: what the derating variable is named from.
+        effects : list of tuples
+            ``(pattern, value)`` pairs as declared on the mode.
+
+        Returns
+        -------
+        list of tuples
+            ``(variable, value)`` pairs to clamp while the state holds.
+        """
+        patterns = []
+        derated = []
+
+        for pattern, value in effects:
+            flow_names = self.match_continuous_outputs(pattern)
+
+            if not flow_names:
+                patterns.append((pattern, value))
+                continue
+
+            derated += [
+                (self.add_derating(mode_name, flow_name), float(value))
+                for flow_name in flow_names
+            ]
+
+        solver_owned = self.continuous_endpoint_names()
+
+        return [
+            (var, value)
+            for var, value in self.pat_to_var_value_list(*patterns)
+            if var.basename() not in solver_owned
+        ] + derated
+
+    def release_deratings(self, mode_name, *var_value_lists):
+        """
+        Gives every derating of ``mode_name`` a return to nominal, in place.
+
+        A mode owns its derating variables, so it owns their release: a mode
+        that derates on one of its two states restores :data:`NOMINAL_RATE` on
+        the other, unless it declares a value there itself (a mode returning
+        degraded rather than as-new is a legitimate model).
+
+        Necessary because a derating variable has NO per-step reset, unlike the
+        boolean availability gate: a reset value that composes with a minimum
+        does not exist, so what the library reinitialises for a gate it must
+        hand back explicitly here. Without it, a repaired mode would leave its
+        own degradation standing for the rest of the sequence.
+
+        Parameters
+        ----------
+        mode_name : str
+            The declaring mode.
+        *var_value_lists : list
+            The ``(variable, value)`` lists of the mode's states, MUTATED in
+            place. Order-independent: each list is completed against the
+            variables the mode owns, not against the other list.
+        """
+        derating_vars = self.derating_vars_of(mode_name)
+
+        for var_value_list in var_value_lists:
+            clamped = {var.basename() for var, _ in var_value_list}
+            var_value_list += [
+                (var, NOMINAL_RATE)
+                for basename, var in derating_vars.items()
+                if basename not in clamped
+            ]
 
     def add_atm2states(
         self,
@@ -2221,6 +2476,19 @@ class ObjFlow(cod3s.PycComponent):
             Indicates if the transition from the second state to the first state is interruptible (default is True).
         effects_21 : list of tuples, optional
             The effects of the transition from the second state to the first state (default is []).
+
+        Notes
+        -----
+        An effect naming a CONTINUOUS OUTPUT is a **derating** declaration
+        (R18): ``effects_12=[("X", 0.5)]`` leaves half of what ``X`` produces
+        while the mode holds. It is rewritten onto the variable this mode owns
+        on that output, ``{name}_derating_X``, so two modes derating ``X``
+        compose by minimum (R20) instead of overwriting one another. The
+        opposite state returns the variable to 1 unless it declares a value of
+        its own -- see :meth:`release_deratings`.
+
+        Everything else keeps the 1.x resolution: a regex over the component's
+        variable basenames, and a boolean clamped while the state holds.
         """
 
         # Normalise the occurrence-law sentinels, exactly as
@@ -2278,8 +2546,16 @@ class ObjFlow(cod3s.PycComponent):
             )
 
         # Effects
+        #
+        # Both directions are resolved BEFORE either is wired: an effect naming
+        # a continuous output allocates the derating variable this mode owns on
+        # it (R18), and the mode must then return that variable to nominal on
+        # its other state -- see ``release_deratings`` below.
+        var_value_list_12 = self.resolve_mode_effects(name, effects_12)
+        var_value_list_21 = self.resolve_mode_effects(name, effects_21)
+        self.release_deratings(name, var_value_list_12, var_value_list_21)
+
         st2_bkd = aut.get_state_by_name(st2_name)._bkd
-        var_value_list_12 = self.pat_to_var_value_list(*effects_12)
         if len(var_value_list_12) > 0:
 
             def sensitive_method_12():
@@ -2311,7 +2587,6 @@ class ObjFlow(cod3s.PycComponent):
             )
         # Effects
         st1_bkd = aut.get_state_by_name(st1_name)._bkd
-        var_value_list_21 = self.pat_to_var_value_list(*effects_21)
         if len(var_value_list_21) > 0:
 
             def sensitive_method_21():
@@ -2367,6 +2642,11 @@ class ObjFlow(cod3s.PycComponent):
             The effects of the repair (default is []).
         repair_param_name : str, optional
             The name of the repair parameter (default is "mu").
+
+        Notes
+        -----
+        ``failure_effects=[("X", 0.5)]`` on a continuous output ``X`` derates it
+        (R18): see :meth:`add_atm2states`, which this funnels through.
         """
 
         # Create lambda/mu parameter for failure mode name
@@ -2431,6 +2711,11 @@ class ObjFlow(cod3s.PycComponent):
             The effects of the repair (default is []).
         repair_param_name : str, optional
             The name of the repair parameter (default is "ttr").
+
+        Notes
+        -----
+        ``failure_effects=[("X", 0.5)]`` on a continuous output ``X`` derates it
+        (R18): see :meth:`add_atm2states`, which this funnels through.
         """
 
         # Create lambda/mu parameter for failure mode name

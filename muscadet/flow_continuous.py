@@ -82,6 +82,27 @@ producing flow, keyed by consumer component name (:attr:`FlowContinuousOut.
 allocated`), and a consumer reads its own share back by resolving each
 connection to the flow behind it -- see :meth:`FlowContinuousIn.get_delivered`.
 
+Derating (R18, R19, R20)
+------------------------
+A continuous output carries an **effective rate**, defaulting to 1, by which
+whatever it produces is multiplied. A rate of 0 is a total loss of production:
+there is no separate boolean availability gate on a continuous flow (R19, KD10),
+so the one number expresses both the cut and the degradation.
+
+A failure mode declares its effect against the output flow, and the library
+allocates **one derating variable per (mode, output flow)** pair, named
+``{mode}_derating_{flow}`` (:data:`DERATING_VAR_FMT`) and held in
+:attr:`FlowContinuousOut.derating`. The effective rate is the **minimum** over
+them (R20, KD11, KTD8) -- see :meth:`FlowContinuousOut.get_effective_rate`.
+
+The per-mode variable is what makes that minimum reachable. Were several modes
+to clamp one shared variable, whichever fired last would win, and the first of
+them to repair would write the rate back to 1 while the other degradation was
+still standing. The reset-and-reclamp convention that lets boolean effects
+compose for free -- a gate reinitialised at every step and re-clamped by every
+active mode, so ``False`` wins whatever the order -- does not transpose to
+numbers, because no reset value is neutral for a minimum.
+
 Scope
 -----
 This module owns the channels, the allocation policies and the two accessors
@@ -128,6 +149,16 @@ ALLOCATION_POLICIES = (
 #: keeps a rounding residue from being mistaken for a surplus and spending a
 #: redistribution pass on it.
 ALLOCATION_TOL = 1e-12
+
+#: The effective rate of a continuous output nothing derates (R18). Also the
+#: value a derating variable is created at, and the value a mode returns its own
+#: derating variable to when it leaves the state that derated.
+NOMINAL_RATE = 1.0
+
+#: How a derating variable is named: from the mode that DECLARES it and the
+#: output it bears on (R18). Two modes derating one output therefore own two
+#: distinct variables, which is what makes the minimum of R20 reachable.
+DERATING_VAR_FMT = "{mode}_derating_{flow}"
 
 
 # ----------------------------------------------------------------------
@@ -617,6 +648,19 @@ class FlowContinuousOut(FlowContinuous):
         ),
     )
 
+    derating: typing.Dict[str, typing.Any] = pydantic.Field(
+        default_factory=dict,
+        exclude=True,
+        repr=False,
+        description=(
+            "The derating variables bearing on this output, {declaring mode "
+            "name: variable}. One per (mode, output flow) pair (R18): a mode "
+            "clamps the variable IT owns and never a shared one, so the "
+            "effective rate can be the minimum over them (R20) instead of "
+            "whatever the mode that fired last happened to write."
+        ),
+    )
+
     @pydantic.model_validator(mode="after")
     def check_allocation(self):
         """Refuse a policy that cannot be applied, at DECLARATION time.
@@ -778,6 +822,62 @@ class FlowContinuousOut(FlowContinuous):
         fall back to the raw exported value before the first production sweep.
         """
         return self.allocated.get(comp_name)
+
+    # -- how much of it a failure mode leaves (R18, R19, R20) ----------
+
+    def derating_var_name(self, mode_name):
+        """Name of the derating variable ``mode_name`` owns on this output.
+
+        Derived from the declaring mode AND the output, per R18, so the name is
+        discoverable from either end: a mode knows what it derates, and an
+        output knows which modes derate it through :attr:`derating`.
+        """
+        return DERATING_VAR_FMT.format(mode=mode_name, flow=self.name)
+
+    def register_derating(self, comp, mode_name):
+        """Allocate, once, the derating variable of ``mode_name`` on this output.
+
+        Idempotent on purpose: a mode naming this output in BOTH directions of
+        its automaton -- degrade on occurrence, restore on repair -- keeps one
+        variable, and re-declaring the same effect never doubles it.
+
+        Parameters
+        ----------
+        comp : muscadet.ObjFlow
+            The component owning this flow; the variable is declared on it, so
+            that the effect machinery resolves it like any other variable.
+        mode_name : str
+            The declaring mode. Unique per component, which is what makes the
+            variable name unique.
+
+        Returns
+        -------
+        The PyCATSHOO variable, created at :data:`NOMINAL_RATE`.
+        """
+        var = self.derating.get(mode_name)
+
+        if var is None:
+            var = comp.addVariable(
+                self.derating_var_name(mode_name),
+                pyc.TVarType.t_double,
+                NOMINAL_RATE,
+            )
+            self.derating[mode_name] = var
+
+        return var
+
+    def get_effective_rate(self):
+        """The rate this output's production is multiplied by (R18, R20, KD11).
+
+        The **minimum** over the derating variables registered against it, and
+        :data:`NOMINAL_RATE` when no mode derates it at all. The minimum is
+        order-independent: two modes degrading at 0.5 and 0.8 give 0.5 whichever
+        fired first, and the one repairing leaves the other's 0.8 standing.
+        """
+        if not self.derating:
+            return NOMINAL_RATE
+
+        return min(float(var.value()) for var in self.derating.values())
 
     def update_sensitive_methods(self, comp):
         # No transformation rule and no capacity at this stage: the produced
