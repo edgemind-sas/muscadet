@@ -16,6 +16,7 @@ from .flow_continuous import (
     FlowContinuousOut,
 )
 from .rules import Rule, RuleOperand, RuleSet
+from .capacity import Capacity, CapacityFlow, MeasurementIn
 from .obj_logic import LogicOr, LogicAnd, ObjLogicGate
 from .cod3s_wrapper import KBMuscadet, ObjFlowClass, ObjFlowInstance
 from .version import __version__

@@ -98,6 +98,11 @@ from .flow_continuous import (
     FlowContinuousOut,
 )
 from .rules import Rule, RuleSet
+from .capacity import (
+    Capacity,
+    MeasurementIn,
+    allocate_capacity_equation_order,
+)
 import cod3s
 import re
 import warnings
@@ -145,6 +150,10 @@ class ObjFlow(cod3s.PycComponent):
         Adds a continuous (real-valued) output flow to the component.
     add_rules(name, rules):
         Declares an ordered set of transformation rules on the component.
+    add_capacity(name, flow/flows, capacity, side, content_init):
+        Declares a volume held over one or more continuous flows.
+    add_measurement_in(name):
+        Declares the importing side of a capacity's measurement link.
     set_flows(**kwargs):
         Sets up the flows for the component.
     pat_to_var_value(*pat_value_list):
@@ -183,6 +192,17 @@ class ObjFlow(cod3s.PycComponent):
         # order. Declared with add_rules; consumed by the evaluation and the
         # guard-compilation layers.
         self.rule_sets = {}
+
+        # Capacities, keyed by capacity name, in declaration order. Declared
+        # with add_capacity, INDEPENDENTLY of the rules (KD14).
+        self.capacities = {}
+
+        # Measurement links this component imports, keyed by channel name.
+        self.measurements_in = {}
+
+        # True once ``compute_capacities`` was registered as a PDMP equation
+        # method for this component: one registration covers every capacity.
+        self._capacity_equation_registered = False
 
         self.params = {}
         self.has_default_out_automata = create_default_out_automata
@@ -775,6 +795,308 @@ class ObjFlow(cod3s.PycComponent):
             if isinstance(flow, FlowContinuous)
         }
 
+    def add_capacity(
+        self,
+        name,
+        flow=None,
+        flows=None,
+        capacity=None,
+        side=None,
+        content_init=None,
+        **params,
+    ):
+        """
+        Declares a capacity: a volume held over one or more continuous flows.
+
+        A capacity is declared INDEPENDENTLY of the component's transformation
+        rules (KD14), so a buffer can be added to an existing model without
+        touching its transformation logic. It integrates one level per held
+        flow plus a total, reports the raw quantity and the weighted fill of
+        each, and publishes its level over a measurement link.
+
+        The flows it holds must already be declared, so call this method AFTER
+        the ``add_flow_continuous_*`` calls of ``add_flows``.
+
+        Parameters
+        ----------
+        name : str
+            Capacity name. Must be unique on the component.
+        flow : str or dict, optional
+            Short form for the common single-flow case: a flow name, or a
+            mapping carrying ``name`` and ``weight``.
+        flows : list, optional
+            General form: a list of flow names or of mappings carrying ``name``
+            and ``weight``. ``weight`` defaults to 1 and expresses how much
+            volume one unit of that flow occupies. Mutually exclusive with
+            ``flow``.
+        capacity : float
+            The volume the held flows SHARE. A single scalar, strictly
+            positive.
+        side : str, optional
+            ``"in"`` places the whole capacity upstream of the component's
+            rules, ``"out"`` downstream. Left out, the side is resolved from
+            the held flows and defaults to ``"in"`` for a flow carried by both
+            sides. Every held flow must resolve to the same side.
+        content_init : dict, optional
+            Initial raw quantity per held flow. An omitted flow starts empty.
+        **params : dict
+            Additional capacity parameters.
+
+        Returns
+        -------
+        muscadet.capacity.Capacity
+            The declared, validated and resolved capacity.
+
+        Raises
+        ------
+        ValueError
+            If the capacity name is already used, if the declaration is
+            malformed, if a held flow does not exist, is not continuous or does
+            not resolve to the capacity's side, if the held flows resolve to
+            different sides, or if another capacity already holds one of them
+            on the same side.
+
+        Examples
+        --------
+        >>> comp.add_capacity(name="cuve", flow="H2O", capacity=1000)  # doctest: +SKIP
+
+        >>> comp.add_capacity(                                        # doctest: +SKIP
+        ...     name="cuve",
+        ...     flows=[{"name": "H2O", "weight": 1},
+        ...            {"name": "additif", "weight": 2}],
+        ...     capacity=1000,
+        ...     side="in",
+        ...     content_init={"H2O": 0, "additif": 0},
+        ... )
+        """
+        if name in self.capacities:
+            raise ValueError(f"Capacity {name} already exists")
+
+        if flow is not None and flows is not None:
+            raise ValueError(
+                f"Object {self.name()}: capacity {name}: give either 'flow' "
+                "(the single-flow short form) or 'flows', not both"
+            )
+        flows_specs = flows if flows is not None else flow
+        if flows_specs is None:
+            raise ValueError(
+                f"Object {self.name()}: capacity {name}: declare the flows it "
+                "holds with 'flow' or 'flows'"
+            )
+        if capacity is None:
+            raise ValueError(
+                f"Object {self.name()}: capacity {name}: 'capacity', the "
+                "volume the held flows share, is required"
+            )
+
+        capacity_obj = Capacity(
+            name=name,
+            flows=copy.deepcopy(flows_specs),
+            capacity=capacity,
+            side=side if side is not None else "in",
+            content_init=copy.deepcopy(content_init) if content_init else {},
+            **params,
+        )
+
+        self.resolve_capacity(capacity_obj, side_declared=side)
+
+        capacity_obj.add_variables(self)
+        capacity_obj.add_mb(self)
+        capacity_obj.add_automaton(self)
+
+        self.capacities[name] = capacity_obj
+
+        self.register_capacity(capacity_obj)
+
+        return capacity_obj
+
+    def resolve_capacity(self, capacity, side_declared=None):
+        """
+        Resolves a capacity's held flows against the declared continuous flows.
+
+        Each held flow is looked up on both sides. A flow carried by a single
+        side resolves to it; a flow carried by both is disambiguated by
+        ``side_declared``, falling back to the documented ``"in"`` default. The
+        resolved side is written back into each flow entry and into the
+        capacity, and every entry must agree: a capacity sits ENTIRELY upstream
+        or ENTIRELY downstream of the component's rules (R4).
+
+        Parameters
+        ----------
+        capacity : muscadet.capacity.Capacity
+            The capacity to resolve, updated in place.
+        side_declared : str, optional
+            The side the caller explicitly asked for, or None.
+
+        Raises
+        ------
+        ValueError
+            If a held flow does not exist, is discrete, does not exist on the
+            declared side, if the held flows resolve to different sides, or if
+            another capacity already holds one of them on the same side.
+        """
+        where = f"capacity {capacity.name}"
+
+        for entry in capacity.flows:
+            sides = [
+                side
+                for side, flow in (
+                    ("in", self.flows_in.get(entry.name)),
+                    ("out", self.flows_out.get(entry.name)),
+                )
+                if flow is not None
+            ]
+            if not sides:
+                raise ValueError(
+                    f"Object {self.name()}: {where}: flow {entry.name} does not "
+                    "exist as input nor output flow (you must create it before "
+                    "holding it in a capacity)"
+                )
+
+            if side_declared is not None:
+                if side_declared not in sides:
+                    kind = "input" if side_declared == "in" else "output"
+                    raise ValueError(
+                        f"Object {self.name()}: {where} is declared on side "
+                        f"{side_declared!r} but flow {entry.name} does not "
+                        f"exist as {kind} flow"
+                    )
+                entry.side = side_declared
+            else:
+                # A flow carried by both sides keeps the documented default.
+                entry.side = "in" if "in" in sides else "out"
+
+        resolved_sides = {entry.side for entry in capacity.flows}
+        if len(resolved_sides) > 1:
+            detail = ", ".join(
+                f"{entry.name}->{entry.side}" for entry in capacity.flows
+            )
+            raise ValueError(
+                f"Object {self.name()}: {where} holds flows resolving to "
+                f"different sides ({detail}): a capacity sits entirely "
+                "upstream (side='in') or entirely downstream (side='out') of "
+                "the component's rules"
+            )
+
+        capacity.side = resolved_sides.pop()
+
+        flows_on_side = self.flows_in if capacity.side == "in" else self.flows_out
+        for entry in capacity.flows:
+            flow = flows_on_side[entry.name]
+            if not isinstance(flow, FlowContinuous):
+                raise ValueError(
+                    f"Object {self.name()}: {where}: flow {entry.name} is a "
+                    f"discrete flow ({type(flow).__name__}); a capacity holds "
+                    "continuous flows only"
+                )
+
+        for other in self.capacities.values():
+            if other.side != capacity.side:
+                # The same flow may be buffered upstream AND downstream of the
+                # rules: those are two distinct hops (KTD13).
+                continue
+            clash = sorted(set(capacity.flow_names) & set(other.flow_names))
+            if clash:
+                raise ValueError(
+                    f"Object {self.name()}: {where} claims flow "
+                    f"{', '.join(clash)} on side {capacity.side!r}, already "
+                    f"held by capacity {other.name}: a flow is buffered by at "
+                    "most one capacity per side"
+                )
+
+        return capacity
+
+    def register_capacity(self, capacity):
+        """
+        Registers a capacity's variables, equation and bound transitions.
+
+        The levels become ODE variables, the fills explicit ones, and the
+        empty/full transitions are registered as WATCHED so a bound is crossed
+        exactly rather than at the next integration step (R7). One equation
+        method covers every capacity of the component.
+        """
+        system = self.system()
+
+        capacity.register(system)
+
+        if not self._capacity_equation_registered:
+            system.pdmp_add_equation_method(
+                "compute_capacities",
+                self,
+                allocate_capacity_equation_order(system),
+            )
+            self._capacity_equation_registered = True
+
+        return capacity
+
+    def compute_capacities(self):
+        """PDMP equation: integrate every declared capacity of this component."""
+        for capacity in self.capacities.values():
+            capacity.compute()
+
+    @property
+    def capacities_in(self):
+        """Capacities sitting upstream of the rules, in declaration order."""
+        return {
+            name: capacity
+            for name, capacity in self.capacities.items()
+            if capacity.side == "in"
+        }
+
+    @property
+    def capacities_out(self):
+        """Capacities sitting downstream of the rules, in declaration order."""
+        return {
+            name: capacity
+            for name, capacity in self.capacities.items()
+            if capacity.side == "out"
+        }
+
+    def get_capacity_of_flow(self, flow_name, side):
+        """The capacity buffering ``flow_name`` on ``side``, or None.
+
+        This is the lookup KTD13's counterparty substitution rests on: with a
+        capacity interposed, the rules face it instead of the flow.
+        """
+        for capacity in self.capacities.values():
+            if capacity.side == side and flow_name in capacity.flow_names:
+                return capacity
+        return None
+
+    def add_measurement_in(self, name, **params):
+        """
+        Declares the importing side of a measurement link (R33).
+
+        The observing component reads a capacity's level through a pair of
+        PyCATSHOO references, which carry no setter: the link is read-only by
+        construction, exchanges no quantity and enters no allocation. Connect
+        it with ``system.connect(holder, f"{name}_level_out", observer,
+        f"{name}_level_in")``.
+
+        Parameters
+        ----------
+        name : str
+            Measurement channel name. Matches the observed capacity's name,
+            which is what makes the exported and imported aliases line up.
+        **params : dict
+            Additional measurement parameters, e.g. ``level_default``.
+
+        Returns
+        -------
+        muscadet.capacity.MeasurementIn
+            The declared measurement import.
+        """
+        if name in self.measurements_in:
+            raise ValueError(f"Measurement link {name} already exists")
+
+        measurement = MeasurementIn(name=name, **params)
+        measurement.add_variables(self)
+        measurement.add_mb(self)
+
+        self.measurements_in[name] = measurement
+
+        return measurement
+
     def add_rules(self, name, rules=None, **params):
         """
         Declares an ordered set of transformation rules on the component.
@@ -892,7 +1214,30 @@ class ObjFlow(cod3s.PycComponent):
         return rule_set
 
     def _resolve_rule_flow(self, flow_name, port, where, role):
-        """Resolve one rule flow name, returning the ``(flow, port)`` pair."""
+        """Resolve one rule flow name, returning the ``(flow, port)`` pair.
+
+        A name that designates a declared capacity is refused here (R29): a
+        guard reading a level its own rule fills is the mode-chattering case,
+        and forbidding it removes that class of instability by construction
+        (KD15). Threshold control over production goes through a sensor
+        component that reads the capacity and drives a control port.
+        """
+        if flow_name in self.capacities:
+            if role == "rule guard":
+                raise ValueError(
+                    f"Object {self.name()}: {where}: {role} references "
+                    f"capacity {flow_name}: a rule guard cannot read a "
+                    "capacity level. Gate production on a level through a "
+                    "sensor component that reads the capacity and drives a "
+                    "control port, then guard on that control port"
+                )
+            raise ValueError(
+                f"Object {self.name()}: {where}: {role} references capacity "
+                f"{flow_name}, which is not a flow: an interposed capacity "
+                "replaces the flow it buffers automatically, so rules name "
+                "flows, never capacities"
+            )
+
         if port == "in":
             flow, kind = self.flows_in.get(flow_name), "input"
         elif port == "out":
@@ -1030,11 +1375,11 @@ class ObjFlow(cod3s.PycComponent):
         st2="present",
         init_st2=False,
         cond_occ_12=True,
-        occ_law_12={"cls": "delay", "time": 0},
+        occ_law_12=None,
         occ_interruptible_12=True,
         effects_12=[],
         cond_occ_21=True,
-        occ_law_21={"cls": "delay", "time": 0},
+        occ_law_21=None,
         occ_interruptible_21=True,
         effects_21=[],
     ):
@@ -1068,6 +1413,17 @@ class ObjFlow(cod3s.PycComponent):
         effects_21 : list of tuples, optional
             The effects of the transition from the second state to the first state (default is []).
         """
+
+        # Normalise the occurrence-law sentinels, exactly as
+        # ``cod3s.PycComponent.add_aut2st`` does. They MUST be rebuilt on every
+        # call: ``TransitionModel.sanitize_occ_law`` rewrites their ``cls``
+        # entry in place and ``ObjCOD3S.from_dict`` then pops it, so a shared
+        # default mapping is emptied by its first use and the second defaulted
+        # call raises "Missing attribute 'cls'".
+        if occ_law_12 is None:
+            occ_law_12 = {"cls": "delay", "time": 0}
+        if occ_law_21 is None:
+            occ_law_21 = {"cls": "delay", "time": 0}
 
         st1_name = f"{name}_{st1}"
         st2_name = f"{name}_{st2}"
