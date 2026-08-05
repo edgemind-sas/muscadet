@@ -674,9 +674,9 @@ One connection wires **both directions**: the quantity travels downstream, and t
 
 Per continuous flow named `f`, MUSCADET creates:
 
-- `f_fed_out` — on an output flow, the total value delivered downstream
+- `f_fed_out` — on an output flow, the total value delivered downstream. Always equal to the sum of the shares its consumers receive
 - `f_demand_in` — on an output flow, the demands published by its consumers
-- `f_fed_in` — on an input flow, the value received (the **sum** of every incoming connection)
+- `f_fed_in` — on an input flow, the value received: the **sum**, over every incoming connection, of the share that producer allocated to this consumer
 - `f_demand_out` — on an input flow, the demand this consumer publishes upstream
 
 and the values are read back through the flow objects:
@@ -927,7 +927,7 @@ class Alarm(muscadet.ObjFlow):
     def add_flows(self, **kwargs):
         super().add_flows(**kwargs)
 
-        self.add_flow_continuous_in(name="level")
+        self.add_flow_continuous_in(name="level", var_demand_default=100.0)
         self.add_flow(
             dict(
                 cls="FlowDiscreteOut",
@@ -936,6 +936,8 @@ class Alarm(muscadet.ObjFlow):
             )
         )
 ```
+
+A comparison operand over a continuous input reads **what this component is allocated**, which is the same quantity its rules would consume — never the total its producer publishes to all of its consumers. An input therefore has to ask for what it means to watch: an input left at the default demand of 0 is allocated 0, and a threshold over it never fires. To observe a quantity *without* asking for any of it, use the measurement link below, which is the channel for reading a value one does not consume.
 
 The same operand thresholds a level read over a **measurement link** — a read-only channel through which a component observes another component's capacity. It carries no quantity and enters no allocation:
 

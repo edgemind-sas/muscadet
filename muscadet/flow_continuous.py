@@ -502,16 +502,24 @@ class FlowContinuousIn(FlowContinuous):
         )
 
     def live_value(self):
-        """What the incoming connections carry RIGHT NOW.
+        """What this consumer receives RIGHT NOW.
 
-        Read from the reference rather than from the ``var_fed`` mirror: the
+        Read from the connections rather than from the ``var_fed`` mirror: the
         mirror is refreshed by a sensitive method, which the solver runs between
         integration steps and not while it root-finds a crossing. A threshold
         read from it would therefore lag one step behind the value it watches --
         exactly what R12 forbids, on a rule guard (R21) and on a discrete
         production condition (R22) alike.
+
+        This consumer's ALLOCATED share, not the totals its producers publish
+        (R16): :meth:`get_delivered` reads the very same connection variables --
+        so nothing is lagged by applying the allocation -- and it is what the
+        rules actually consume. A guard testing a different number than the rule
+        it guards draws on would select a mode the component cannot sustain, and
+        the divergence appears exactly under the shortage the allocation layer
+        exists for.
         """
-        return float(self.var_in.sumValue(self.var_in_default))
+        return float(self.get_delivered())
 
     def get_var_demand_value(self):
         """Return the demand this consumer currently publishes upstream."""

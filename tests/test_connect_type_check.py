@@ -65,6 +65,17 @@ def the_system():
             self.add_flow_continuous_in(name="c")
             self.add_flow_continuous_in(name="bad")
 
+    class PickyOut(muscadet.ObjFlow):
+        """A discrete output authorizing only components labelled ``OK``."""
+
+        def add_flows(self, **kwargs):
+            super().add_flows(**kwargs)
+            self.add_flow_out(
+                name="p",
+                var_prod_default=True,
+                component_authorized=[{"label": "OK"}],
+            )
+
     class TrigSource(muscadet.ObjFlow):
         """Plain discrete output feeding a trigger, as in the existing
         ``FlowOutOnTrigger`` connection pattern."""
@@ -111,6 +122,14 @@ def the_system():
     # -- connect_trigger, unaffected
     system.add_component(name="TRIG_SRC", cls="TrigSource")
     system.add_component(name="TRIG_TGT", cls="TrigTarget")
+
+    # -- A denied connection whose target carries no matching input flow
+    system.add_component(name="PICKY", cls="PickyOut")
+    system.add_component(name="NOPE", cls="DiscIn")
+
+    # -- The type check on the route that skips the authorization check
+    system.add_component(name="CONT_OUT3", cls="ContOut")
+    system.add_component(name="DISC_IN3", cls="DiscIn")
 
     return system
 
@@ -187,6 +206,43 @@ def test_connect_trigger_still_works(the_system):
     the_system.connect_trigger("TRIG_SRC", "TRIG_TGT", "trig")
 
     assert the_system.comp["TRIG_SRC"].is_connected_to("TRIG_TGT", "trig")
+
+
+def test_an_unauthorized_connection_returns_none_rather_than_raising(the_system):
+    """The 1.x contract: a connection the source denies returns None.
+
+    ``PICKY`` authorizes only components labelled ``OK``, and ``NOPE`` carries
+    no input flow named ``p`` at all. 1.x refused the connection on the
+    authorization pattern and returned None without ever looking the target
+    flow up; resolving that flow eagerly, above the early return, turns a
+    refusal into a KeyError and breaks every model that relies on
+    ``component_authorized`` to filter a broad set of candidate targets.
+    """
+    assert "p" not in the_system.comp["NOPE"].flows_in
+
+    result = the_system.connect_flow(source="PICKY", target="NOPE", flow_name="p")
+
+    assert result is None
+    assert not the_system.comp["PICKY"].is_connected_to("NOPE", "p")
+
+
+def test_the_type_check_runs_even_without_the_authorization_check(the_system):
+    """A mismatch is a model error on EVERY route into ``connect_flow``.
+
+    ``check_authorization=False`` is what ``connect_trigger`` passes, and a raw
+    ``System.connect()`` bypasses the flow layer entirely; neither makes a
+    continuous-to-discrete connection any less wrong. Gating the type check on
+    the authorization flag let the mismatch through on exactly those routes.
+    """
+    with pytest.raises(ValueError, match="continuous and discrete"):
+        the_system.connect_flow(
+            source="CONT_OUT3",
+            target="DISC_IN3",
+            flow_name="x",
+            check_authorization=False,
+        )
+
+    assert not the_system.comp["CONT_OUT3"].is_connected_to("DISC_IN3", "x")
 
 
 def test_delete(the_system):

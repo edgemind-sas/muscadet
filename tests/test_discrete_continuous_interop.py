@@ -74,6 +74,22 @@ QUIET_SUPPLY = 3.0
 #: demand it is DECLARED with -- large enough not to throttle what it watches.
 OBSERVER_DEMAND = 1e6
 
+# -- One supply shared by two consumers, watched at a threshold in between
+#: What the shared producer publishes to all of its consumers.
+ALLOC_SUPPLY = 10.0
+#: What the gated consumer asks for, through the R34 mapping of its own output.
+ALLOC_GATE_DEMAND = 20.0
+#: What the other consumer asks for. 20 against 10 splits the supply 2:1 ...
+ALLOC_RIVAL_DEMAND = 10.0
+#: ... so the gated consumer is allocated this much of it.
+ALLOC_GATE_SHARE = (
+    ALLOC_SUPPLY * ALLOC_GATE_DEMAND / (ALLOC_GATE_DEMAND + ALLOC_RIVAL_DEMAND)
+)
+#: The bound both the guard and the discrete threshold compare against. Between
+#: the share actually allocated and the total the producer publishes, which is
+#: what makes the two readings disagree.
+ALLOC_THRESHOLD = 8.0
+
 
 # ----------------------------------------------------------------------
 # Components
@@ -87,6 +103,55 @@ class IopRateSource(muscadet.ObjFlow):
         super().add_flows(**kwargs)
         for name, rate in kwargs.get("rates", {}).items():
             self.add_flow_continuous_out(name=name, var_fed_default=rate)
+
+
+class IopDemandSink(muscadet.ObjFlow):
+    """A pure consumer of one flow, publishing the demand it was declared with."""
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        self.add_flow_continuous_in(
+            name=kwargs.get("flow", "q"),
+            var_demand_default=kwargs.get("demand", 0.0),
+        )
+
+
+class IopAllocGate(muscadet.ObjFlow):
+    """Both R21 and R22 over ONE continuous input, under an active allocation.
+
+    The rules consume ``q`` and are guarded on it; the discrete ``alarm`` is
+    conditioned on the same bound. Both readings must be the share this
+    component is allocated -- the quantity its own rules draw on.
+    """
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        self.add_flow_continuous_in(name="q")
+        self.add_flow_continuous_out(name="p")
+        self.add_flow(
+            dict(
+                cls="FlowDiscreteOut",
+                name="alarm",
+                var_prod_cond=[{"name": "q", "op": ">=", "value": ALLOC_THRESHOLD}],
+            )
+        )
+        self.add_rules(
+            name="gate",
+            rules=[
+                dict(
+                    name="rich",
+                    cond=[{"name": "q", "op": ">=", "value": ALLOC_THRESHOLD}],
+                    cons={"q": 1.0},
+                    prod={"p": 1.0},
+                ),
+                dict(
+                    name="lean",
+                    cond=[{"name": "q", "op": "<", "value": ALLOC_THRESHOLD}],
+                    cons={"q": 0.5},
+                    prod={"p": 0.5},
+                ),
+            ],
+        )
 
 
 class IopSwitch(muscadet.ObjFlow):
@@ -357,6 +422,54 @@ def run_batch_scenario(obs):
     system.deleteSys()
 
 
+def run_allocated_threshold_scenario(obs):
+    """A guard and a threshold under an allocation that halves what arrives.
+
+    The producer publishes 10 to all its consumers, and this one is allocated
+    6.667 of it. A comparison operand reading the producer's total rather than
+    this consumer's share would hold at ``>= 8`` -- selecting a rule the
+    component cannot feed and raising an alarm on a quantity it never got --
+    while the rule it guards drew on 6.667. The divergence appears exactly
+    under the shortage the allocation layer exists for.
+    """
+    system = muscadet.System(name="InteropAllocatedThreshold")
+
+    system.add_component(name="SRC", cls="IopRateSource", rates={"q": ALLOC_SUPPLY})
+    system.add_component(name="GATE", cls="IopAllocGate")
+    system.add_component(
+        name="RIVAL", cls="IopDemandSink", flow="q", demand=ALLOC_RIVAL_DEMAND
+    )
+    system.add_component(
+        name="PSINK", cls="IopDemandSink", flow="p", demand=ALLOC_GATE_DEMAND
+    )
+
+    system.connect_flow(source="SRC", target="GATE", flow_name="q")
+    system.connect_flow(source="SRC", target="RIVAL", flow_name="q")
+    system.connect_flow(source="GATE", target="PSINK", flow_name="p")
+
+    add_clock(system.comp["RIVAL"], HORIZON)
+
+    system.isimu_start()
+    for _ in range(20):
+        system.isimu_step_forward()
+        if system.currentTime() >= HORIZON:
+            break
+
+    gate = system.comp["GATE"]
+    flow_in = gate.flows_in["q"]
+
+    obs["alloc_threshold"] = {
+        "published": system.comp["SRC"].flows_out["q"].var_fed.value(),
+        "delivered": flow_in.get_delivered(),
+        "live": flow_in.live_value(),
+        "mode": gate.rule_sets["gate"].active_rule().name,
+        "alarm": gate.flows_out["alarm"].var_fed.value(),
+    }
+
+    system.isimu_stop()
+    system.deleteSys()
+
+
 def build_interop_system():
     """Every interoperation scenario, in one system driven through one session."""
     system = muscadet.System(name="InteropSys")
@@ -433,6 +546,7 @@ def the_run():
 
     run_declaration_scenario(obs)
     run_batch_scenario(obs)
+    run_allocated_threshold_scenario(obs)
 
     # Kept alive for the teardown test, per the module convention.
     run_interop_scenario(obs)
@@ -664,6 +778,31 @@ def test_a_negated_comparison_is_refused(the_run):
 
     assert isinstance(error, ValueError)
     assert "use the opposite comparison operator instead" in str(error)
+
+
+def test_a_comparison_operand_reads_this_consumers_allocated_share(the_run):
+    """R21 and R22 both read what THIS component gets, not the producer's total.
+
+    The producer publishes 10 to its two consumers and this one is allocated
+    6.667 of it, below the bound of 8 that its guard and its alarm compare
+    against. Reading the published total instead would put both above the
+    bound: the guard would select the rule consuming twice as much as the
+    component can be served, and the alarm would fire on a quantity that never
+    arrived.
+    """
+    reading = the_run["alloc_threshold"]
+
+    # The producer really does publish more than this consumer receives ...
+    assert reading["published"] == pytest.approx(ALLOC_SUPPLY)
+    assert reading["delivered"] == pytest.approx(ALLOC_GATE_SHARE)
+    assert reading["delivered"] < ALLOC_THRESHOLD < reading["published"]
+
+    # ... and the operand reads the share, so it agrees with what the rules draw
+    assert reading["live"] == pytest.approx(reading["delivered"])
+
+    # Both consumers of the one operand therefore fall on the same side of it
+    assert reading["mode"] == "lean"
+    assert reading["alarm"] is False
 
 
 def test_delete(the_run):

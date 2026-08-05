@@ -82,6 +82,14 @@ SPLIT_SINK_DEMAND = 1.0
 SPLIT_VOLUME = 100.0
 SPLIT_HORIZON = 1.0
 
+# -- A two-mode plant buffering an input the second mode stops consuming
+SWITCH_RATE = 1.0
+SWITCH_VOLUME = 1000.0
+SWITCH_DATE = 10.0
+SWITCH_HORIZON = 40.0
+#: A repair that does not happen within the horizon.
+SWITCH_NEVER = 1e6
+
 
 # ----------------------------------------------------------------------
 # Building blocks
@@ -112,6 +120,38 @@ class CapFillUnit(muscadet.ObjFlow):
             side="in",
             fill_rate=MAP_FILL_RATE,
             content_init={"a": 0.0},
+        )
+
+
+class SwitchCommand(muscadet.ObjFlow):
+    """A plain discrete output: the boolean operand the plant's guards read."""
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        self.add_flow_out(name="run", var_prod_default=True)
+
+
+class TwoModePlant(muscadet.ObjFlow):
+    """Two guarded rules over a buffered input only the first one consumes."""
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        self.add_flow_in(name="run", logic="and")
+        self.add_flow_continuous_in(name="b")
+        self.add_flow_continuous_out(name="p")
+        self.add_capacity(
+            name="bufB",
+            flow="b",
+            capacity=SWITCH_VOLUME,
+            side="in",
+            content_init={"b": 0.0},
+        )
+        self.add_rules(
+            name="plant",
+            rules=[
+                dict(name="running", cond="run", cons={"b": 1.0}, prod={"p": 1.0}),
+                dict(name="idle", cond="not run", prod={"p": 0.0}),
+            ],
         )
 
 
@@ -351,6 +391,60 @@ def run_split_scenario(obs):
 
     system.isimu_stop()
 
+    system.isimu_stop()
+    system.deleteSys()
+
+
+def run_mode_switch_scenario(obs):
+    """A buffered input the newly active rule stops consuming (KTD13, hop 1).
+
+    Hop 1 -- what a flow delivers enters the capacity buffering it -- is a
+    property of the WIRING, not of the rule currently selected. Driven from the
+    active rule's ``cons`` map instead, the inflow of a flow the new mode stops
+    consuming would keep the rate the PREVIOUS mode wrote, while the outflow is
+    correctly zeroed over the whole rule-set footprint: the volume would then
+    integrate an imbalance no producer delivers and CREATE quantity.
+    """
+    system = muscadet.System(name="CapacityFillModeSwitch")
+
+    system.add_component(name="SRC", cls="SourceContinuous", flow="b", rate=SWITCH_RATE)
+    system.add_component(name="CMD", cls="SwitchCommand")
+    system.add_component(name="PLANT", cls="TwoModePlant")
+    system.add_component(
+        name="SINK", cls="ConsumerContinuous", flow="p", demand=SWITCH_RATE
+    )
+
+    system.connect_flow(source="SRC", target="PLANT", flow_name="b")
+    system.connect_flow(source="CMD", target="PLANT", flow_name="run")
+    system.connect_flow(source="PLANT", target="SINK", flow_name="p")
+
+    # The command drops at SWITCH_DATE: the guard selects the idle rule, which
+    # consumes nothing of ``b``.
+    system.comp["CMD"].add_delay_failure_mode(
+        name="trip",
+        failure_time=SWITCH_DATE,
+        failure_effects=[("run_fed_available_out", False)],
+        repair_time=SWITCH_NEVER,
+    )
+    add_clock(system.comp["SINK"], SWITCH_HORIZON)
+
+    def snap(system):
+        tank = system.comp["PLANT"].capacities["bufB"]
+        return {
+            "time": system.currentTime(),
+            "level": tank.get_quantity("b"),
+            "inflow": tank.get_inflow("b"),
+            "outflow": tank.get_outflow("b"),
+            "delivered": system.comp["PLANT"].flows_in["b"].get_delivered(),
+            "mode": getattr(
+                system.comp["PLANT"].rule_sets["plant"].active_rule(), "name", None
+            ),
+        }
+
+    system.isimu_start()
+    obs["switch_trace"] = walk(system, snap, SWITCH_HORIZON)
+    system.isimu_stop()
+
     # Kept alive for the teardown test, per the module convention.
     obs["system"] = system
 
@@ -365,6 +459,7 @@ def the_run():
     run_idle_scenario(obs)
     run_mapping_scenario(obs)
     run_split_scenario(obs)
+    run_mode_switch_scenario(obs)
 
     return obs
 
@@ -550,6 +645,63 @@ def test_the_distributed_total_is_still_the_available_quantity(the_run):
 
     # What the buffer was allocated, less what its own consumer draws, stocks up
     assert split["level"] > 0.0
+
+
+# ----------------------------------------------------------------------
+# KTD13 hop 1 -- what enters a buffered input never depends on the mode
+# ----------------------------------------------------------------------
+
+
+def test_a_buffered_input_the_active_rule_stops_consuming_creates_nothing(the_run):
+    """The buffer of an input the idle mode does not consume must not fill.
+
+    Once the guard flips, the plant demands nothing of ``b``, so its producer
+    delivers nothing and nothing enters the volume. A first hop driven from the
+    active rule's ``cons`` map would leave the inflow at the running mode's
+    rate while the outflow was zeroed, and the level would climb on quantity no
+    producer ever delivered.
+    """
+    trace = the_run["switch_trace"]
+
+    # Strictly after the switching date: the stop at which the transition fires
+    # reports the state the equations were last evaluated in, and they are
+    # re-evaluated on the integration that follows it.
+    idle = [
+        entry
+        for entry in trace
+        if entry["mode"] == "idle" and entry["time"] > SWITCH_DATE
+    ]
+    assert idle, "the guard never selected the idle rule"
+    assert idle[-1]["time"] == pytest.approx(SWITCH_HORIZON, abs=CROSSING_TOL)
+
+    for entry in idle:
+        # Nothing is asked for, so nothing is delivered ...
+        assert entry["delivered"] == pytest.approx(0.0, abs=1e-9)
+        # ... and what enters the volume is exactly that, never the rate the
+        # running mode left behind.
+        assert entry["inflow"] == pytest.approx(entry["delivered"], abs=1e-9)
+        assert entry["outflow"] == pytest.approx(0.0, abs=1e-9)
+        assert entry["level"] == pytest.approx(0.0, abs=1e-9)
+
+
+def test_the_running_mode_still_transits_what_it_consumes(the_run):
+    """The same hop, in the mode that DOES consume: it transits, it hoards nothing.
+
+    Guards against fixing the leak by never filling at all: while the running
+    rule holds, its whole supply crosses the buffer.
+    """
+    trace = the_run["switch_trace"]
+
+    running = [
+        entry for entry in trace if entry["mode"] == "running" and entry["time"] > 0.0
+    ]
+    assert running, "the plant never ran"
+
+    for entry in running:
+        assert entry["delivered"] == pytest.approx(SWITCH_RATE)
+        assert entry["inflow"] == pytest.approx(SWITCH_RATE)
+        assert entry["outflow"] == pytest.approx(SWITCH_RATE)
+        assert entry["level"] == pytest.approx(0.0, abs=1e-9)
 
 
 # ----------------------------------------------------------------------

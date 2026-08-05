@@ -23,12 +23,26 @@ LEVEL_DEFAULT = -1.0
 FILL_DEFAULT = -0.5
 
 
-class Tank(muscadet.ObjFlow):
-    """Holds a capacity and publishes its level."""
+class TankFeed(muscadet.ObjFlow):
+    """A continuous source holding the rate each tank is filled at."""
 
     def add_flows(self, **kwargs):
         super().add_flows(**kwargs)
-        self.add_flow_continuous_in(name="w")
+        self.add_flow_continuous_out(name="w", var_fed_default=TANK_INFLOW)
+
+
+class Tank(muscadet.ObjFlow):
+    """Holds a capacity and publishes its level.
+
+    Declares the demand it publishes upstream, so what fills it comes through
+    the connection: an input capacity is filled from what its flow DELIVERS
+    (KTD13, hop 1), whatever draws on it -- an accumulator draws nothing at all
+    and still fills at its producer's rate.
+    """
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        self.add_flow_continuous_in(name="w", var_demand_default=TANK_INFLOW)
         self.add_capacity(
             name="cuve",
             flow="w",
@@ -66,6 +80,12 @@ def the_system():
     system.add_component(name="SENSOR", cls="Sensor")
     system.add_component(name="LONE", cls="LoneSensor")
 
+    # Each tank gets its own producer, so the twins stay strictly comparable.
+    system.add_component(name="FOBS", cls="TankFeed")
+    system.add_component(name="FREF", cls="TankFeed")
+    system.connect_flow(source="FOBS", target="TOBS", flow_name="w")
+    system.connect_flow(source="FREF", target="TREF", flow_name="w")
+
     # The measurement link: a read-only export wired to its matching import.
     system.connect("TOBS", "cuve_level_out", "SENSOR", "cuve_level_in")
 
@@ -91,9 +111,6 @@ def the_system():
     }
 
     system.isimu_start()
-
-    observed.set_inflow("w", TANK_INFLOW)
-    reference.set_inflow("w", TANK_INFLOW)
 
     def snapshot():
         return {
@@ -146,8 +163,12 @@ def test_the_link_moves_no_quantity(the_system):
     assert t0["observed_level"] == pytest.approx(t0["reference_level"])
     assert tend["observed_level"] == pytest.approx(tend["reference_level"], rel=1e-12)
 
-    # Observing drew nothing out of the capacity and pushed nothing in
-    assert t0["observed_inflow"] == pytest.approx(TANK_INFLOW)
+    # Observing drew nothing out of the capacity and pushed nothing in: the
+    # tank transits exactly what its producer delivers, and nothing leaves it.
+    # At t0 no integration step has run yet, so the transit hooks still hold
+    # the value they were created at -- what the sweeps write is asserted at
+    # tend, where it has actually been written.
+    assert t0["observed_inflow"] == pytest.approx(0.0)
     assert t0["observed_outflow"] == pytest.approx(0.0)
     assert tend["observed_inflow"] == pytest.approx(TANK_INFLOW)
     assert tend["observed_outflow"] == pytest.approx(0.0)

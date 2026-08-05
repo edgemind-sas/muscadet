@@ -69,7 +69,7 @@ NEVER = 1e6  # a repair that does not happen within the horizon
 # =================
 
 
-class Mixer(muscadet.ObjFlow):
+class SyrupMixer(muscadet.ObjFlow):
     """2 units of water make 1 of syrup, while a discrete command holds.
 
     The rule set is declared on the COMPONENT, guarded on the discrete input
@@ -146,7 +146,7 @@ def build_system():
         activate=REFILL_BELOW,
         release=STOP_ABOVE,
     )
-    system.add_component(name="MIXER", cls="Mixer")
+    system.add_component(name="MIXER", cls="SyrupMixer")
     system.add_component(name="CMD", cls="Command")
     system.add_component(
         name="BOTTLER",

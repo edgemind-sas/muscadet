@@ -47,6 +47,20 @@ CLOCK_DELAY = 5.0
 #: machine precision, so a date is asserted within one default PDMP step.
 CROSSING_TOL = 0.05
 
+#: Every producer / consumers cluster built below, ``{prefix: consumer names}``.
+#: What makes the conservation invariant assertable over all of them at once:
+#: whatever the policy, ``{f}_fed_out`` is the total delivered downstream, so
+#: it must equal the sum of the shares the consumers actually read back.
+CLUSTERS = {
+    "AE16": ("AE16_C1", "AE16_C2"),
+    "SH": ("SH_C1", "SH_C2"),
+    "PR": ("PR_C1", "PR_C2", "PR_C3"),
+    "CAP": ("CAP_C1", "CAP_C2", "CAP_C3"),
+    "FUN": ("FUN_C1", "FUN_C2"),
+    "Z": ("Z_C1", "Z_C2"),
+    "UND": ("UND_C1", "UND_C2", "UND_C3"),
+}
+
 
 # ----------------------------------------------------------------------
 # Components
@@ -93,6 +107,26 @@ class AllocTank(muscadet.ObjFlow):
             capacity=kwargs.get("volume", 1000.0),
             side="out",
             content_init={"q": kwargs.get("init", 0.0)},
+        )
+
+
+class AllocCatalysed(muscadet.ObjFlow):
+    """The catalyst idiom: an input the rule NAMES but consumes none of.
+
+    A coefficient of 0 is what declares a flow the rule needs present without
+    drawing it down. ``muscadet.rules.rule_scale`` skips such a coefficient --
+    a rule consuming nothing of a flow is not limited by it -- and the demand
+    half has to skip it identically.
+    """
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        self.add_flow_continuous_in(name="cat")
+        self.add_flow_continuous_in(name="fuel")
+        self.add_flow_continuous_out(name="burn")
+        self.add_rules(
+            name="react",
+            rules=[dict(cons={"cat": 0.0, "fuel": 1.0}, prod={"burn": 1.0})],
         )
 
 
@@ -292,6 +326,19 @@ def build_allocation_system():
     # -- Every consumer demanding zero
     add_cluster(system, "Z", 10.0, {"Z_C1": 0.0, "Z_C2": 0.0})
 
+    # -- A connected consumer NO share was declared for: the policy hands out
+    # -- less than the whole supply, and what is published must follow it down
+    add_cluster(
+        system,
+        "UND",
+        10.0,
+        {"UND_C1": 1.0, "UND_C2": 4.0, "UND_C3": 100.0},
+        policy=dict(
+            allocation="shares",
+            allocation_shares={"UND_C1": 0.5, "UND_C2": 0.5},
+        ),
+    )
+
     # -- An empty capacity, and a stocked one, both asked for 10 while 4 arrives
     for prefix, init in (("EMPTY", 0.0), ("STOCK", 500.0)):
         system.add_component(name=f"{prefix}_SRC", cls="AllocSource", rate=4.0)
@@ -332,6 +379,14 @@ def build_allocation_system():
         system.connect_flow(source=f"{prefix}_B", target=prefix, flow_name="b")
         system.connect_flow(source=prefix, target=f"{prefix}_C", flow_name="x")
 
+    # -- A catalyst coefficient of 0, on a rule whose output NOBODY is
+    # -- connected to: the scale is unbounded, and 0 x inf is NaN
+    system.add_component(name="CAT_SRC", cls="AllocSource", flow="cat", rate=10.0)
+    system.add_component(name="CAT_FUEL", cls="AllocSource", flow="fuel", rate=10.0)
+    system.add_component(name="CATU", cls="AllocCatalysed")
+    system.connect_flow(source="CAT_SRC", target="CATU", flow_name="cat")
+    system.connect_flow(source="CAT_FUEL", target="CATU", flow_name="fuel")
+
     add_clock(system.comp["AE16_SRC"])
 
     return system
@@ -348,32 +403,13 @@ def run_allocation_scenario(obs):
 
     obs["allocated"] = {
         prefix: dict(system.comp[f"{prefix}_SRC"].flows_out["q"].allocated)
-        for prefix in ("AE16", "SH", "PR", "CAP", "FUN", "Z")
+        for prefix in CLUSTERS
     }
-    obs["out"] = {
-        prefix: out_value(system, f"{prefix}_SRC")
-        for prefix in ("AE16", "SH", "PR", "CAP", "FUN", "Z")
-    }
+    obs["out"] = {prefix: out_value(system, f"{prefix}_SRC") for prefix in CLUSTERS}
     obs["received"] = {
         name: delivered(system, name)
-        for name in (
-            "AE16_C1",
-            "AE16_C2",
-            "SH_C1",
-            "SH_C2",
-            "PR_C1",
-            "PR_C2",
-            "PR_C3",
-            "CAP_C1",
-            "CAP_C2",
-            "CAP_C3",
-            "FUN_C1",
-            "FUN_C2",
-            "Z_C1",
-            "Z_C2",
-            "EMPTY_C",
-            "STOCK_C",
-        )
+        for name in [name for names in CLUSTERS.values() for name in names]
+        + ["EMPTY_C", "STOCK_C"]
     }
     obs["mirrored"] = {
         name: system.comp[name].flows_in["q"].var_fed.value()
@@ -423,6 +459,15 @@ def run_allocation_scenario(obs):
             "x": out_value(system, prefix, "x"),
             "received": delivered(system, f"{prefix}_C", "x"),
         }
+
+    # The catalyst: what a coefficient of 0 claims, and what it does not limit
+    obs["catalyst"] = {
+        "demand_cat": published_demand(system, "CATU", "cat"),
+        "demand_fuel": published_demand(system, "CATU", "fuel"),
+        "delivered_cat": delivered(system, "CATU", "cat"),
+        "delivered_fuel": delivered(system, "CATU", "fuel"),
+        "burn": out_value(system, "CATU", "burn"),
+    }
 
     system.isimu_stop()
     system.deleteSys()
@@ -596,6 +641,55 @@ def test_every_consumer_demanding_zero_delivers_zero(the_run):
 
     assert the_run["out"]["Z"] == pytest.approx(0.0)
     assert sum(the_run["allocated"]["Z"].values()) == pytest.approx(0.0)
+
+
+# ----------------------------------------------------------------------
+# Conservation -- what is published is what is distributed
+# ----------------------------------------------------------------------
+
+
+def test_what_an_output_publishes_is_what_its_consumers_receive(the_run):
+    """The invariant of every continuous output, whatever its policy.
+
+    ``{f}_fed_out`` is documented as the total value delivered downstream, so
+    it must equal the sum of the shares its consumers read back -- under the
+    default proportional split, under fixed shares, under priorities and under
+    a Python rule alike. A policy handing out less than what was offered must
+    drag the published figure down with it, or the difference is quantity that
+    left the producer and reached nobody.
+    """
+    for prefix, consumers in CLUSTERS.items():
+        published = the_run["out"][prefix]
+        received = sum(the_run["received"][name] for name in consumers)
+        allocated = sum(the_run["allocated"][prefix].values())
+
+        assert published == pytest.approx(received, abs=1e-9), (
+            f"{prefix}: published {published} but its consumers received " f"{received}"
+        )
+        assert published == pytest.approx(
+            allocated, abs=1e-9
+        ), f"{prefix}: published {published} but allocated {allocated}"
+
+
+def test_a_consumer_with_no_declared_share_does_not_destroy_quantity(the_run):
+    """Shares 0.5 / 0.5 declared, and a THIRD consumer connected without one.
+
+    ``shares`` deliberately gives nothing to an undeclared consumer, so the
+    split totals 5 of the 10 available: 1 and 4, both capped at their demands,
+    and nothing for the third. Publishing the pre-split 10 would put 5 units
+    into the model that no consumer ever received.
+    """
+    allocated = the_run["allocated"]["UND"]
+    received = the_run["received"]
+
+    assert received["UND_C1"] == pytest.approx(1.0)
+    assert received["UND_C2"] == pytest.approx(4.0)
+    assert received["UND_C3"] == pytest.approx(0.0)
+
+    assert sum(allocated.values()) == pytest.approx(5.0)
+
+    # The published total follows the split down, rather than the 10 offered
+    assert the_run["out"]["UND"] == pytest.approx(5.0)
 
 
 # ----------------------------------------------------------------------
@@ -807,6 +901,32 @@ def test_the_mapping_uses_declared_coefficients_even_when_an_input_is_scarce(the
     consumed_b = mapping["x"] / 2.0 * 2.0
     assert consumed_b == pytest.approx(2.0)
     assert mapping["delivered_b"] > consumed_b
+
+
+def test_a_catalyst_coefficient_demands_nothing_and_publishes_no_nan(the_run):
+    """A ``cons`` coefficient of 0 claims 0, whatever the scale of the rule.
+
+    The rule's output is connected to nobody, so nothing throttles it and the
+    scale it would run at is unbounded. Multiplying the coefficient by it
+    without a guard gives ``0 * inf`` -- NaN -- and publishes that upstream as
+    the catalyst's demand, where it poisons every split it reaches. The two
+    halves of one rule must agree: ``rule_scale`` already skips a non-positive
+    coefficient, and so must the demand.
+    """
+    catalyst = the_run["catalyst"]
+
+    # The claim on the catalyst is a real 0, not a NaN and not unbounded
+    assert catalyst["demand_cat"] == pytest.approx(0.0)
+    assert catalyst["demand_cat"] == catalyst["demand_cat"], "NaN published upstream"
+    assert catalyst["delivered_cat"] == pytest.approx(0.0)
+
+    # ... while the flow the rule DOES consume still claims without bound
+    assert math.isinf(catalyst["demand_fuel"])
+
+    # ... and the catalyst limits the rule no more than it is drawn down: the
+    # unit still burns everything its fuel allows.
+    assert catalyst["delivered_fuel"] == pytest.approx(10.0)
+    assert catalyst["burn"] == pytest.approx(10.0)
 
 
 # ----------------------------------------------------------------------

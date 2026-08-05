@@ -56,7 +56,7 @@ GUARDED = ["NOMINAL", "BELOW", "ABOVE", "SCARCE", "GAP", "FLIP", "RAMPED"]
 # ----------------------------------------------------------------------
 
 
-class RateSource(muscadet.ObjFlow):
+class GuardRateSource(muscadet.ObjFlow):
     """A continuous producer holding the rates it was declared with."""
 
     def add_flows(self, **kwargs):
@@ -175,7 +175,7 @@ class Ramp(muscadet.ObjFlow):
 def feed(system, target, flow, rate):
     """Wire a dedicated source delivering ``rate`` of ``flow`` into ``target``."""
     name = f"{target}_{flow}_SRC"
-    system.add_component(name=name, cls="RateSource", rates={flow: rate})
+    system.add_component(name=name, cls="GuardRateSource", rates={flow: rate})
     system.connect_flow(source=name, target=target, flow_name=flow)
     return name
 

@@ -458,10 +458,21 @@ class System(cod3s.PycSystem):
                 logger.debug(f"!!! {source} -- {flow_name} --> {target} already exists")
         else:
 
-            if check_authorization:
-                source_flow = self.comp[source].flows_out[flow_key]
-                target_flow = self.comp[target].flows_in[flow_key]
+            # The type check runs on EVERY route into connect_flow, whether or
+            # not authorization is being checked: connect_trigger and the raw
+            # System.connect() the README prescribes for measurement links wire
+            # real quantities too, and a continuous/discrete mismatch is a model
+            # error however the connection was declared.
+            #
+            # Resolved with .get() and checked only when BOTH sides resolve: a
+            # flow key naming nothing on one side is not a mismatch, and this
+            # lookup must not turn the "not authorized" case below -- which
+            # returns None without ever looking at the target -- into a
+            # KeyError. That was the 1.x contract for a denied connection.
+            source_flow = self.comp[source].flows_out.get(flow_key)
+            target_flow = self.comp[target].flows_in.get(flow_key)
 
+            if source_flow is not None and target_flow is not None:
                 source_is_continuous = isinstance(source_flow, FlowContinuous)
                 target_is_continuous = isinstance(target_flow, FlowContinuous)
                 if source_is_continuous != target_is_continuous:
@@ -475,7 +486,12 @@ class System(cod3s.PycSystem):
                         "continuous and discrete flows cannot be connected"
                     )
 
-                source_flow_comp_auth_pat = source_flow.component_authorized
+            if check_authorization:
+                # Indexed, not .get(): a missing source flow raised here in 1.x
+                # and must go on raising.
+                source_flow_comp_auth_pat = (
+                    self.comp[source].flows_out[flow_key].component_authorized
+                )
                 check_source_auth = self.check_comp_attributes(
                     target, source_flow_comp_auth_pat
                 )
@@ -486,7 +502,11 @@ class System(cod3s.PycSystem):
                         )
                     return None
 
-                target_flow_comp_auth_pat = target_flow.component_authorized
+                # Indexed for the same reason, and reached only once the source
+                # has authorized the target -- exactly where 1.x looked it up.
+                target_flow_comp_auth_pat = (
+                    self.comp[target].flows_in[flow_key].component_authorized
+                )
                 check_target_auth = self.check_comp_attributes(
                     source, target_flow_comp_auth_pat
                 )

@@ -584,9 +584,31 @@ class Capacity(cod3s.ObjCOD3S):
 
         Unbounded while it holds something; once empty, limited to what
         currently transits through it -- what enters it right now (R7).
+
+        Bounded **per constituent as well as per capacity**. The empty/full
+        automaton watches the TOTAL weighted fill, so a volume holding 0 of one
+        flow and plenty of another is not empty and would otherwise serve the
+        depleted one without limit -- a model would consume a reagent it does
+        not hold, and that constituent's level would go negative. A flow holding
+        nothing can only serve what currently transits through it, which is the
+        same R7 bound the automaton applies to the whole volume.
+
+        The two bounds are distinct on purpose: the automaton stays the volume
+        bound, watched and crossed exactly, and the per-flow test below only
+        stops a constituent going negative. On a single-flow capacity they
+        coincide -- a null quantity is a null fill -- so nothing changes there.
+
+        The withdrawal side needs no such guard: :meth:`split_draw` composes a
+        draw at each flow's RAW share of the total, so a nearly depleted
+        constituent is served in proportion to what is left of it and decays
+        towards zero instead of crossing it.
         """
+        if flow_name is not None and self.get_quantity(flow_name) <= 0.0:
+            return self.get_inflow(flow_name)
+
         if not self.is_empty:
             return math.inf
+
         return self.get_inflow(flow_name)
 
     def accept_limit(self, flow_name=None) -> float:

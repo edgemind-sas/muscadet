@@ -1634,6 +1634,16 @@ class ObjFlow(cod3s.PycComponent):
 
                 scale = self.get_demand_scale(rule)
                 for flow_name, coefficient in rule.cons.items():
+                    if coefficient <= 0:
+                        # A rule consuming nothing of a flow demands nothing of
+                        # it -- the catalyst idiom, named by the rule so it can
+                        # be guarded on, drawn on at coefficient 0. The guard
+                        # mirrors muscadet.rules.rule_scale, which skips the
+                        # same coefficients: without it the scale of a rule
+                        # whose output nobody is connected to is unbounded, and
+                        # 0 * inf would publish NaN upstream.
+                        accumulate(flow_name, 0.0)
+                        continue
                     accumulate(flow_name, coefficient * scale)
         else:
             for flow_name in self.get_transferable_flows():
@@ -1806,11 +1816,33 @@ class ObjFlow(cod3s.PycComponent):
         create or register anything.
         """
         self.refresh_continuous_inputs()
+        self.fill_input_capacities()
 
         consumption, production = self.evaluate_production()
 
         self.apply_consumption(consumption)
         self.apply_production(production)
+
+    def fill_input_capacities(self):
+        """
+        Fills every input capacity with what its flows deliver (KTD13, hop 1).
+
+        Unconditional, over the whole set of buffered input flows, and NOT over
+        the flows the active rule happens to consume: hop 1 is a property of the
+        wiring -- what arrives on an input enters the capacity buffering it --
+        and has nothing to do with which rule is currently selected. Driving it
+        from the rules instead would leave the inflow of a flow the newly active
+        rule stopped consuming at the rate the PREVIOUS mode wrote, while
+        :meth:`apply_consumption` correctly zeroes the outflow over the whole
+        rule-set footprint: the capacity would then integrate an imbalance that
+        no producer delivers, and create quantity from nothing.
+
+        The symmetric reset on the consumption side is what
+        :meth:`evaluate_production` does with ``rule_set.consumed_flows``.
+        """
+        for capacity in self.capacities_in.values():
+            for flow_name in capacity.flow_names:
+                capacity.set_inflow(flow_name, self.get_input_delivered(flow_name))
 
     def refresh_continuous_inputs(self):
         """
@@ -1958,10 +1990,13 @@ class ObjFlow(cod3s.PycComponent):
 
         This is KTD13's counterparty substitution on the input side: **an
         interposed capacity replaces the flow it buffers**. With one, the input
-        flow fills the capacity and the rules draw from what the capacity can
-        serve -- unbounded while it holds something, limited to what transits
-        through it once empty (R7). Without one, the rules face the flow
-        directly and draw what it delivers.
+        flow fills the capacity -- hop 1, done once for every buffered input by
+        :meth:`fill_input_capacities` before any rule is looked at -- and the
+        rules draw from what the capacity can serve, unbounded while it holds
+        something, limited to what transits through it once empty (R7). Without
+        one, the rules face the flow directly and draw what it delivers.
+
+        A pure reader: it computes a bound and writes nothing.
 
         **Demand is the other bound.** A capacity holding stock serves without
         limit and an entirely unbounded rule would run at its nominal scale, so
@@ -1982,14 +2017,10 @@ class ObjFlow(cod3s.PycComponent):
             :func:`muscadet.rules.rule_scale` then turns the unbounded rule into
             its nominal production.
         """
-        delivered = self.get_input_delivered(flow_name)
-
         capacity = self.get_capacity_of_flow(flow_name, "in")
         if capacity is None:
-            available = delivered
+            available = self.get_input_delivered(flow_name)
         else:
-            # Hop 1: whatever the flow delivers enters the capacity.
-            capacity.set_inflow(flow_name, delivered)
             available = capacity.serve_limit(flow_name)
 
         return min(available, self.get_input_required_demand(flow_name))
@@ -2017,7 +2048,6 @@ class ObjFlow(cod3s.PycComponent):
         float
             The transferred quantity, always finite.
         """
-        # Called for its side effect too: the input capacity is filled here.
         available = self.get_input_available(flow_name)
 
         if math.isinf(available):
@@ -2210,13 +2240,16 @@ class ObjFlow(cod3s.PycComponent):
             capacity.set_inflow(flow_name, rate)
             buffered.setdefault(capacity.name, (capacity, {}))[1][flow_name] = request
 
-        # Hop 4: the output flows draw on their capacity.
+        # Hop 4: the output flows draw on their capacity. What LEAVES the volume
+        # is what the consumers actually received, not what was offered to them:
+        # a policy handing out less than the draw would otherwise drain the tank
+        # of a quantity nobody took (R16).
         for capacity, requests in buffered.values():
             for flow_name, served in self.draw_from_capacity(
                 capacity, requests
             ).items():
-                capacity.set_outflow(flow_name, served)
-                self.deliver_output(self.flows_out[flow_name], served)
+                delivered = self.deliver_output(self.flows_out[flow_name], served)
+                capacity.set_outflow(flow_name, delivered)
 
     def get_output_request(self, flow, rate):
         """
@@ -2290,13 +2323,33 @@ class ObjFlow(cod3s.PycComponent):
         The flow's variable carries the TOTAL delivered -- one variable is
         exported to every connection -- and the split among the consumers is
         held on the flow itself, for each of them to read its own share back.
+
+        **Split first, publish what was actually distributed.** A policy may
+        hand out less than what was offered: ``shares`` deliberately gives
+        nothing to a connected consumer carrying no declared share (R16), and
+        the surplus redistribution stops at the total demanded. Publishing the
+        offered quantity and splitting it afterwards would make
+        ``{f}_fed_out`` -- documented as the total delivered downstream --
+        exceed the sum of the consumers' shares, and the same pre-split figure
+        would drain an output capacity of a quantity nobody received.
+
+        An output NO consumer is connected to is the one case where there is no
+        split to read: it delivers what it produces, exactly as it did before
+        allocation existed.
+
+        Returns
+        -------
+        float
+            What was actually distributed, which is what the flow now carries.
         """
         quantity = max(float(quantity), 0.0)
 
-        flow.var_fed.setValue(quantity)
-        self.allocate_output(flow, quantity)
+        allocated = self.allocate_output(flow, quantity)
+        distributed = sum(allocated.values()) if allocated else quantity
 
-        return quantity
+        flow.var_fed.setValue(distributed)
+
+        return distributed
 
     def allocate_output(self, flow, available):
         """

@@ -26,6 +26,17 @@ HORIZON = 20.0
 # machine precision, so the dates are asserted within one default PDMP step.
 CROSSING_TOL = 0.05
 
+# A volume holding two reagents at very different stocks: the scarce one is
+# exhausted while the volume as a whole stays far from empty.
+REAGENT_A_INIT = 2.0
+REAGENT_B_INIT = 500.0
+REAGENT_VOLUME = 2000.0
+REAGENT_DRAW = 1.0
+#: The per-constituent bound carries no watched transition of its own, so the
+#: crossing is found on the integration grid: the level stops just below zero
+#: rather than exactly on it, by at most one step's worth of draw.
+REAGENT_TOL = 0.05
+
 
 class Mixer(muscadet.ObjFlow):
     """AE10: one volume shared by two flows occupying it at different weights."""
@@ -78,12 +89,28 @@ class WeightedElectrolyser(muscadet.ObjFlow):
         )
 
 
+class VesselFeed(muscadet.ObjFlow):
+    """A continuous source holding the rate one vessel is filled at.
+
+    What enters a buffered input is what its flow DELIVERS (KTD13, hop 1), so
+    a vessel that must transit something is wired to one of these rather than
+    having its transit hook written by hand. The outflow side has no such
+    owner on a vessel -- nothing draws on it -- and is still set directly.
+    """
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        self.add_flow_continuous_out(name="w", var_fed_default=kwargs.get("rate", 1.0))
+
+
 class Vessel(muscadet.ObjFlow):
     """A single-flow capacity, parameterised by volume and initial content."""
 
     def add_flows(self, **kwargs):
         super().add_flows(**kwargs)
-        self.add_flow_continuous_in(name="w")
+        self.add_flow_continuous_in(
+            name="w", var_demand_default=kwargs.get("demand", 0)
+        )
         self.add_capacity(
             name="cuve",
             flow="w",
@@ -97,12 +124,48 @@ class WeightedVessel(Vessel):
 
     def add_flows(self, **kwargs):
         muscadet.ObjFlow.add_flows(self, **kwargs)
-        self.add_flow_continuous_in(name="w")
+        self.add_flow_continuous_in(
+            name="w", var_demand_default=kwargs.get("demand", 0)
+        )
         self.add_capacity(
             name="cuve",
             flows=[{"name": "w", "weight": 2}],
             capacity=kwargs.get("volume", 10),
             content_init={"w": kwargs.get("init", 0)},
+        )
+
+
+class ReagentSink(muscadet.ObjFlow):
+    """A pure consumer publishing the demand that drives the plant below."""
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        self.add_flow_continuous_in(name="P", var_demand_default=REAGENT_DRAW)
+
+
+class TwoReagentPlant(muscadet.ObjFlow):
+    """One rule consuming two reagents held in ONE input volume.
+
+    The scarce reagent runs out long before the volume as a whole does, which
+    is what tells the per-constituent bound apart from the empty/full automaton
+    watching the total weighted fill.
+    """
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        self.add_flow_continuous_in(name="A")
+        self.add_flow_continuous_in(name="B")
+        self.add_flow_continuous_out(name="P")
+        self.add_capacity(
+            name="vat",
+            flows=["A", "B"],
+            capacity=REAGENT_VOLUME,
+            side="in",
+            content_init={"A": REAGENT_A_INIT, "B": REAGENT_B_INIT},
+        )
+        self.add_rules(
+            name="mix",
+            rules=[dict(cons={"A": 1.0, "B": 1.0}, prod={"P": 1.0})],
         )
 
 
@@ -134,21 +197,42 @@ def the_system():
 
     # -- Bounds: one tank empties at t = 5, one fills at t = 8
     system.add_component(name="DRAIN", cls="Vessel", volume=10, init=5)
-    system.add_component(name="FILL", cls="Vessel", volume=10, init=2)
+    system.add_component(name="FILL", cls="Vessel", volume=10, init=2, demand=1)
 
     # -- Bounds: what an empty / a full capacity can still serve and accept
-    system.add_component(name="TRANSIT", cls="Vessel", volume=10, init=0)
-    system.add_component(name="BRIM", cls="Vessel", volume=10, init=10)
+    system.add_component(name="TRANSIT", cls="Vessel", volume=10, init=0, demand=2)
+    system.add_component(name="BRIM", cls="Vessel", volume=10, init=10, demand=1)
 
     # -- Integration of the imbalance between what enters and what leaves
-    system.add_component(name="BAL", cls="Vessel", volume=1000, init=10)
+    system.add_component(name="BAL", cls="Vessel", volume=1000, init=10, demand=3)
 
     # -- Weight governs how fast the volume fills
-    system.add_component(name="LIGHT", cls="Vessel", volume=100, init=1)
-    system.add_component(name="HEAVY", cls="WeightedVessel", volume=100, init=1)
+    system.add_component(name="LIGHT", cls="Vessel", volume=100, init=1, demand=1)
+    system.add_component(
+        name="HEAVY", cls="WeightedVessel", volume=100, init=1, demand=1
+    )
+
+    # -- What each vessel transits comes through a connection: the inflow of a
+    # -- buffered input is rewritten at every evaluation from what its flow
+    # -- delivers, so it cannot be scaffolded. DRAIN takes nothing in.
+    for name, rate in (
+        ("FILL", 1.0),
+        ("TRANSIT", 2.0),
+        ("BRIM", 1.0),
+        ("BAL", 3.0),
+        ("LIGHT", 1.0),
+        ("HEAVY", 1.0),
+    ):
+        system.add_component(name=f"{name}_FEED", cls="VesselFeed", rate=rate)
+        system.connect_flow(source=f"{name}_FEED", target=name, flow_name="w")
 
     # -- The same flow buffered on both sides of the rules
     system.add_component(name="DUAL", cls="DualSide")
+
+    # -- One volume, two reagents, only one of them scarce
+    system.add_component(name="VAT", cls="TwoReagentPlant")
+    system.add_component(name="VSINK", cls="ReagentSink")
+    system.connect_flow(source="VAT", target="VSINK", flow_name="P")
 
     # A horizon the session can always step to, so a bound that was NOT watched
     # would only be noticed here.
@@ -165,18 +249,13 @@ def the_system():
 
     system.isimu_start()
 
-    # The sweeps of the later units write these; here they are set once and the
-    # capacities integrate their imbalance.
-    caps["DRAIN"]["cuve"].set_outflow("w", 1.0)  # 5 -> 0 at t = 5
-    caps["FILL"]["cuve"].set_inflow("w", 1.0)  # 2 -> 10 at t = 8
-    caps["TRANSIT"]["cuve"].set_inflow("w", 2.0)  # empty, but 2 transits
-    caps["TRANSIT"]["cuve"].set_outflow("w", 2.0)
-    caps["BRIM"]["cuve"].set_inflow("w", 1.0)  # full, but 1 transits
-    caps["BRIM"]["cuve"].set_outflow("w", 1.0)
-    caps["BAL"]["cuve"].set_inflow("w", 3.0)  # net +2
-    caps["BAL"]["cuve"].set_outflow("w", 1.0)
-    caps["LIGHT"]["cuve"].set_inflow("w", 1.0)
-    caps["HEAVY"]["cuve"].set_inflow("w", 1.0)
+    # Nothing draws on a vessel, so no sweep owns its OUTFLOW: it is set here
+    # and the capacities integrate the imbalance against what their feed
+    # delivers. The inflow half comes through the connections wired above.
+    caps["DRAIN"]["cuve"].set_outflow("w", 1.0)  # 5 -> 0 at t = 5, nothing in
+    caps["TRANSIT"]["cuve"].set_outflow("w", 2.0)  # empty, but 2 transits
+    caps["BRIM"]["cuve"].set_outflow("w", 1.0)  # full, but 1 transits
+    caps["BAL"]["cuve"].set_outflow("w", 1.0)  # 3 in, 1 out: net +2
 
     obs["t0"] = {
         "time": system.currentTime(),
@@ -230,8 +309,16 @@ def the_system():
         "heavy_fill": caps["HEAVY"]["cuve"].get_fill("w"),
         "transit_empty": caps["TRANSIT"]["cuve"].is_empty,
         "transit_serve": caps["TRANSIT"]["cuve"].serve_limit(),
+        "transit_serve_w": caps["TRANSIT"]["cuve"].serve_limit("w"),
         "brim_full": caps["BRIM"]["cuve"].is_full,
         "brim_accept": caps["BRIM"]["cuve"].accept_limit(),
+        "vat_a": caps["VAT"]["vat"].get_quantity("A"),
+        "vat_b": caps["VAT"]["vat"].get_quantity("B"),
+        "vat_empty": caps["VAT"]["vat"].is_empty,
+        "vat_serve_a": caps["VAT"]["vat"].serve_limit("A"),
+        "vat_serve_b": caps["VAT"]["vat"].serve_limit("B"),
+        "vat_out_a": caps["VAT"]["vat"].get_outflow("A"),
+        "vat_prod": system.comp["VAT"].flows_out["P"].var_fed.value(),
     }
 
     system.isimu_stop()
@@ -389,11 +476,17 @@ def test_an_empty_capacity_serves_what_transits(the_system):
     tend = the_system["tend"]
 
     assert t0["transit_empty"] is True
-    assert t0["transit_serve"] == pytest.approx(2.0)
-    assert t0["transit_serve_w"] == pytest.approx(2.0)
 
+    # At t0 no integration step has run, so nothing has entered the capacity
+    # yet: an empty capacity nothing transits through serves nothing at all.
+    assert t0["transit_serve"] == pytest.approx(0.0)
+    assert t0["transit_serve_w"] == pytest.approx(0.0)
+
+    # Once its feed delivers, it serves onward exactly what goes through it,
+    # read as a whole and read on the single flow it holds.
     assert tend["transit_empty"] is True
     assert tend["transit_serve"] == pytest.approx(2.0)
+    assert tend["transit_serve_w"] == pytest.approx(2.0)
 
     # The tank drained to empty can serve nothing: nothing transits through it
     assert tend["drain_serve"] == pytest.approx(0.0)
@@ -408,6 +501,40 @@ def test_a_full_capacity_accepts_what_transits(the_system):
     assert t0["brim_accept"] == pytest.approx(1.0)
     assert tend["brim_full"] is True
     assert tend["brim_accept"] == pytest.approx(1.0)
+
+
+def test_a_depleted_constituent_is_bounded_by_what_transits(the_system):
+    """R7, per constituent: a flow it holds none of cannot be served without limit.
+
+    The empty/full automaton watches the TOTAL weighted fill, so this volume --
+    2 of A against 500 of B -- is nowhere near empty once A is exhausted. Bounded
+    by the automaton alone, A would be served without limit and the rule would go
+    on consuming a reagent the volume does not hold: A's level would cross zero
+    and keep falling, and the plant would keep producing out of nothing.
+    """
+    tend = the_system["tend"]
+
+    # The volume as a whole is NOT empty -- which is the whole point ...
+    assert tend["vat_empty"] is False
+    assert tend["vat_b"] > 0.0
+    assert tend["vat_serve_b"] == float("inf")
+
+    # ... yet the scarce reagent is exhausted and cannot go below zero. Nothing
+    # transits through the volume, so a depleted A serves nothing at all.
+    assert tend["time"] > REAGENT_A_INIT, "A had no time to run out"
+    assert tend["vat_a"] == pytest.approx(0.0, abs=REAGENT_TOL)
+    assert tend["vat_a"] >= -REAGENT_TOL
+    assert tend["vat_serve_a"] == pytest.approx(0.0)
+
+    # The rule is limited by its scarcest reagent, so it stops drawing on BOTH
+    # and stops producing: quantity is not created out of the depleted one.
+    assert tend["vat_out_a"] == pytest.approx(0.0, abs=1e-9)
+    assert tend["vat_prod"] == pytest.approx(0.0, abs=1e-9)
+
+    # B was drawn on only for as long as A lasted, never beyond it.
+    assert tend["vat_b"] == pytest.approx(
+        REAGENT_B_INIT - REAGENT_A_INIT, abs=REAGENT_TOL
+    )
 
 
 def test_an_unbounded_capacity_limits_nothing(the_system):

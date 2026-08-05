@@ -355,10 +355,10 @@ def run_chain_scenario(obs):
 def run_capacity_scenario(obs):
     """An accumulator fills, saturates, and throttles the source feeding it.
 
-    The transit hook is written here rather than by the sweeps, exactly as
-    ``tests/test_capacity_001.py`` writes it: the production sweep fills an
-    input capacity from the rules that DRAW on it, and an accumulator declares
-    none. What is asserted through the connection is the other half -- the
+    Nothing writes the transit hook by hand here: the production sweep fills an
+    input capacity from what its flow DELIVERS, whatever the rules drawing on it
+    do -- an accumulator declares none at all and still fills at its producer's
+    rate. What is asserted through the same connection is the other half -- the
     throttling: once at its volume the capacity accepts only what leaves it,
     the demand it publishes upstream collapses, and its producer delivers
     nothing (R7, AE11).
@@ -390,7 +390,6 @@ def run_capacity_scenario(obs):
     add_clock(system.comp["SENS"], FILL_HORIZON)
 
     system.isimu_start()
-    system.comp["CAP"].capacities["tank"].set_inflow("q", FILL_RATE)
 
     def snap(system):
         tank = system.comp["CAP"].capacities["tank"]
@@ -415,8 +414,12 @@ def run_deadband_scenario(obs):
 
     Two sensors on one capacity: one carrying a deadband the level never leaves,
     one carrying the single threshold the level crosses twice. The level is
-    driven through the capacity's transit hook, so the walk is exact and the
-    only thing under test is what the two sensors make of it.
+    driven through the capacity's OUTFLOW hook, so the walk is exact and the
+    only thing under test is what the two sensors make of it. The outflow is
+    the drivable half here: the inflow of a buffered input is rewritten at every
+    evaluation from what its flow delivers (KTD13, hop 1), while nothing draws
+    on this accumulator, so its outflow is written by nobody. A negative outflow
+    is what makes the level rise.
     """
     system = muscadet.System(name="KbContinuousDeadband")
 
@@ -468,7 +471,7 @@ def run_deadband_scenario(obs):
         }
 
     system.isimu_start()
-    tank_of(system).set_inflow("q", 1.0)
+    tank_of(system).set_outflow("q", -1.0)
 
     trace = [snap(system)]
     turned = False
@@ -479,7 +482,7 @@ def run_deadband_scenario(obs):
         trace.append(snap(system))
         if not turned and system.currentTime() >= BAND_TURN_DATE:
             # The level turns around, still inside the band
-            tank_of(system).set_inflow("q", -1.0)
+            tank_of(system).set_outflow("q", 1.0)
             turned = True
 
     obs["band_trace"] = trace
