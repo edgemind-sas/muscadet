@@ -97,6 +97,7 @@ from .flow_continuous import (
     FlowContinuousIn,
     FlowContinuousOut,
 )
+from .rules import Rule, RuleSet
 import cod3s
 import re
 import warnings
@@ -142,6 +143,8 @@ class ObjFlow(cod3s.PycComponent):
         Adds a continuous (real-valued) input flow to the component.
     add_flow_continuous_out(**params):
         Adds a continuous (real-valued) output flow to the component.
+    add_rules(name, rules):
+        Declares an ordered set of transformation rules on the component.
     set_flows(**kwargs):
         Sets up the flows for the component.
     pat_to_var_value(*pat_value_list):
@@ -175,6 +178,11 @@ class ObjFlow(cod3s.PycComponent):
 
         self.flows_in = {}
         self.flows_out = {}
+
+        # Transformation rule sets, keyed by rule set name, in declaration
+        # order. Declared with add_rules; consumed by the evaluation and the
+        # guard-compilation layers.
+        self.rule_sets = {}
 
         self.params = {}
         self.has_default_out_automata = create_default_out_automata
@@ -766,6 +774,148 @@ class ObjFlow(cod3s.PycComponent):
             for name, flow in self.flows_out.items()
             if isinstance(flow, FlowContinuous)
         }
+
+    def add_rules(self, name, rules=None, **params):
+        """
+        Declares an ordered set of transformation rules on the component.
+
+        A rule set is declared on the COMPONENT and not on an output flow: a
+        reaction with correlated outputs cannot be stated one output at a time.
+        Each rule carries a guard (``cond``), a ``cons`` map of consumed input
+        coefficients and a ``prod`` map of produced output coefficients; an
+        omitted coefficient defaults to 1. A rule declared without a guard is
+        the default rule of its set and applies when no other rule matches.
+
+        The flows the rules refer to must already be declared, so call this
+        method AFTER the ``add_flow_*`` calls of ``add_flows``.
+
+        Parameters
+        ----------
+        name : str
+            Rule set name. Must be unique on the component.
+        rules : list
+            Ordered rules, each a mapping (or a :class:`~muscadet.rules.Rule`)
+            carrying ``cond``, ``cons`` and ``prod``. A guard may be given as a
+            list of operands or as an expression string such as
+            ``"F4 and F1 >= 10"``; only the structured form is stored.
+        **params : dict
+            Additional rule set parameters.
+
+        Returns
+        -------
+        muscadet.rules.RuleSet
+            The declared, validated and resolved rule set.
+
+        Raises
+        ------
+        ValueError
+            If the rule set name is already used, if a rule is malformed, if
+            more than one rule is declared without a guard, or if a name used
+            in a guard / ``cons`` / ``prod`` does not resolve to a declared
+            flow.
+
+        Examples
+        --------
+        >>> comp.add_rules(                                  # doctest: +SKIP
+        ...     name="X",
+        ...     rules=[
+        ...         dict(cond=[{"name": "F4", "negate": True}],
+        ...              cons={"F3": 3, "F2": 2}, prod={"X": 2}),
+        ...         dict(cond="F4 and F1 >= 10",
+        ...              cons={"F1": 3}, prod={"X": 0.5}),
+        ...     ],
+        ... )
+        """
+        if name in self.rule_sets:
+            raise ValueError(f"Rule set {name} already exists")
+
+        if rules is None:
+            rules = []
+        if isinstance(rules, (dict, Rule)):
+            rules = [rules]
+
+        # Work on independent specifications so that declaring the same rules on
+        # two components -- or re-declaring a dumped rule set -- never shares
+        # (nor deep-copies) the flow objects bound during resolution.
+        rules_specs = [
+            rule.model_dump() if isinstance(rule, Rule) else copy.deepcopy(rule)
+            for rule in rules
+        ]
+
+        rule_set = RuleSet(name=name, rules=rules_specs, **params)
+
+        self.resolve_rule_set(rule_set)
+
+        self.rule_sets[name] = rule_set
+
+        return rule_set
+
+    def resolve_rule_set(self, rule_set):
+        """
+        Resolves every flow name used by a rule set against the declared flows.
+
+        Guard operands follow the discrete production-condition resolution:
+        ``port`` forces a side, its absence resolves the input first. The
+        resolved side is written back into the operand ``port`` and the flow
+        object into its ``flow`` attribute, so the evaluation and the
+        guard-compilation layers do not resolve names again.
+
+        ``cons`` names are consumed and therefore resolved against the input
+        flows, ``prod`` names are produced and resolved against the output
+        flows.
+
+        Parameters
+        ----------
+        rule_set : muscadet.rules.RuleSet
+            The rule set to resolve, updated in place.
+
+        Raises
+        ------
+        ValueError
+            If a name does not resolve to a declared flow. The message names
+            the offending name.
+        """
+        for index, rule in enumerate(rule_set.rules):
+            where = f"rule set {rule_set.name}, {rule_set.rule_label(index)}"
+
+            for operand in rule.cond:
+                operand.flow, operand.port = self._resolve_rule_flow(
+                    operand.name, operand.port, where, "rule guard"
+                )
+
+            for flow_name in rule.cons:
+                self._resolve_rule_flow(flow_name, "in", where, "rule 'cons' map")
+
+            for flow_name in rule.prod:
+                self._resolve_rule_flow(flow_name, "out", where, "rule 'prod' map")
+
+        return rule_set
+
+    def _resolve_rule_flow(self, flow_name, port, where, role):
+        """Resolve one rule flow name, returning the ``(flow, port)`` pair."""
+        if port == "in":
+            flow, kind = self.flows_in.get(flow_name), "input"
+        elif port == "out":
+            flow, kind = self.flows_out.get(flow_name), "output"
+        else:
+            # Historical resolution order: input first, then output.
+            flow = self.flows_in.get(flow_name)
+            if flow is not None:
+                port, kind = "in", "input"
+            else:
+                flow = self.flows_out.get(flow_name)
+                if flow is not None:
+                    port, kind = "out", "output"
+                else:
+                    port, kind = None, "input nor output"
+
+        if flow is None:
+            raise ValueError(
+                f"Object {self.name()}: {where}: flow {flow_name} does not exist "
+                f"as {kind} flow (you must create it before using it in a {role})"
+            )
+
+        return flow, port
 
     def set_flows(self, **kwargs):
         """
