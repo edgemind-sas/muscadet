@@ -68,20 +68,44 @@ the component only has to decide *what* counts as available (KTD13) and *where*
 production is written. That split is what :meth:`muscadet.ObjFlow.compute_production`
 implements.
 
-Scope
------
-Rule *selection* -- evaluating guards and compiling them into a mode automaton
--- is not here: :meth:`RuleSet.active_rule` is the seam the guard-compilation
-layer replaces.
+Guard compilation (KD7, R12, R13, R14)
+--------------------------------------
+Rule *selection* goes through a **mode automaton**, :class:`RuleMode`: one state
+per rule -- plus one meaning "no rule applies" when the set declares no default
+-- and a transition between every pair of states, conditioned on the guards.
+
+Two properties come out of making selection an automaton rather than an ``if``
+inside the equation:
+
+- the coefficient maps are **frozen within a mode**, which breaks the algebraic
+  coupling between demand and production the two topological sweeps rest on;
+- the transitions are registered as **watched**, so the solver stops the
+  integration *at* a threshold crossing instead of noticing it at the following
+  step. A guard like ``F1 >= 10`` would otherwise fire late, by an amount that
+  depends on the integration step size (R12).
+
+At most one rule is active at a time: two guards holding together is a model
+error naming both rules (R13). It is checked at **every** evaluation -- in the
+transition conditions and again in :meth:`RuleMode.active_rule` -- because it
+depends on the current variable values and nothing about the declaration can
+rule it out. A rule declared without a guard is the default and applies when no
+other rule matches; a set with no default selects nothing, and a rule set that
+selects nothing produces zero (R14).
+
+:meth:`RuleSet.active_rule` is what reads the mode back, and
+``ObjFlow.get_active_rule`` is where a component reaches it.
 """
 
 import math
+import operator
 import re
 import typing
 
 import pydantic
 
 import cod3s
+
+from .flow_continuous import FlowContinuousIn
 
 #: The six comparison operators a numeric guard operand may carry.
 COMPARISON_OPERATORS = ("<", "<=", ">", ">=", "==", "!=")
@@ -95,6 +119,35 @@ PORTS = ("in", "out")
 #: quantities -- what finally bounds it is the demand of the consumers, which
 #: the demand sweep computes.
 UNCONSTRAINED_SCALE = 1.0
+
+#: Key of the mode state a rule set sits in while no guard holds and it declares
+#: no default rule. Production is zero there (R14).
+NO_RULE = "none"
+
+#: Occurrence law of a mode transition: it fires as soon as its guard holds.
+#: Registered as a watched transition, so a threshold is crossed exactly rather
+#: than at the following integration step (R12).
+_INSTANT_OCC_LAW = {"cls": "delay", "time": 0}
+
+#: The comparison operators of a numeric guard operand, as callables.
+_COMPARATORS = {
+    "<": operator.lt,
+    "<=": operator.le,
+    ">": operator.gt,
+    ">=": operator.ge,
+    "==": operator.eq,
+    "!=": operator.ne,
+}
+
+
+def _fresh_instant_occ_law():
+    """A private copy of the instantaneous law.
+
+    ``TransitionModel.sanitize_occ_law`` rewrites the ``cls`` entry in place,
+    so a shared mapping would be capitalised twice.
+    """
+    return dict(_INSTANT_OCC_LAW)
+
 
 # One operand of a guard string: an optional negation ("not x" / "!x"), a flow
 # name, and an optional comparison against a numeric literal. Anything else --
@@ -432,6 +485,51 @@ class Rule(cod3s.ObjCOD3S):
         return self.to_expression()
 
 
+def operand_value(operand: RuleOperand):
+    """The value ``operand`` currently reads on the flow it was bound to.
+
+    A continuous input is read from its **reference** rather than from the
+    ``var_fed`` mirror: the mirror is refreshed by a sensitive method, which the
+    solver runs between integration steps and not while it root-finds a
+    crossing. A guard reading it would therefore lag one step behind the value
+    it watches -- exactly what R12 forbids. Every other flow carries its value
+    in ``var_fed``, a discrete one as a boolean (R21).
+    """
+    flow = operand.flow
+
+    if flow is None:
+        raise ValueError(
+            f"Guard operand {operand.to_expression()!r} is not bound to a flow: "
+            "ObjFlow.add_rules resolves every operand at declaration time"
+        )
+
+    if isinstance(flow, FlowContinuousIn):
+        return float(flow.var_in.sumValue(flow.var_in_default))
+
+    return flow.var_fed.value()
+
+
+def operand_holds(operand: RuleOperand) -> bool:
+    """True when ``operand`` is currently satisfied."""
+    value = operand_value(operand)
+
+    if operand.is_comparison:
+        return bool(_COMPARATORS[operand.op](float(value), float(operand.value)))
+
+    truth = bool(value)
+    return (not truth) if operand.negate else truth
+
+
+def guard_holds(rule: Rule) -> bool:
+    """True when every operand of ``rule``'s guard holds.
+
+    A guard is a conjunction, so an EMPTY one holds vacuously -- which is why
+    only guarded rules are ever passed here: the unguarded rule of a set is its
+    default, and a default applies by not being matched, not by being true.
+    """
+    return all(operand_holds(operand) for operand in rule.cond)
+
+
 def rule_scale(rule: Rule, available: typing.Mapping[str, float]) -> float:
     """The scale at which ``rule`` runs, set by its scarcest input (R15).
 
@@ -500,6 +598,18 @@ class RuleSet(cod3s.ObjCOD3S):
         description="Ordered rules. At most one of them may be the default rule.",
     )
 
+    mode: typing.Any = pydantic.Field(
+        None,
+        exclude=True,
+        repr=False,
+        description=(
+            "The RuleMode compiled from this set's guards, bound by "
+            "ObjFlow.compile_rule_mode. Never serialised: the rules above are "
+            "enough to compile it again. None while the set carries no guard, "
+            "and None on a set built outside a component."
+        ),
+    )
+
     @pydantic.field_validator("rules", mode="before")
     @classmethod
     def normalize_rules(cls, value):
@@ -540,32 +650,55 @@ class RuleSet(cod3s.ObjCOD3S):
         """The guarded rules, in declaration order."""
         return [rule for rule in self.rules if not rule.is_default]
 
+    @property
+    def consumed_flows(self) -> typing.List[str]:
+        """Every input flow name ANY rule of the set consumes, in order.
+
+        The whole set's footprint, not the active rule's: a flow the previously
+        active mode drew on must be brought back to zero when another mode takes
+        over, or it would keep the rate that mode left on it.
+        """
+        names = []
+        for rule in self.rules:
+            for name in rule.cons:
+                if name not in names:
+                    names.append(name)
+        return names
+
+    @property
+    def produced_flows(self) -> typing.List[str]:
+        """Every output flow name ANY rule of the set produces, in order."""
+        names = []
+        for rule in self.rules:
+            for name in rule.prod:
+                if name not in names:
+                    names.append(name)
+        return names
+
     def active_rule(self) -> typing.Optional[Rule]:
         """The rule whose production is evaluated, or None to produce zero.
 
-        **This is the seam guard compilation replaces.** Selecting a rule means
-        evaluating guards, and a guard must be watched by the solver so a
-        threshold is crossed exactly rather than at the following integration
-        step (R12) -- which makes rule selection a mode automaton, not a
-        Python comparison. Until that automaton exists, this returns what needs
-        no guard at all:
+        With guards, the compiled mode automaton is what selects it: its ACTIVE
+        STATE designates the rule, and not a live evaluation of the guards
+        (KD7). Freezing the coefficients within a mode is the state break the
+        two-sweep ordering rests on, and it is also what a watched transition
+        buys -- the mode changes at the crossing, not at the next step.
 
-        - the default (unguarded) rule when the set declares one;
-        - the single rule of a one-rule set;
-        - None otherwise, and a rule set that selects nothing produces zero
-          (R14), which is exactly what a guarded set does before its guards are
-          compiled.
+        Without a compiled mode -- a set carrying no guard at all, or one built
+        outside a component -- the default rule is what applies. None means
+        "produce nothing for this rule set" (R14).
 
-        ``ObjFlow.get_active_rule`` is where a component overrides this.
+        ``ObjFlow.get_active_rule`` is where a component reaches this.
+
+        Raises
+        ------
+        ValueError
+            When two guards of the set hold at once (R13).
         """
-        default = self.default_rule
-        if default is not None:
-            return default
+        if self.mode is not None:
+            return self.mode.active_rule()
 
-        if len(self.rules) == 1:
-            return self.rules[0]
-
-        return None
+        return self.default_rule
 
     def __repr__(self) -> str:
         return f"{self.__class__.__name__}({self.name}, {len(self.rules)} rules)"
@@ -577,3 +710,225 @@ class RuleSet(cod3s.ObjCOD3S):
             for index, rule in enumerate(self.rules)
         ]
         return "\n".join(lines)
+
+
+class RuleMode:
+    """The mode automaton a rule set's guards compile to (KD7, R12).
+
+    One state per rule, plus a :data:`NO_RULE` state when the set declares no
+    default, and a transition between every pair of states. Each transition
+    carries an instantaneous law and a condition that holds exactly when the
+    guards select its target, and every one of them is registered as a WATCHED
+    transition of the PDMP manager.
+
+    Why an automaton and not an ``if`` inside the production equation
+    ----------------------------------------------------------------
+    Two things fall out of it, and neither is available to a guard evaluated
+    inline:
+
+    - the active state **freezes** the coefficient maps within a mode, which
+      breaks the algebraic coupling between demand and production the two
+      topological sweeps depend on;
+    - a watched transition makes the solver stop the integration **at** the
+      crossing. Inline, a guard like ``F1 >= 10`` fires at the following step,
+      late by an amount that depends on the step size -- unacceptable in a
+      reliability library.
+
+    Deliberately NOT a pydantic model: it holds nothing but backend handles and
+    a back-reference to the rule set that owns it, and that set already carries
+    everything needed to compile it again (which is why ``RuleSet.mode``
+    excludes it from serialisation).
+    """
+
+    def __init__(self, rule_set: RuleSet, comp):
+        self.rule_set = rule_set
+        self.comp = comp
+
+        #: State keys, in state order: a rule index per rule, then NO_RULE when
+        #: the set declares no default rule.
+        self.keys: typing.List[typing.Any] = []
+
+        #: The compiled ``cod3s.PycAutomaton``, None until :meth:`build` runs.
+        self.automaton = None
+
+        #: Backend state per key, read back by :meth:`active_key`.
+        self.state_bkd: typing.Dict[typing.Any, typing.Any] = {}
+
+    # ------------------------------------------------------------------
+    # Naming
+    # ------------------------------------------------------------------
+
+    @property
+    def default_key(self) -> typing.Optional[int]:
+        """Index of the set's default rule, or None when it declares none."""
+        for index, rule in enumerate(self.rule_set.rules):
+            if rule.is_default:
+                return index
+        return None
+
+    @property
+    def init_key(self):
+        """The state the automaton starts in.
+
+        The default rule when the set declares one, :data:`NO_RULE` otherwise.
+        It cannot be derived from the guards: a mode is compiled at DECLARATION
+        time, before the flows carry any variable at all. The instantaneous
+        transitions settle the automaton on the state the guards select at
+        ``t = 0``, which is why they must be watched rather than merely
+        conditioned.
+        """
+        default = self.default_key
+        return NO_RULE if default is None else default
+
+    def state_name(self, key) -> str:
+        """Name of the automaton state designated by ``key``."""
+        suffix = NO_RULE if key == NO_RULE else f"rule_{key}"
+        return f"{self.rule_set.name}_{suffix}"
+
+    def transition_name(self, source, target) -> str:
+        """Name of the transition from state ``source`` to state ``target``."""
+        return f"{self.rule_set.name}_{source}_to_{target}"
+
+    # ------------------------------------------------------------------
+    # Selection
+    # ------------------------------------------------------------------
+
+    def selected_key(self):
+        """The state the guards designate right now, checking R13 on the way.
+
+        Evaluated live -- this is NOT what the production equation reads, it is
+        what drives the transitions towards the state it does read.
+
+        Raises
+        ------
+        ValueError
+            When two guards hold at once. A model in which two production
+            regimes hold together is wrong, and naming both rules beats
+            electing one silently (KD8).
+        """
+        matches = [
+            index
+            for index, rule in enumerate(self.rule_set.rules)
+            if not rule.is_default and guard_holds(rule)
+        ]
+
+        if len(matches) > 1:
+            labels = ", ".join(self.rule_set.rule_label(index) for index in matches)
+            guards = " / ".join(
+                self.rule_set.rules[index].guard_expression() for index in matches
+            )
+            raise ValueError(
+                f"Object {self.comp.name()}: rule set {self.rule_set.name}: "
+                f"{len(matches)} guards hold at once -- {labels} ({guards}): at "
+                "most one rule may be active at a time, so make the guards "
+                "mutually exclusive"
+            )
+
+        if matches:
+            return matches[0]
+
+        # No guard holds: the default rule applies, and a set declaring none
+        # selects nothing and produces zero (R14).
+        return self.init_key
+
+    def active_key(self):
+        """The key of the automaton's currently active state."""
+        for key, state in self.state_bkd.items():
+            if state.isActive():
+                return key
+
+        # Before the automaton is built there is no state to read back.
+        return self.init_key
+
+    def active_rule(self) -> typing.Optional[Rule]:
+        """The rule the automaton's active state designates, or None.
+
+        The exclusivity of the guards (R13) is re-checked here, at EVERY
+        evaluation: it is a property of the current variable values, so nothing
+        about the declaration can rule it out. The transition conditions check
+        it too -- this second check is what makes the error surface from the
+        production equation, whichever runs first.
+        """
+        self.selected_key()
+
+        key = self.active_key()
+        if key == NO_RULE:
+            return None
+
+        return self.rule_set.rules[key]
+
+    # ------------------------------------------------------------------
+    # Backend construction
+    # ------------------------------------------------------------------
+
+    def _condition(self, target):
+        """The condition of every transition landing on state ``target``."""
+
+        def condition():
+            return self.selected_key() == target
+
+        return condition
+
+    def build(self):
+        """Build the automaton on the owning component."""
+        rule_set = self.rule_set
+        comp = self.comp
+
+        self.keys = list(range(len(rule_set.rules)))
+        if self.default_key is None:
+            self.keys.append(NO_RULE)
+
+        transitions = []
+        conditions = {}
+        for source in self.keys:
+            for target in self.keys:
+                if source == target:
+                    continue
+                name = self.transition_name(source, target)
+                transitions.append(
+                    {
+                        "name": name,
+                        "source": self.state_name(source),
+                        "target": self.state_name(target),
+                        "is_interruptible": True,
+                        "occ_law": _fresh_instant_occ_law(),
+                    }
+                )
+                conditions[name] = self._condition(target)
+
+        aut = cod3s.PycAutomaton(
+            name=f"{comp.name()}_{rule_set.name}_mode",
+            states=[self.state_name(key) for key in self.keys],
+            init_state=self.state_name(self.init_key),
+            transitions=transitions,
+        )
+        aut.update_bkd(comp)
+
+        for name, condition in conditions.items():
+            aut.get_transition_by_name(name)._bkd.setCondition(condition)
+
+        self.automaton = aut
+        self.state_bkd = {
+            key: aut.get_state_by_name(self.state_name(key))._bkd for key in self.keys
+        }
+
+        comp.automata_d[aut.name] = aut
+
+        return aut
+
+    def register(self, system):
+        """Register every mode transition as a watched transition (R12)."""
+        for transition in self.automaton.transitions:
+            system.pdmp_add_watched_transition(transition)
+
+    # ------------------------------------------------------------------
+    # Representation
+    # ------------------------------------------------------------------
+
+    def __repr__(self) -> str:
+        key = self.active_key()
+        state = NO_RULE if key == NO_RULE else self.rule_set.rule_label(key)
+        return f"{self.__class__.__name__}({self.rule_set.name} -> {state})"
+
+    def __str__(self) -> str:
+        return self.__repr__()

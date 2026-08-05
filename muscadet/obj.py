@@ -99,6 +99,7 @@ from .flow_continuous import (
 )
 from .rules import (
     Rule,
+    RuleMode,
     RuleSet,
     rule_consumption,
     rule_production,
@@ -1186,7 +1187,51 @@ class ObjFlow(cod3s.PycComponent):
 
         self.rule_sets[name] = rule_set
 
+        self.compile_rule_mode(rule_set)
+
         return rule_set
+
+    def compile_rule_mode(self, rule_set):
+        """
+        Compiles a rule set's guards into a watched mode automaton (KD7, R12).
+
+        One state per rule -- plus a state meaning "no rule applies" when the
+        set declares no default (R14) -- and a transition between every pair of
+        states, conditioned on the guards. The transitions carry an
+        instantaneous law and are registered as WATCHED, so a threshold is
+        crossed exactly rather than at the following integration step: a guard
+        like ``F1 >= 10`` would otherwise fire late, and by an amount that
+        depends on the step size.
+
+        The automaton's ACTIVE STATE -- and not a live guard evaluation -- is
+        what selects the coefficient maps :meth:`evaluate_production` reads.
+        That freeze within a mode is what breaks the algebraic coupling between
+        demand and production the two topological sweeps rest on.
+
+        Called by :meth:`add_rules`, at declaration time: the conditions are
+        closures over the flow objects, so they need no variable to exist yet.
+
+        Parameters
+        ----------
+        rule_set : muscadet.rules.RuleSet
+            The rule set to compile, updated in place through its ``mode``.
+
+        Returns
+        -------
+        muscadet.rules.RuleMode or None
+            None when the set carries no guard at all: its default rule needs
+            no automaton, and a model that declares none never gains one.
+        """
+        if not rule_set.guarded_rules:
+            return None
+
+        mode = RuleMode(rule_set, self)
+        mode.build()
+        mode.register(self.system())
+
+        rule_set.mode = mode
+
+        return mode
 
     def resolve_rule_set(self, rule_set):
         """
@@ -1319,12 +1364,16 @@ class ObjFlow(cod3s.PycComponent):
         tuple of dict
             ``(consumption, production)``, both ``{flow name: rate}``. Rule
             sets accumulate: a flow named by two of them carries their sum.
+            Every flow a rule set names appears, at zero when the active mode
+            does not name it -- a rate another mode left behind must be cleared,
+            not inherited.
 
         Raises
         ------
         ValueError
             When the component declares no rule and its continuous flows do not
-            match name for name (R31).
+            match name for name (R31), or when two guards of one rule set hold
+            at once (R13).
         """
         consumption = {}
         production = {}
@@ -1335,9 +1384,16 @@ class ObjFlow(cod3s.PycComponent):
 
         if self.rule_sets:
             for rule_set in self.rule_sets.values():
+                # Every flow the SET names starts at zero, whichever of its
+                # rules is active. Written rather than left out: a flow the
+                # previously active mode produced -- or drew from a capacity --
+                # would otherwise keep the rate that mode left on it, and a rule
+                # set selecting nothing must produce zero (R14).
+                accumulate(consumption, dict.fromkeys(rule_set.consumed_flows, 0.0))
+                accumulate(production, dict.fromkeys(rule_set.produced_flows, 0.0))
+
                 rule = self.get_active_rule(rule_set)
                 if rule is None:
-                    # A rule set selecting nothing produces nothing (R14).
                     continue
 
                 available = {
@@ -1360,11 +1416,11 @@ class ObjFlow(cod3s.PycComponent):
         """
         Returns the rule of ``rule_set`` whose production is evaluated, or None.
 
-        The override point for rule selection: guards are compiled into a mode
-        automaton, and the automaton's active state is what designates the rule.
-        Defers to :meth:`muscadet.rules.RuleSet.active_rule` for the selection
-        that needs no guard at all -- the default rule, or the single rule of a
-        one-rule set.
+        The override point for rule selection. Guards are compiled into a mode
+        automaton by :meth:`compile_rule_mode`, and the automaton's ACTIVE STATE
+        is what designates the rule: reading a state rather than re-evaluating
+        the guards here is what freezes the coefficients within a mode. A set
+        carrying no guard has no automaton and yields its default rule.
 
         Parameters
         ----------
@@ -1375,6 +1431,13 @@ class ObjFlow(cod3s.PycComponent):
         -------
         muscadet.rules.Rule or None
             None means "produce nothing for this rule set" (R14).
+
+        Raises
+        ------
+        ValueError
+            When two guards of the set hold at once (R13). Checked at every
+            evaluation, which is where a conflict can first be seen: it depends
+            on the current variable values.
         """
         return rule_set.active_rule()
 
