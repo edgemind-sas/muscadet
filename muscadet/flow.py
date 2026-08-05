@@ -154,7 +154,7 @@ class FlowModel(cod3s.ObjCOD3S):
         )
 
 
-class FlowIn(FlowModel):
+class FlowDiscreteIn(FlowModel):
 
     var_in: typing.Any = pydantic.Field(
         None, description="Reference to collect external flow connections"
@@ -323,7 +323,17 @@ class FlowIn(FlowModel):
         comp.addStartMethod(self.sm_flow_fed_name, self.sm_flow_fed_fun)
 
 
-class FlowOut(FlowModel):
+class FlowIn(FlowDiscreteIn):
+    """Legacy name of :class:`FlowDiscreteIn`.
+
+    Kept permanently as a real subclass (never an assignment alias) so that
+    instances built through it report ``FlowIn`` as their runtime class name.
+    """
+
+    pass
+
+
+class FlowDiscreteOut(FlowModel):
 
     # --- POINT À TRANCHER (2026-06-15) : var_is_active vs var_fed_available_out_init ---
     # var_is_active et var_fed_available sont deux portes booléennes ET sur var_fed
@@ -801,7 +811,20 @@ class FlowOut(FlowModel):
             comp.addStartMethod(sm_flow_prod_available_name, sm_flow_prod_available_fun)
 
 
-class FlowOutTempo(FlowOut):
+class FlowOut(FlowDiscreteOut):
+    """Legacy name of :class:`FlowDiscreteOut`.
+
+    Kept permanently as a real subclass (never an assignment alias) so that
+    instances built through it report ``FlowOut`` as their runtime class name.
+    It deliberately sits *between* :class:`FlowDiscreteOut` and the canonical
+    tempo / trigger classes so that every ``isinstance(flow, FlowOut)``
+    relation that held before the rename still holds.
+    """
+
+    pass
+
+
+class FlowDiscreteOutTempo(FlowOut):
 
     occ_enable_flow: typing.Optional[
         typing.Union[dict, cod3s.OccurrenceDistributionModel]
@@ -982,7 +1005,13 @@ class FlowOutTempo(FlowOut):
         return sensitive_set_flow_template
 
 
-class FlowOutOnTrigger(FlowOut):
+class FlowOutTempo(FlowDiscreteOutTempo):
+    """Legacy name of :class:`FlowDiscreteOutTempo`."""
+
+    pass
+
+
+class FlowDiscreteOutOnTrigger(FlowOut):
     var_trigger_in: typing.Any = pydantic.Field(
         None, description="Trigger input reference"
     )
@@ -1124,3 +1153,9 @@ class FlowOutOnTrigger(FlowOut):
                 )
 
         return sensitive_set_flow_template
+
+
+class FlowOutOnTrigger(FlowDiscreteOutOnTrigger):
+    """Legacy name of :class:`FlowDiscreteOutOnTrigger`."""
+
+    pass

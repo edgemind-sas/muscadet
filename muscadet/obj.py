@@ -82,7 +82,16 @@ This module follows the project's coding conventions including:
 """
 
 import Pycatshoo as pyc
-from .flow import FlowIn, FlowOut, FlowOutOnTrigger, FlowOutTempo
+from .flow import (
+    FlowDiscreteIn,
+    FlowDiscreteOut,
+    FlowDiscreteOutOnTrigger,
+    FlowDiscreteOutTempo,
+    FlowIn,
+    FlowOut,
+    FlowOutOnTrigger,
+    FlowOutTempo,
+)
 import cod3s
 import re
 import warnings
@@ -513,7 +522,10 @@ class ObjFlow(cod3s.PycComponent):
         ----------
         flow_specs : dict
             Flow specification dictionary that must contain:
-            - cls: Flow class name (e.g., "FlowIn", "FlowOut", "FlowOutTempo")
+            - cls: Flow class name, canonical ("FlowDiscreteIn",
+              "FlowDiscreteOut", "FlowDiscreteOutTempo",
+              "FlowDiscreteOutOnTrigger") or legacy ("FlowIn", "FlowOut",
+              "FlowOutTempo", "FlowOutOnTrigger")
             - name: Flow name
             - Additional parameters specific to the flow type
 
@@ -544,12 +556,12 @@ class ObjFlow(cod3s.PycComponent):
         flow_specs = self.postprocess_flow_specs(flow_specs)
         flow = cod3s.ObjCOD3S.from_dict(flow_specs)
 
-        if isinstance(flow, FlowIn):
+        if isinstance(flow, FlowDiscreteIn):
             if flow.name in self.flows_in:
                 raise ValueError(f"Input flow {flow.name} already exists")
             else:
                 self.flows_in[flow.name] = flow
-        elif isinstance(flow, FlowOut):
+        elif isinstance(flow, FlowDiscreteOut):
             if flow.name in self.flows_out:
                 raise ValueError(f"Output flow {flow.name} already exists")
             else:
@@ -728,7 +740,7 @@ class ObjFlow(cod3s.PycComponent):
             flow.add_automata(self)
 
             # Add default failure automata for output flows if enabled
-            if self.has_default_out_automata and isinstance(flow, FlowOut):
+            if self.has_default_out_automata and isinstance(flow, FlowDiscreteOut):
                 self.add_atm2states(
                     flow.name,
                     st1="ok",
