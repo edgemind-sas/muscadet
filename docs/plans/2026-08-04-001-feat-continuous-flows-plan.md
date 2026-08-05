@@ -87,6 +87,7 @@ flowchart TB
 - R5. A continuous input propagates a demand upstream, aggregated over the connections feeding it.
 - R6. The quantity delivered on a connection is the lesser of what the producer can produce and what the consumer demands.
 - R7. A capacity that has reached its volume reduces the demand propagated upstream. A capacity that is empty limits what its side can serve onward to what currently transits through it.
+- R36. A capacity that is not full claims its free headroom in the demand it propagates upstream, so it accumulates whatever its producer can deliver beyond what its consumers draw. Without this a buffer's inflow can never exceed its outflow and a standalone tank never fills.
 - R8. Equation evaluation order is derived from the continuous-flow connection graph. A model author never declares an order, and adding a component never requires editing another component's declaration.
 - R34. A component maps the demand aggregated on an output back onto its inputs through the active rule's `prod` and `cons` coefficients. The mapping uses the declared coefficients, not the quantities actually available.
 
