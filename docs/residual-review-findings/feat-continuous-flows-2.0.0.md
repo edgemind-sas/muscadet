@@ -68,7 +68,33 @@ The sensor deadband is the sanctioned damping, but nothing steers a modeller to 
 
 *Suggested direction:* extend the first-run check to walk discrete channels feeding a guard or comparison operand back to their drivers, refusing a path that returns upstream of the continuous edge it reads — lifted when the closing path carries a deadband. Minimum viable alternative: document the constraint in the README.
 
-### R-3. A misspelled parameter on a shipped component is silently ignored (P2, api-contract)
+### R-3. A misspelled parameter on a shipped component is silently ignored (P2, api-contract) — FIXED
+
+*Fixed.* The five components now derive from one
+`muscadet.kb.continuous.ContinuousComponent`, whose `add_flows` refuses any
+kwargs key outside the accepted set, naming the component, the class and every
+key it could not place. Each component declares its own set in
+`DECLARATION_KEYS`; the check unions that attribute over the MRO, so a project
+subclassing one of the five declares only the key it adds and inherits the
+rest.
+
+The accepted set was established empirically rather than guessed, because the
+risk to manage is the opposite of the bug: an over-strict check would refuse
+working models. `ObjFlow.__init__` consumes `name`, `label`, `description`,
+`partial_init` and `create_default_out_automata` in its own signature and puts
+`metadata` back into the kwargs before calling `add_flows`; `PycComponent`
+swallows everything else without reading it. Instrumenting the five
+`add_flows` across the whole suite (`--runslow`), the example and the README
+yielded exactly the documented per-class keys plus `metadata`, and nothing
+else. A test asserts each class's accepted set equals a declaration exercising
+every one of its keys, so a key added without a test fails loudly.
+
+`ALLOCATION_KEYS` is no longer hard-coded: it is derived from
+`FlowContinuousOut.model_fields` on the `allocation` prefix, so a fifth
+allocation field is forwarded with no second edit. `allocated` — the split the
+last sweep computed — is runtime state and deliberately outside the prefix.
+
+Regression tests in `tests/test_kb_continuous_001.py`.
 
 All five components in `muscadet/kb/continuous.py` read declaration keys with `kwargs.get(key, default)` and never reject an unknown key.
 
@@ -78,7 +104,35 @@ Everywhere else in this release a malformed declaration is refused at declaratio
 
 *Suggested direction:* a per-class accepted-key set, raising on any leftover key.
 
-### R-4. A standalone failure mode targeting a continuous output crashes (P2, correctness)
+### R-4. A standalone failure mode targeting a continuous output crashes (P2, correctness) — FIXED
+
+*Fixed by routing it properly, not by refusing it* — the first of the two
+suggested options, which turned out to be a local correction. `ObjFailureMode`
+now resolves its effects through `resolve_effects_on`, which branches on the
+flow family: a continuous output goes through the target's
+`add_derating(mode_key, flow_name)`, a discrete one keeps `var_fed_available`,
+and an output carrying neither raises naming both. Nothing about the standalone
+path forced a design change: the derating variable is allocated on the TARGET
+component, which already exists when the mode is declared, and PyCATSHOO
+accepts `addVariable` there; the pre-run sweep registration happens later
+still, so the new variable is picked up by `get_effective_rate` like any other.
+
+Two things had to follow the routing. The derating key is per AUTOMATON
+(`{fm component}__{automaton}`), not per mode, because a second-order mode
+builds one automaton per combination of its targets and two of them would
+otherwise clamp one variable — the last-writer-wins failure R18 exists to
+prevent. And `release_deratings_on` gives the direction that names nothing a
+return to nominal, a derating having no per-step reset; it is the standalone
+counterpart of `ObjFlow.release_deratings`. The automaton's name is therefore
+now computed BEFORE its effects are resolved, which is the only reordering in
+the block.
+
+The pattern-matched-nothing guard fires correctly again: `fo_found` used to be
+set even where the effect produced was unusable, which suppressed it on exactly
+the path that crashed.
+
+Regression tests in `tests/test_standalone_fm_continuous_001.py`; documented in
+the README beside the derating section.
 
 Declaring a standalone `ObjFailureModeExp` / `ObjFailureModeDelay` whose effect pattern matches a continuous output aborts construction with `AttributeError: 'NoneType' object has no attribute 'addSensitiveMethod'`, naming neither the component, the flow, nor the derating API that exists for this case. `ObjFailureMode` resolves every effect to `var_fed_available`, which a continuous output never declares.
 
@@ -121,8 +175,8 @@ Four new f-string error messages in `obj.py` exceed the 88-character convention,
 - No assertion that a `shares` output with a connected consumer absent from the share map behaves as intended — the configuration `check_allocation` cannot validate, because it runs before any consumer is connected.
 - ~~No test reads continuous values at instant 0 of a batch schedule, so R-1 is entirely unasserted despite `start: 0` being the documented shape.~~ Closed with R-1.
 - ~~No test exercises a control loop closed by a rate comparison rather than a capacity level, so the claim that the within-instant case is removed is never tested against the path that defeats it (R-2).~~ Closed with R-2.
-- No test asserts the five shipped components reject an unknown declaration key (R-3).
-- No test declares a standalone failure mode against a component carrying continuous outputs (R-4).
+- ~~No test asserts the five shipped components reject an unknown declaration key (R-3).~~ Closed with R-3.
+- ~~No test declares a standalone failure mode against a component carrying continuous outputs (R-4).~~ Closed with R-4.
 - No parity test over the two operand-shape validators (R-5).
 - The multi-flow capacity's per-constituent bound added in `e617c41` has no watched transition, so a depleted constituent overshoots by one integration step (−0.005 observed against −25.0 before the fix). Acceptable, but the exact-crossing guarantee that holds for the volume bound does not hold per constituent.
 

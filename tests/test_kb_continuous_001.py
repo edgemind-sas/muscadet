@@ -26,6 +26,7 @@ import pytest
 # Imported for their side effect too: a component class resolves by name, so
 # declaring cls="SourceContinuous" needs the class to have been imported.
 from muscadet.kb.continuous import (  # noqa: F401
+    ALLOCATION_KEYS,
     CapacityContinuous,
     ConsumerContinuous,
     SensorContinuous,
@@ -78,10 +79,88 @@ MIX_DEMAND = 3.0
 CHAIN_RATE = 10.0
 CHAIN_DEMAND = 3.0
 
+# -- R-3: a declaration key no component reads, one per shipped class. The
+# spellings are the plausible slips, not nonsense: a missing numeric parameter
+# is indistinguishable from a legitimate zero, which is what makes a swallowed
+# typo report wrong numbers rather than fail.
+UNKNOWN_KEY_DECLARATIONS = {
+    "SourceContinuous": dict(raet=5.0),
+    "TransformerContinuous": dict(flows_in=["a"], flow_out=["x"]),
+    "CapacityContinuous": dict(flow="q", capacity=10.0, content_intit={"q": 1.0}),
+    "ConsumerContinuous": dict(flow="q", demmand=3.0),
+    "SensorContinuous": dict(measurement="tank", activate=1.0, realease=2.0),
+}
+
+#: R-3, the other way round: every key a component DOES declare, with a value
+#: that builds. Checked key by key against ``DECLARATION_KEYS``, so a key added
+#: to a component without a value here fails loudly rather than going untested.
+FULL_DECLARATIONS = {
+    "SourceContinuous": dict(
+        flow="q",
+        rate=1.0,
+        control="c",
+        control_logic="and",
+        allocation="proportional",
+        allocation_shares={},
+        allocation_priorities={},
+        allocation_fun=None,
+    ),
+    "TransformerContinuous": dict(
+        flows_in=["a"],
+        flows_out=["x"],
+        controls=["c"],
+        rules=[dict(cons={"a": 1.0}, prod={"x": 1.0})],
+        rules_name="convert",
+        allocation="proportional",
+        allocation_shares={},
+        allocation_priorities={},
+        allocation_fun=None,
+    ),
+    "CapacityContinuous": dict(
+        flow="q",
+        flows=["q"],
+        capacity=10.0,
+        ports="both",
+        side="out",
+        demand=0.0,
+        fill_rate=0.0,
+        content_init={"q": 1.0},
+        capacity_name="vessel",
+        allocation="proportional",
+        allocation_shares={},
+        allocation_priorities={},
+        allocation_fun=None,
+    ),
+    "ConsumerContinuous": dict(flow="q", flows=["q"], demand=3.0),
+    "SensorContinuous": dict(
+        measurement="vessel",
+        control="c",
+        activate=4.0,
+        release=8.0,
+        direction="below",
+        level_default=0.0,
+    ),
+}
+
 
 # ----------------------------------------------------------------------
 # Building blocks
 # ----------------------------------------------------------------------
+
+
+class KbContinuousLeakySource(SourceContinuous):
+    """A shipped component extended by a project, the way one would be.
+
+    Declares the one key of its own and inherits the rest: the accepted set is
+    unioned over the MRO rather than read off the class, so subclassing does
+    not mean restating every parameter the base already takes.
+    """
+
+    DECLARATION_KEYS = ("leak",)
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        self.leak = float(kwargs.get("leak", 0.0))
 
 
 def add_clock(comp, date):
@@ -224,6 +303,37 @@ def run_declaration_scenario(obs):
     )
     obs["err_ports"] = declare(
         "PORTS", cls="CapacityContinuous", flow="q", capacity=10.0, ports="sideways"
+    )
+
+    # R-3 -- a key the component does not read is refused, rather than
+    # swallowed by kwargs.get() and left to take its default.
+    obs["err_typo"] = declare("SRCTYPO", cls="SourceContinuous", raet=5.0)
+    obs["err_typos"] = declare(
+        "SRCTYPOS", cls="SourceContinuous", raet=5.0, flwo="q", control_logik="or"
+    )
+    obs["err_unknown_by_class"] = {
+        cls_name: declare(f"UNK_{cls_name}", cls=cls_name, **specs)
+        for cls_name, specs in UNKNOWN_KEY_DECLARATIONS.items()
+    }
+    # A key one component reads is still unknown to another: the accepted set
+    # is per class, not a union over the module.
+    obs["err_foreign_key"] = declare(
+        "CONSALLOC", cls="ConsumerContinuous", demand=1.0, allocation_shares={}
+    )
+
+    # ... and every key a component DOES declare still builds. The risk this
+    # guards against is the opposite of the bug: an over-strict check would
+    # refuse legitimate declarations.
+    obs["full_declarations"] = {
+        cls_name: declare(f"FULL_{cls_name}", cls=cls_name, **specs)
+        for cls_name, specs in FULL_DECLARATIONS.items()
+    }
+
+    # A project subclassing one of the five adds its own key without losing
+    # the inherited ones.
+    obs["err_subclass"] = declare("SUBTYPO", cls="KbContinuousLeakySource", raet=1.0)
+    obs["subclass_full"] = declare(
+        "SUBFULL", cls="KbContinuousLeakySource", rate=2.0, leak=0.5
     )
 
     system.deleteSys()
@@ -829,6 +939,132 @@ def test_an_unknown_capacity_port_declaration_is_refused(the_run):
 
     assert isinstance(error, ValueError)
     assert "'both', 'in' or 'out'" in str(error)
+
+
+# ----------------------------------------------------------------------
+# R-3 -- a declaration key a component does not read is refused
+# ----------------------------------------------------------------------
+
+
+def test_a_misspelled_parameter_is_refused_rather_than_swallowed(the_run):
+    """The filed reproduction: ``SourceContinuous(raet=5.0)``.
+
+    It used to build, connect and simulate without complaint, delivering 0.0 --
+    a model that runs and reports wrong numbers, which is the worst failure
+    mode a simulator has. The error names the component and the key.
+    """
+    error = the_run["err_typo"]
+
+    assert isinstance(error, ValueError)
+    assert "SRCTYPO" in str(error), "the error must name the component"
+    assert "'raet'" in str(error), "... and the key it could not place"
+    assert "SourceContinuous" in str(error)
+    # The accepted set is spelled out, so the typo is fixable from the message
+    assert "rate" in str(error)
+
+
+def test_every_unplaceable_key_is_named_at_once(the_run):
+    """Three slips in one declaration are three names in one error."""
+    error = the_run["err_typos"]
+
+    assert isinstance(error, ValueError)
+    for key in ("'control_logik'", "'flwo'", "'raet'"):
+        assert key in str(error)
+
+
+def test_each_shipped_component_refuses_an_unknown_key(the_run):
+    """All five, not just the source: the check is on the shared base."""
+    errors = the_run["err_unknown_by_class"]
+
+    assert set(errors) == set(UNKNOWN_KEY_DECLARATIONS)
+
+    for cls_name, error in errors.items():
+        assert isinstance(error, ValueError), f"{cls_name} accepted an unknown key"
+        assert cls_name in str(error)
+        assert f"UNK_{cls_name}" in str(error)
+
+
+def test_the_accepted_set_is_per_class(the_run):
+    """A key a source reads is still unknown to a consumer.
+
+    ``allocation_shares`` splits an insufficient supply among consumers, so it
+    belongs to a component that PRODUCES. A pure consumer declares no output,
+    and accepting the key there would silently do nothing.
+    """
+    error = the_run["err_foreign_key"]
+
+    assert isinstance(error, ValueError)
+    assert "'allocation_shares'" in str(error)
+    assert "ConsumerContinuous" in str(error)
+
+
+def test_every_declared_key_still_builds(the_run):
+    """The risk to manage is the opposite of the bug.
+
+    An over-strict check would refuse legitimate declarations, which is worse
+    than the silent typo it removes. Every key each component declares is
+    passed here at once, and the declaration must go through.
+    """
+    for cls_name, error in the_run["full_declarations"].items():
+        assert error is None, f"{cls_name} refused its own documented keys: {error}"
+
+
+@pytest.mark.parametrize(
+    "component_cls",
+    [
+        CapacityContinuous,
+        ConsumerContinuous,
+        SensorContinuous,
+        SourceContinuous,
+        TransformerContinuous,
+    ],
+    ids=lambda cls: cls.__name__,
+)
+def test_the_accepted_set_is_exactly_what_is_exercised(component_cls):
+    """No key accepted without a declaration exercising it, and none missing.
+
+    ``metadata`` is the one key no caller declares: ``ObjFlow.__init__`` puts
+    it back into the kwargs before calling ``add_flows``, so it reaches every
+    component here whether or not it was asked for.
+    """
+    exercised = set(FULL_DECLARATIONS[component_cls.__name__]) | {"metadata"}
+
+    assert component_cls.accepted_declaration_keys() == exercised
+
+
+def test_a_subclass_adds_a_key_without_losing_the_inherited_ones(the_run):
+    """A project extending a shipped component declares only what it adds."""
+    assert KbContinuousLeakySource.accepted_declaration_keys() == (
+        SourceContinuous.accepted_declaration_keys() | {"leak"}
+    )
+
+    # ... and the check is still live on the inherited keys
+    error = the_run["err_subclass"]
+    assert isinstance(error, ValueError)
+    assert "'raet'" in str(error)
+    assert "leak" in str(error), "the subclass key belongs to the accepted set"
+
+    assert the_run["subclass_full"] is None, "its own key must be accepted"
+
+
+def test_the_allocation_keys_are_derived_from_the_flow_model():
+    """R-3's companion: the tuple is not a second, drifting copy.
+
+    Hard-coded, a fifth allocation field added to ``FlowContinuousOut`` would
+    be silently dropped by every component forwarding them. Derived, it is
+    forwarded with no second edit. ``allocated`` is the split the last sweep
+    computed -- runtime state, not a declaration -- and is deliberately outside
+    the prefix.
+    """
+    declared = {
+        name
+        for name, field in muscadet.FlowContinuousOut.model_fields.items()
+        if name.startswith("allocation")
+    }
+
+    assert set(ALLOCATION_KEYS) == declared
+    assert "allocated" not in ALLOCATION_KEYS
+    assert "allocation" in ALLOCATION_KEYS
 
 
 def test_delete(the_run):

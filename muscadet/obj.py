@@ -3374,59 +3374,13 @@ class ObjFailureMode(cod3s.PycComponent):
 
             for target_set_idx in itertools.combinations(range(order_max), order):
 
-                failure_effects_cur = []
-                for target_idx in target_set_idx:
-                    comp_target_cur = self.system().component(self.targets[target_idx])
-                    for flow_name_pat, val in self.failure_effects.items():
-                        if len(flow_name_pat) == 0:
-                            continue
-                        fo_found = False
-                        for fo_name, fo in comp_target_cur.flows_out.items():
-                            if re.search(f"^{flow_name_pat}$", fo_name):
-                                failure_effects_cur.append(
-                                    {
-                                        "var": fo.var_fed_available,
-                                        "value": val,
-                                    }
-                                )
-                                fo_found = True
-                        if not fo_found:
-                            raise ValueError(
-                                f"[Component {str(comp_target_cur)}]\n[{comp_target_cur.name()}: Failure effects of mode {fm_name}] Pattern {flow_name_pat} does not match any flow out"
-                            )
-                repair_effects_cur = []
-                for target_idx in target_set_idx:
-                    comp_target_cur = self.system().component(self.targets[target_idx])
-                    for flow_name_pat, val in self.repair_effects.items():
-                        if len(flow_name_pat) == 0:
-                            continue
-                        fo_found = False
-                        for fo_name, fo in comp_target_cur.flows_out.items():
-                            if re.search(f"^{flow_name_pat}$", fo_name):
-                                repair_effects_cur.append(
-                                    {
-                                        "var": fo.var_fed_available,
-                                        "value": val,
-                                    }
-                                )
-                                fo_found = True
-                        if not fo_found:
-                            raise ValueError(
-                                f"[Component {str(comp_target_cur)}]\n[{comp_target_cur.name()}: Repair effects of mode {fm_name}] Pattern {flow_name_pat} does not match any flow out"
-                            )
-
-                # repair_effects_cur = [
-                #     {
-                #         "var": self.system()
-                #         .component(self.targets[target_idx])
-                #         .flows_out[flow_name]
-                #         .var_fed_available,
-                #         "value": val,
-                #     }
-                #     for target_idx in target_set_idx
-                #     for flow_name, val in self.repair_effects.items()
-                # ]
-
+                # The automaton's name is settled BEFORE its effects are
+                # resolved, because a derating variable is allocated per
+                # (mode, output) pair (R18) and the key it is allocated under
+                # therefore has to be unique per AUTOMATON: the two automata a
+                # second-order mode builds over one target would otherwise
+                # clamp a single variable and overwrite one another, which is
+                # exactly what R18 exists to prevent.
                 failure_state_name_cur = self.failure_state
                 repair_state_name_cur = self.repair_state
                 aut_name_cur = fm_name
@@ -3456,6 +3410,31 @@ class ObjFailureMode(cod3s.PycComponent):
                     aut_name_cur += trans_name_prefix_cur
                     failure_state_name_cur += trans_name_prefix_cur
                     repair_state_name_cur += trans_name_prefix_cur
+
+                mode_key = f"{self.basename()}__{aut_name_cur}"
+
+                failure_effects_cur = []
+                for target_idx in target_set_idx:
+                    comp_target_cur = self.system().component(self.targets[target_idx])
+                    failure_effects_cur += self.resolve_effects_on(
+                        comp_target_cur, self.failure_effects, mode_key, "Failure"
+                    )
+
+                repair_effects_cur = []
+                for target_idx in target_set_idx:
+                    comp_target_cur = self.system().component(self.targets[target_idx])
+                    repair_effects_cur += self.resolve_effects_on(
+                        comp_target_cur, self.repair_effects, mode_key, "Repair"
+                    )
+
+                for target_idx in target_set_idx:
+                    comp_target_cur = self.system().component(self.targets[target_idx])
+                    self.release_deratings_on(
+                        comp_target_cur,
+                        mode_key,
+                        failure_effects_cur,
+                        repair_effects_cur,
+                    )
 
                 target_comps_cur = [
                     self.system().component(self.targets[idx]) for idx in target_set_idx
@@ -3487,6 +3466,119 @@ class ObjFailureMode(cod3s.PycComponent):
                     effects_st1_format="records",
                     step=self.step,
                 )
+
+    def resolve_effects_on(self, comp_target, effects, mode_key, direction):
+        """
+        Resolves one direction's effects on one target into effect records.
+
+        Branches on the flow FAMILY, because the two do not carry the same
+        thing (R19). A discrete output is gated by its availability variable,
+        as it has been since 1.x. A continuous output declares no availability
+        at all -- it carries a rate -- so the effect is routed through
+        :meth:`ObjFlow.add_derating`, which is public precisely so that a mode
+        declared OUTSIDE the component can allocate the variable it needs and
+        target it. Two modes derating one output then compose by minimum (R18,
+        R20) instead of overwriting one another, exactly as they do for a mode
+        declared inside the component.
+
+        The value is the RATE the mode leaves on a continuous output, so the
+        boolean spelling of a 1.x effect keeps meaning what it did: ``False``
+        is a rate of 0 -- the output stops producing -- and ``True`` is the
+        nominal rate.
+
+        Parameters
+        ----------
+        comp_target : ObjFlow
+            The component the effects bear on.
+        effects : dict
+            ``{flow name pattern: value}``, as declared on the mode.
+        mode_key : str
+            Name the derating variables are allocated under, unique per
+            automaton.
+        direction : str
+            ``"Failure"`` or ``"Repair"``, which the error messages name.
+
+        Returns
+        -------
+        list of dict
+            ``{"var", "value"}`` records, in declaration order.
+
+        Raises
+        ------
+        ValueError
+            If a pattern matches no output flow of ``comp_target``, or if it
+            matches an output carrying neither an availability gate nor a
+            rate.
+        """
+        effects_cur = []
+
+        for flow_name_pat, val in effects.items():
+            if len(flow_name_pat) == 0:
+                continue
+            fo_found = False
+            for fo_name, fo in comp_target.flows_out.items():
+                if not re.search(f"^{flow_name_pat}$", fo_name):
+                    continue
+                fo_found = True
+                if isinstance(fo, FlowContinuousOut):
+                    effects_cur.append(
+                        {
+                            "var": comp_target.add_derating(mode_key, fo_name),
+                            "value": float(val),
+                        }
+                    )
+                elif fo.var_fed_available is None:
+                    raise ValueError(
+                        f"[Component {str(comp_target)}]\n"
+                        f"[{comp_target.name()}: {direction} effects of mode "
+                        f"{self.fm_name}] Pattern {flow_name_pat} matches flow "
+                        f"out {fo_name}, which declares no availability "
+                        f"variable to clamp"
+                    )
+                else:
+                    effects_cur.append({"var": fo.var_fed_available, "value": val})
+            if not fo_found:
+                raise ValueError(
+                    f"[Component {str(comp_target)}]\n[{comp_target.name()}: "
+                    f"{direction} effects of mode {self.fm_name}] Pattern "
+                    f"{flow_name_pat} does not match any flow out"
+                )
+
+        return effects_cur
+
+    def release_deratings_on(self, comp_target, mode_key, *effect_lists):
+        """
+        Gives every derating ``mode_key`` owns on ``comp_target`` a release.
+
+        A derating variable has NO per-step reset, unlike the boolean
+        availability gate: a reset value composing with a minimum does not
+        exist. So the direction that does not name an output has to hand its
+        rate back explicitly, or a repaired mode would leave its own
+        degradation standing for the rest of the sequence. The counterpart,
+        for a mode declared OUTSIDE the component, of
+        :meth:`ObjFlow.release_deratings`.
+
+        Parameters
+        ----------
+        comp_target : ObjFlow
+            The component holding the derated outputs.
+        mode_key : str
+            The declaring mode, as ``resolve_effects_on`` allocated it.
+        *effect_lists : list
+            The effect-record lists of the mode's two states, MUTATED in
+            place. Each is completed against the variables the mode owns and
+            not against the other, so a mode declaring a degraded return on
+            one direction keeps it.
+        """
+        derating_vars = comp_target.derating_vars_of(mode_key)
+
+        for effects_cur in effect_lists:
+            clamped = {record["var"].basename() for record in effects_cur}
+            effects_cur += [
+                {"var": var, "value": NOMINAL_RATE}
+                for basename, var in derating_vars.items()
+                if basename not in clamped
+            ]
 
     def get_failure_cond(self, target_comps, failure_param):
         if self.failure_cond is not True:

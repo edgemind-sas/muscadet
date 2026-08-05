@@ -30,14 +30,28 @@ import muscadet
 #: Flow name used when a component declares none.
 DEFAULT_FLOW = "q"
 
+
+def _allocation_keys():
+    """The allocation parameters a continuous output declares (R16, R17).
+
+    Derived from :class:`muscadet.FlowContinuousOut` rather than repeated
+    here, so a fifth allocation field added to the flow is forwarded by every
+    component below without a second edit. The prefix is the whole contract:
+    ``allocated`` -- the split the last production sweep computed -- is
+    runtime state rather than a declaration, and does not carry it.
+    """
+    return tuple(
+        sorted(
+            name
+            for name in muscadet.FlowContinuousOut.model_fields
+            if name.startswith("allocation")
+        )
+    )
+
+
 #: Allocation parameters a continuous output accepts (R16, R17), forwarded
 #: verbatim so a caller declares a policy without subclassing.
-ALLOCATION_KEYS = (
-    "allocation",
-    "allocation_shares",
-    "allocation_priorities",
-    "allocation_fun",
-)
+ALLOCATION_KEYS = _allocation_keys()
 
 
 def flow_declarations(spec, default_name=None, **defaults):
@@ -83,7 +97,58 @@ def allocation_params(kwargs):
     return {key: kwargs[key] for key in ALLOCATION_KEYS if key in kwargs}
 
 
-class SourceContinuous(muscadet.ObjFlow):
+class ContinuousComponent(muscadet.ObjFlow):
+    """Shared base of the five shipped components: a CHECKED declaration.
+
+    Every component here reads its parameters with ``kwargs.get(key,
+    default)``, so a misspelled key would otherwise be swallowed and its
+    parameter silently take its default -- indistinguishable, for a numeric
+    parameter, from a legitimate zero. Everywhere else in this release a
+    malformed declaration is refused at declaration time naming the component
+    and the offending item, and this base is what makes the KB layer do the
+    same.
+
+    The accepted set is DECLARED, not inferred: a component lists in
+    :attr:`DECLARATION_KEYS` exactly what it reads. The check unions that
+    attribute over the MRO rather than reading it off the class, so a project
+    subclassing one of these five to add a parameter of its own declares that
+    one key and inherits the rest.
+    """
+
+    #: Declaration keys every continuous component accepts. ``metadata`` is
+    #: put back into the kwargs by :meth:`muscadet.ObjFlow.__init__` before it
+    #: calls ``add_flows``, so it reaches every component here whether or not
+    #: a caller declared it. Everything else the constructor's own signature
+    #: consumes -- ``name``, ``label``, ``description``, ``partial_init``,
+    #: ``create_default_out_automata`` -- never gets this far.
+    DECLARATION_KEYS = ("metadata",)
+
+    @classmethod
+    def accepted_declaration_keys(cls):
+        """Every declaration key ``cls`` accepts, its bases' included."""
+        keys = set()
+        for klass in cls.__mro__:
+            keys.update(klass.__dict__.get("DECLARATION_KEYS", ()))
+        return keys
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+
+        accepted = self.accepted_declaration_keys()
+        unknown = sorted(set(kwargs) - accepted)
+
+        if unknown:
+            plural = "s" if len(unknown) > 1 else ""
+            unknown_str = ", ".join(repr(key) for key in unknown)
+            accepted_str = ", ".join(sorted(accepted))
+            raise ValueError(
+                f"Object {self.name()}: {type(self).__name__} does not "
+                f"accept declaration key{plural} {unknown_str}; "
+                f"it accepts {accepted_str}"
+            )
+
+
+class SourceContinuous(ContinuousComponent):
     """A continuous output delivering a declared rate.
 
     What it delivers is reconciled with the demand like any other production:
@@ -108,6 +173,8 @@ class SourceContinuous(muscadet.ObjFlow):
     allocation, allocation_shares, allocation_priorities, allocation_fun
         Forwarded to the output flow, where an insufficient supply is split.
     """
+
+    DECLARATION_KEYS = ("flow", "rate", "control", "control_logic") + ALLOCATION_KEYS
 
     def add_flows(self, **kwargs):
         super().add_flows(**kwargs)
@@ -135,7 +202,7 @@ class SourceContinuous(muscadet.ObjFlow):
         )
 
 
-class TransformerContinuous(muscadet.ObjFlow):
+class TransformerContinuous(ContinuousComponent):
     """Continuous inputs turned into continuous outputs by declared rules.
 
     The rules are a PARAMETER, so a caller states its ``cons`` and ``prod``
@@ -158,6 +225,14 @@ class TransformerContinuous(muscadet.ObjFlow):
     rules_name : str, optional
         Name of the declared rule set. Defaults to ``"transform"``.
     """
+
+    DECLARATION_KEYS = (
+        "flows_in",
+        "flows_out",
+        "controls",
+        "rules",
+        "rules_name",
+    ) + ALLOCATION_KEYS
 
     def add_flows(self, **kwargs):
         super().add_flows(**kwargs)
@@ -182,7 +257,7 @@ class TransformerContinuous(muscadet.ObjFlow):
 CAPACITY_PORTS = {"both": "out", "in": "in", "out": "out"}
 
 
-class CapacityContinuous(muscadet.ObjFlow):
+class CapacityContinuous(ContinuousComponent):
     """A volume held over one or more continuous flows.
 
     Wraps the capacity declaration on a component of its own. Several
@@ -241,6 +316,18 @@ class CapacityContinuous(muscadet.ObjFlow):
         Forwarded to every output flow.
     """
 
+    DECLARATION_KEYS = (
+        "flow",
+        "flows",
+        "capacity",
+        "ports",
+        "side",
+        "demand",
+        "fill_rate",
+        "content_init",
+        "capacity_name",
+    ) + ALLOCATION_KEYS
+
     def add_flows(self, **kwargs):
         super().add_flows(**kwargs)
 
@@ -279,7 +366,7 @@ class CapacityContinuous(muscadet.ObjFlow):
         )
 
 
-class ConsumerContinuous(muscadet.ObjFlow):
+class ConsumerContinuous(ContinuousComponent):
     """A continuous input publishing a declared demand.
 
     A pure consumer has no output to map a demand back from, so what it asks
@@ -295,6 +382,9 @@ class ConsumerContinuous(muscadet.ObjFlow):
     flows : str or dict or list, optional
         Several inputs at once, each carrying its own ``demand``.
     """
+
+    # No allocation keys: a pure consumer declares no output to split.
+    DECLARATION_KEYS = ("flow", "flows", "demand")
 
     def add_flows(self, **kwargs):
         super().add_flows(**kwargs)
@@ -312,7 +402,7 @@ class ConsumerContinuous(muscadet.ObjFlow):
             )
 
 
-class SensorContinuous(muscadet.ObjFlow):
+class SensorContinuous(ContinuousComponent):
     """A capacity level read over a measurement link, driving a control port.
 
     The only sanctioned way to gate production on a level (R29, F4): the sensor
@@ -356,8 +446,19 @@ class SensorContinuous(muscadet.ObjFlow):
     ------
     ValueError
         If ``direction`` is neither ``"above"`` nor ``"below"``, or if the
-        deadband is declared the wrong way round for that direction.
+        deadband is declared the wrong way round for that direction, or if a
+        declaration key is not one this component reads.
     """
+
+    # No allocation keys: the sensor's outputs are discrete control ports.
+    DECLARATION_KEYS = (
+        "measurement",
+        "control",
+        "activate",
+        "release",
+        "direction",
+        "level_default",
+    )
 
     def add_flows(self, **kwargs):
         super().add_flows(**kwargs)

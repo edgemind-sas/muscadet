@@ -918,6 +918,23 @@ flow.derating                              # {mode name: variable}
 my_plant.comp["P"].derating_vars_of("wear")  # {variable basename: variable}
 ```
 
+#### Standalone failure modes derate too
+
+A failure mode declared as a **component of its own** — `ObjFailureModeExp`, `ObjFailureModeDelay`, or their `cod3s.ObjFM*` successors — resolves its effect patterns against its targets' output flows. A pattern matching a continuous output is routed to a derating exactly as one declared on the component would be, so a common-cause mode may hit both families at once:
+
+```python
+my_plant.add_component(
+    cls="ObjFailureModeDelay",
+    fm_name="shared_supply",
+    targets=["P", "Q"],
+    failure_effects={".*": 0.4},   # 40 % on a continuous output, unavailable on a discrete one
+    failure_param=[(13.0,), (13.0,)],
+    repair_param=[(1e6,), (1e6,)],
+)
+```
+
+Each automaton the mode builds owns its own derating variable on each target, so the two combinations a second-order mode makes over one component compose by minimum rather than overwriting one another, and the direction that names nothing releases the rate it took. A pattern matching no output flow at all is still refused at declaration time.
+
 ### Driving a discrete output from a continuous value
 
 A boolean output may be conditioned on a continuous quantity: `var_prod_cond` accepts the very same `{name, op, value}` comparison operand a rule guard uses. That is the whole declaration of a threshold alarm — no component code reads the level, and no equation is written by hand:
