@@ -221,7 +221,24 @@ class FlowModel(cod3s.ObjCOD3S):
         )
 
 
-class FlowDiscreteIn(FlowModel):
+class FlowDiscrete(FlowModel):
+    """Shared base of the discrete flow family.
+
+    The mirror of :class:`muscadet.flow_continuous.FlowContinuous`: it exists so
+    that a discrete flow is told apart by a positive
+    ``isinstance(flow, FlowDiscrete)`` test rather than by negating the
+    continuous one. Negation is what mis-labels a future third family -- every
+    flow that is not continuous is not thereby discrete.
+
+    A pure marker: it declares no field and no behaviour of its own. It is
+    inserted between :class:`FlowModel` and the two discrete leaves, so every
+    ``isinstance`` relation that held before it existed still holds -- including
+    the legacy names, which sit further down the same chain
+    (``FlowModel -> FlowDiscrete -> FlowDiscreteOut -> FlowOut -> ...``).
+    """
+
+
+class FlowDiscreteIn(FlowDiscrete):
 
     var_in: typing.Any = pydantic.Field(
         None, description="Reference to collect external flow connections"
@@ -400,7 +417,7 @@ class FlowIn(FlowDiscreteIn):
     pass
 
 
-class FlowDiscreteOut(FlowModel):
+class FlowDiscreteOut(FlowDiscrete):
 
     # --- POINT À TRANCHER (2026-06-15) : var_is_active vs var_fed_available_out_init ---
     # var_is_active et var_fed_available sont deux portes booléennes ET sur var_fed

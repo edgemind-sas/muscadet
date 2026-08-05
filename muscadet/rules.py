@@ -268,6 +268,70 @@ def normalize_coefficients(value, what: str) -> typing.Dict[str, float]:
     raise ValueError(f"Bad format for rule '{what}' map : {value!r}")
 
 
+# ----------------------------------------------------------------------
+# Operand shape: one implementation, both directions (R-5)
+# ----------------------------------------------------------------------
+#
+# A rule guard operand and a discrete production-condition operand share one
+# comparison vocabulary, so they share one implementation of the rules that
+# vocabulary obeys. The two sites word their messages differently -- a guard
+# operand names itself, a production condition names its component too -- so
+# each check takes the LABEL to prefix its message with, and the pairing check
+# takes the phrase naming what a comparison is on that side. Nothing else about
+# the two messages differs, and a rule tightened here tightens both directions
+# at once, which is the point: they used to be two implementations that could
+# silently diverge.
+
+#: How the pairing message names a comparison operand on the rule-guard side.
+GUARD_COMPARISON_KIND = "a numeric operand"
+
+
+def check_operand_operator(label: str, op) -> None:
+    """``op``, when given, is one of the six known comparison operators."""
+    if op is not None and op not in COMPARISON_OPERATORS:
+        raise ValueError(
+            f"{label}: 'op' must be one of "
+            f"{', '.join(COMPARISON_OPERATORS)}, got {op!r}"
+        )
+
+
+def check_operand_pairing(
+    label: str, op, value, comparison_kind: str = GUARD_COMPARISON_KIND
+) -> None:
+    """``op`` and ``value`` are given together, or neither is.
+
+    Half a comparison leaves the threshold -- or the operator -- undefined, and
+    silently reading the operand as a boolean would hide the typo.
+    """
+    if (op is None) != (value is None):
+        raise ValueError(
+            f"{label}: 'op' and 'value' must be given together "
+            f"({comparison_kind}) or both omitted (a boolean operand)"
+        )
+
+
+def check_operand_negation(label: str, op, negate) -> None:
+    """``negate`` is not combined with a comparison.
+
+    ``not (x >= 10)`` is ``x < 10``: the opposite operator says it, and allowing
+    both spellings would give one condition two serialisations.
+    """
+    if op is not None and negate:
+        raise ValueError(
+            f"{label}: 'negate' cannot be combined with a comparison; use the "
+            "opposite comparison operator instead"
+        )
+
+
+def validate_operand_shape(
+    label: str, op, value, negate, comparison_kind: str = GUARD_COMPARISON_KIND
+) -> None:
+    """The three shape rules of a comparison operand, in declaration order."""
+    check_operand_pairing(label, op, value, comparison_kind)
+    check_operand_operator(label, op)
+    check_operand_negation(label, op, negate)
+
+
 class RuleOperand(cod3s.ObjCOD3S):
     """One operand of a rule guard.
 
@@ -319,16 +383,16 @@ class RuleOperand(cod3s.ObjCOD3S):
     @pydantic.field_validator("op")
     @classmethod
     def check_op(cls, value, info):
-        if value is not None and value not in COMPARISON_OPERATORS:
-            raise ValueError(
-                f"{entity_label('Guard operand', info, quote=True)}: 'op' must "
-                f"be one of {', '.join(COMPARISON_OPERATORS)}, got {value!r}"
-            )
+        check_operand_operator(entity_label("Guard operand", info, quote=True), value)
         return value
 
     @pydantic.field_validator("port")
     @classmethod
     def check_port(cls, value, info):
+        # NOT shared with the production-condition side, unlike the three shape
+        # rules below: the two messages differ structurally there (this one
+        # separates the label with a colon, the other does not), and unifying
+        # them would change a wording rather than remove a duplication.
         if value is not None and value not in PORTS:
             raise ValueError(
                 f"{entity_label('Guard operand', info, quote=True)}: 'port' "
@@ -338,16 +402,13 @@ class RuleOperand(cod3s.ObjCOD3S):
 
     @pydantic.model_validator(mode="after")
     def check_operand_shape(self):
-        if (self.op is None) != (self.value is None):
-            raise ValueError(
-                f"Guard operand {self.name!r}: 'op' and 'value' must be given "
-                "together (a numeric operand) or both omitted (a boolean operand)"
-            )
-        if self.op is not None and self.negate:
-            raise ValueError(
-                f"Guard operand {self.name!r}: 'negate' cannot be combined with a "
-                "comparison; use the opposite comparison operator instead"
-            )
+        # Same three rules a discrete production-condition operand obeys, from
+        # the same implementation (R-5). ``op`` has already passed
+        # ``check_op`` by the time a model validator runs, so re-checking it
+        # here costs nothing and keeps ONE entry point for both directions.
+        validate_operand_shape(
+            f"Guard operand {self.name!r}", self.op, self.value, self.negate
+        )
         return self
 
     @property

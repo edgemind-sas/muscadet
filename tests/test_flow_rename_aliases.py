@@ -4,19 +4,28 @@ The discrete flow classes are canonically named ``FlowDiscrete*``. The former
 names remain available FOREVER as real ``pass``-bodied subclasses placed INSIDE
 the canonical inheritance chain::
 
-    FlowModel -> FlowDiscreteIn  -> FlowIn
-    FlowModel -> FlowDiscreteOut -> FlowOut -> FlowDiscreteOutTempo
-                                                -> FlowOutTempo
-                                            -> FlowDiscreteOutOnTrigger
-                                                -> FlowOutOnTrigger
+    FlowModel -> FlowDiscrete -> FlowDiscreteIn  -> FlowIn
+    FlowModel -> FlowDiscrete -> FlowDiscreteOut -> FlowOut
+                                                     -> FlowDiscreteOutTempo
+                                                          -> FlowOutTempo
+                                                     -> FlowDiscreteOutOnTrigger
+                                                          -> FlowOutOnTrigger
 
-Two properties matter and are asserted here:
+``FlowDiscrete`` is the family marker mirroring
+:class:`muscadet.FlowContinuous` (R-7): a pure ``pass``-bodied base declaring
+no field, inserted so that a discrete flow is recognised by a POSITIVE
+``isinstance`` test rather than by negating the continuous one.
+
+Three properties matter and are asserted here:
 
 1. Subclasses (not assignment aliases), so a flow built through a legacy name
    still reports that legacy name as its runtime class name.
 2. The legacy ``FlowOut`` sits BETWEEN the canonical output class and the
    canonical tempo / trigger classes, so every ``isinstance`` relation that
    held before the rename still holds.
+3. The marker sits ABOVE both canonical roots and below nothing else, so every
+   discrete class -- canonical and legacy alike -- answers to it, and no
+   continuous class does.
 """
 
 import cod3s
@@ -119,13 +128,16 @@ def test_both_name_sets_import_from_package_root_and_flow_module():
 
 
 def test_inheritance_chain_shape():
+    # The family marker roots both canonical chains, directly under FlowModel.
+    assert muscadet.FlowDiscrete.__bases__ == (muscadet_flow.FlowModel,)
+
     # Input side.
-    assert muscadet.FlowDiscreteIn.__bases__ == (muscadet_flow.FlowModel,)
+    assert muscadet.FlowDiscreteIn.__bases__ == (muscadet.FlowDiscrete,)
     assert muscadet.FlowIn.__bases__ == (muscadet.FlowDiscreteIn,)
 
     # Output side: the legacy name sits BETWEEN the canonical parent and the
     # canonical tempo / trigger classes.
-    assert muscadet.FlowDiscreteOut.__bases__ == (muscadet_flow.FlowModel,)
+    assert muscadet.FlowDiscreteOut.__bases__ == (muscadet.FlowDiscrete,)
     assert muscadet.FlowOut.__bases__ == (muscadet.FlowDiscreteOut,)
     assert muscadet.FlowDiscreteOutTempo.__bases__ == (muscadet.FlowOut,)
     assert muscadet.FlowOutTempo.__bases__ == (muscadet.FlowDiscreteOutTempo,)
@@ -135,6 +147,41 @@ def test_inheritance_chain_shape():
     # The 1.x isinstance relations still hold for the canonical classes.
     assert issubclass(muscadet.FlowDiscreteOutTempo, muscadet.FlowOut)
     assert issubclass(muscadet.FlowDiscreteOutOnTrigger, muscadet.FlowOut)
+
+    # And every one of them still descends from FlowModel, which the marker was
+    # inserted UNDER rather than in place of.
+    for clsname in CANONICAL_NAMES + LEGACY_NAMES:
+        assert issubclass(getattr(muscadet, clsname), muscadet_flow.FlowModel)
+
+
+def test_discrete_marker_is_the_mirror_of_the_continuous_one():
+    """R-7: enumerating discrete flows is a positive test, not a negation."""
+    continuous = [
+        muscadet.FlowContinuous,
+        muscadet.FlowContinuousIn,
+        muscadet.FlowContinuousOut,
+    ]
+
+    # Every discrete class answers to the marker...
+    for clsname in CANONICAL_NAMES + LEGACY_NAMES:
+        assert issubclass(getattr(muscadet, clsname), muscadet.FlowDiscrete)
+
+    # ...and no continuous one does, in either direction.
+    for cls in continuous:
+        assert not issubclass(cls, muscadet.FlowDiscrete)
+    assert not issubclass(muscadet.FlowDiscrete, muscadet.FlowContinuous)
+
+    # The two markers are siblings under one base, so a third family would be
+    # neither rather than being mis-labelled discrete.
+    assert muscadet.FlowContinuous.__bases__ == (muscadet_flow.FlowModel,)
+    assert muscadet.FlowDiscrete.__bases__ == (muscadet_flow.FlowModel,)
+
+
+def test_discrete_marker_declares_no_field_of_its_own():
+    """A pure marker: it must not change what a discrete flow serialises."""
+    assert set(muscadet.FlowDiscrete.model_fields) == set(
+        muscadet_flow.FlowModel.model_fields
+    )
 
 
 def test_alias_chain_builds_under_pydantic():

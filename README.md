@@ -628,6 +628,15 @@ Concretely:
 
 One consequence is worth knowing when mixing the two: because the legacy names sit *below* the canonical ones, a flow declared canonically is **not** an instance of the legacy class. `isinstance(flow, muscadet.FlowOut)` is `True` for a flow declared with `add_flow_out()` or with `cls="FlowOut"`, and `False` for one declared with `cls="FlowDiscreteOut"`. Test against the canonical name — `isinstance(flow, muscadet.FlowDiscreteOut)` — and it holds for both.
 
+To enumerate a whole family rather than one class, test against its **marker base**. `muscadet.FlowDiscrete` and `muscadet.FlowContinuous` sit directly under `FlowModel`, one per family, and every class of a family descends from its own:
+
+```python
+discrete = [f for f in comp.flows_out.values() if isinstance(f, muscadet.FlowDiscrete)]
+rates    = [f for f in comp.flows_out.values() if isinstance(f, muscadet.FlowContinuous)]
+```
+
+Prefer this to `not isinstance(f, muscadet.FlowContinuous)`: a negation labels *everything that is not continuous* as discrete, which stops being true the day a third family exists.
+
 ## Continuous flows
 
 A discrete flow answers *is this component fed?*. A **continuous flow** carries a real-valued rate instead — litres per hour, kilowatts, kilograms per second — and MUSCADET integrates it over time. The two families sit side by side: a component may declare both, a rule may read a boolean flow, and a boolean output may be driven by a continuous quantity. What a continuous flow may **not** do is be connected to a discrete one; that is refused with an error naming both flows and both components.
@@ -956,7 +965,7 @@ class Alarm(muscadet.ObjFlow):
 
 A comparison operand over a continuous input reads **what this component is allocated**, which is the same quantity its rules would consume — never the total its producer publishes to all of its consumers. An input therefore has to ask for what it means to watch: an input left at the default demand of 0 is allocated 0, and a threshold over it never fires. To observe a quantity *without* asking for any of it, use the measurement link below, which is the channel for reading a value one does not consume.
 
-Such an alarm may be read anywhere **except back upstream of the flow it watches**. A comparison against a continuous *rate* is algebraic — the rate a producer exports this instant is a function of the guard it reads this instant, with nothing in between — so wiring the alarm's signal to a component producing that very rate closes a loop within one instant, and the two regimes select each other for ever. That is refused at the first run, like any other continuous-flow cycle. A deadband does not make it safe: a deadband damps a value that moves *through* the band, and a rate jumps across it, crossing both edges at once. To gate production on a quantity, threshold a **capacity level** instead — see the sensor pattern below. A level is integrated, and integrated state is what breaks the loop.
+Such an alarm may be read anywhere **except back upstream of the flow it watches**. A comparison against a continuous *rate* is algebraic — the rate a producer exports this instant is a function of the guard it reads this instant, with nothing in between — so wiring the alarm's signal to a component producing that very rate closes a loop within one instant, and the two regimes select each other for ever. That is refused at the first run, like any other continuous-flow cycle, with a `muscadet.RateComparisonLoopError` — a subclass of `muscadet.ContinuousFlowCycleError`, so one `except muscadet.ContinuousFlowCycleError` catches both shapes of refusal and reads the offending `cycle` and `connections` off it. A deadband does not make it safe: a deadband damps a value that moves *through* the band, and a rate jumps across it, crossing both edges at once. To gate production on a quantity, threshold a **capacity level** instead — see the sensor pattern below. A level is integrated, and integrated state is what breaks the loop.
 
 The same operand thresholds a level read over a **measurement link** — a read-only channel through which a component observes another component's capacity. It carries no quantity and enters no allocation:
 

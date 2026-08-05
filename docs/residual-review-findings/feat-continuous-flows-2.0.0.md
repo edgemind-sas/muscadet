@@ -144,29 +144,110 @@ A pattern like `".*"` on a component mixing both families hits it without the mo
 
 ## Structure
 
-### R-5. Operand shape validation is duplicated (P1, maintainability + code-reuse)
+### R-5. Operand shape validation is duplicated (P1, maintainability + code-reuse) — FIXED
 
-The three shape rules for a comparison operand — `op` and `value` given together, `op` in the known set, `negate` not combined with a comparison — are implemented twice: as pydantic validators on `RuleOperand`, and by hand inside `ObjFlow.postprocess_flow_specs`. The code comment names the duplication without resolving it.
+*Fixed by the suggested shape, which held up.* The three rules now live once,
+in `muscadet.rules`, as `check_operand_pairing`, `check_operand_operator` and
+`check_operand_negation`, composed by `validate_operand_shape`. Both sites call
+it: `RuleOperand.check_operand_shape` and `ObjFlow.postprocess_flow_specs`.
 
-The module docstring states that a rule guard and a discrete production condition share one comparison vocabulary and one implementation. They do not. The two already word their errors differently, so a future change tightening one would silently diverge the accepted comparisons of the two directions.
+Two parameters carry the difference, not two implementations: the **label** to
+prefix the message with, and the phrase naming what a comparison is on that side
+(`"a numeric operand"` for a guard, `"a comparison against a continuous
+quantity"` for a production condition, `GUARD_COMPARISON_KIND` /
+`PROD_COND_COMPARISON_KIND`). Both wordings are byte-identical to what they were
+— checked by rendering every message both sides can raise, at `75f8027` and
+after, and diffing.
 
-Deferred twice during this run because the consolidation must preserve both error wordings exactly. The safe shape is now known: extract the predicate logic into one function taking the label as a parameter, called from both sites.
+Two things the suggestion did not anticipate, and which were left alone rather
+than papered over:
 
-### R-6. `obj.py` doubled to 3632 lines (P2, maintainability)
+- **`RuleOperand.check_op` stays a field validator.** Moving the operator check
+  into the model validator would have reordered it against the pairing check,
+  changing which of two applicable errors an operand with an unknown operator
+  AND a missing value reports. The field validator now delegates to the shared
+  function, and the model validator calls the composite — the operator check
+  runs twice, harmlessly, and the observable order is unchanged on both sides.
+- **The `port` check is NOT shared.** It is a fourth rule the finding does not
+  name, and the two messages differ structurally rather than only in label (the
+  guard separates with a colon, the production condition does not). Unifying it
+  would have changed a wording rather than removed a duplication. The
+  divergence is recorded in a comment at both sites.
 
-The growth is concentrated in two blocks that behave like standalone algorithms over a component: the two-sweep evaluation (~770 lines) and the derating engine (~160 lines). Neither needs to be a method rather than a function taking the component, and this release established that pattern in the sibling modules.
+Parity tests in `tests/test_operand_shape_parity_001.py`: the two directions
+accept and refuse the same ten bad and nine good shapes, for the same reason,
+and the two wordings are pinned in full.
 
-Left alone deliberately: extracting it would move conservation-critical code whose numerical output is validated against reference files, which is not a change to make in the same pass that fixed those defects.
+### R-6. `obj.py` doubled to 3632 lines (P2, maintainability) — FIXED
 
-### R-7. Smaller API surface gaps (P3, api-contract)
+*Fixed, as a pure move.* The two blocks are now modules of their own, as
+functions over a component — the shape `muscadet.ordering` and
+`muscadet.capacity` already use:
 
-- `ContinuousFlowCycleError` is a documented first-class model error with structured attributes, but is not exported from the package root — a consumer must catch bare `ValueError` or import a module the public API never mentions.
-- No `FlowDiscrete` marker mirrors the exported `FlowContinuous`, so enumerating discrete flows means negating the continuous test, which would mis-label any future third family.
-- The pre-run graph walk calls `comp.name()` unconditionally on every entry of the public `comp` dict, while the function three lines later resolves the same objects defensively.
+- `muscadet/evaluation.py` (883 lines), the two-sweep evaluation, 23 functions;
+- `muscadet/derating.py` (219 lines), the derating engine, 6 functions.
 
-### R-8. Line length in new error messages (P3, project-standards)
+`ObjFlow` binds each under its own name in a class-body assignment
+(`compute_demand = evaluation.compute_demand`), so every call site, every
+`super()` chain and every override point is untouched — which matters
+particularly for `compute_demand` and `compute_production`, which
+`muscadet.ordering` looks up BY NAME. `obj.py` went from 3799 lines at
+`75f8027` to 2840.
 
-Four new f-string error messages in `obj.py` exceed the 88-character convention, one at 212. Black does not wrap string literals, so they will keep exceeding it. Additive to roughly 47 pre-existing over-length lines in the same file.
+**The derating mechanism's semantics were not touched.** One variable per
+(automaton, output), composed by minimum at read time, written and released
+exactly when they were before: the move is provably byte-for-byte, so it cannot
+have changed them.
+
+Two independent verifications, because "the tests still pass" is not the bar for
+moving conservation-critical numerical code:
+
+1. **Textual.** Each of the 29 moved functions is the method's source at
+   `75f8027` with one indentation level removed and `self` renamed to `comp` —
+   nothing else. 27 are character-for-character identical; the other 2
+   (`evaluation.apply_production`, `derating.match_continuous_outputs`) are
+   black re-wrapping a line that gained four columns of headroom at module
+   level, and parse to an identical AST. Checked by re-deriving them from the
+   reference checkout and diffing, plus asserting each name is no longer
+   *defined* on `ObjFlow` and resolves to the module's own function object.
+2. **Numerical.** Every number the two sweeps and the derating engine compute,
+   over every model the whole suite builds, recorded through wrappers on the 29
+   entry points and written out at full `repr` precision: **8 373 107 records**,
+   before and after, byte-identical (sha256 `5e52f429…`). The method was
+   validated first by capturing the trace twice at `75f8027` and confirming it
+   is bit-reproducible.
+
+### R-7. Smaller API surface gaps (P3, api-contract) — FIXED
+
+- `ContinuousFlowCycleError` and its subclass `RateComparisonLoopError` are
+  exported from the package root. A consumer catches
+  `muscadet.ContinuousFlowCycleError`, and one `except` covers both shapes of
+  first-run refusal.
+- `muscadet.FlowDiscrete` mirrors `FlowContinuous`: a pure marker declaring no
+  field, inserted between `FlowModel` and the two canonical roots
+  (`FlowModel -> FlowDiscrete -> FlowDiscreteIn -> FlowIn`, and the same on the
+  output side). Every 1.x `isinstance` relation still holds and the legacy names
+  keep their place inside the canonical chain, so the family is now told apart
+  by a positive test instead of by negating the continuous one.
+  `tests/test_flow_rename_aliases.py::test_inheritance_chain_shape` asserted the
+  exact `__bases__` tuple of the canonical roots; it was updated to pin the new
+  link as well — the chain gained a root, the guarantee it protects did not
+  weaken.
+- The pre-run graph walk resolves engine names through
+  `ordering.engine_name_index`, shared by the two walks that both built the same
+  index, and skipping an entry with no callable `name()` the way the surrounding
+  code already resolves `system.comp` defensively.
+
+Tests in `tests/test_ordering_001.py` and `tests/test_flow_rename_aliases.py`.
+
+### R-8. Line length in new error messages (P3, project-standards) — FIXED
+
+*Closed as a side effect of R-5, which is what they were.* The four
+branch-added over-length lines in `obj.py` — at 212, 187, 169 and 143 characters
+— were exactly the four production-condition operand messages. Three moved into
+`muscadet.rules`, wrapped; the fourth (`'value' must be a number`) was wrapped in
+place. `git diff 30a0f97 -- muscadet/obj.py` now reports **zero** added lines
+over 88. The ~47 pre-existing ones were left alone.
 
 ---
 
@@ -177,7 +258,7 @@ Four new f-string error messages in `obj.py` exceed the 88-character convention,
 - ~~No test exercises a control loop closed by a rate comparison rather than a capacity level, so the claim that the within-instant case is removed is never tested against the path that defeats it (R-2).~~ Closed with R-2.
 - ~~No test asserts the five shipped components reject an unknown declaration key (R-3).~~ Closed with R-3.
 - ~~No test declares a standalone failure mode against a component carrying continuous outputs (R-4).~~ Closed with R-4.
-- No parity test over the two operand-shape validators (R-5).
+- ~~No parity test over the two operand-shape validators (R-5).~~ Closed with R-5.
 - The multi-flow capacity's per-constituent bound added in `e617c41` has no watched transition, so a depleted constituent overshoots by one integration step (−0.005 observed against −25.0 before the fix). Acceptable, but the exact-crossing guarantee that holds for the volume bound does not hold per constituent.
 
 ## Known limitations, recorded rather than fixed

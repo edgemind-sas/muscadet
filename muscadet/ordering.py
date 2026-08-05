@@ -170,6 +170,33 @@ def component_is_continuous(comp):
     )
 
 
+def engine_name_index(components):
+    """Map each component's ENGINE name to its ``system.comp`` key.
+
+    Message boxes report their counterpart by the component's engine name,
+    which is the ``system.comp`` key for a flat model -- resolved rather than
+    assumed, so a renamed or nested component still lands on the right node.
+    First declaration wins, as a duplicate engine name cannot be told apart.
+
+    ``system.comp`` is a public dict a model may put anything into, and the
+    walks reading this index already resolve their own entries defensively
+    (``components.get(...)``, ``getattr(comp, ...)``): an entry with no
+    ``name()`` is skipped here for the same reason, rather than aborting the
+    pre-run check of the whole system on it.
+    """
+    index = {}
+
+    for key, comp in components.items():
+        name = getattr(comp, "name", None)
+
+        if not callable(name):
+            continue
+
+        index.setdefault(name(), key)
+
+    return index
+
+
 # ----------------------------------------------------------------------
 # The graph
 # ----------------------------------------------------------------------
@@ -451,12 +478,7 @@ def build_continuous_flow_graph(system):
 
     components = getattr(system, "comp", None) or {}
 
-    # Message boxes report their counterpart by the component's engine name,
-    # which is the ``system.comp`` key for a flat model -- resolved rather than
-    # assumed, so a renamed or nested component still lands on the right node.
-    by_engine_name = {}
-    for key, comp in components.items():
-        by_engine_name.setdefault(comp.name(), key)
+    by_engine_name = engine_name_index(components)
 
     for key, comp in components.items():
         if component_is_continuous(comp):
@@ -723,9 +745,7 @@ def find_rate_comparison_loops(system, graph):
     """
     components = getattr(system, "comp", None) or {}
 
-    by_engine_name = {}
-    for key, comp in components.items():
-        by_engine_name.setdefault(comp.name(), key)
+    by_engine_name = engine_name_index(components)
 
     cnct_info = {}
 

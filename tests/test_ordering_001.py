@@ -743,6 +743,70 @@ def test_no_equation_is_registered_when_the_graph_is_cyclic(the_run):
     assert the_run["cycle_registrations"] == []
 
 
+def test_the_cycle_error_is_catchable_from_the_package_root(the_run):
+    """R-7: a documented model error must not require importing a module the
+    public API never mentions.
+
+    ``muscadet.ContinuousFlowCycleError`` is the type a consumer catches; the
+    rate-comparison refusal is a subclass of it, so one ``except`` covers both
+    shapes of first-run refusal.
+    """
+    assert muscadet.ContinuousFlowCycleError is ordering.ContinuousFlowCycleError
+    assert muscadet.RateComparisonLoopError is ordering.RateComparisonLoopError
+    assert issubclass(
+        muscadet.RateComparisonLoopError, muscadet.ContinuousFlowCycleError
+    )
+
+    # The error the run actually raised is caught by the root-level name, with
+    # its structured attributes reachable through it.
+    error = the_run["cycle_error"]
+
+    try:
+        raise error
+    except muscadet.ContinuousFlowCycleError as caught:
+        assert caught.cycle
+        assert caught.connections
+        assert caught.path
+        assert caught.wiring
+
+
+def test_the_engine_name_index_skips_a_foreign_entry():
+    """R-7: ``system.comp`` is a public dict, and the walk resolves defensively.
+
+    The graph walk used to call ``comp.name()`` unconditionally on every entry
+    while the very next lines resolved the same objects with ``.get()`` and
+    ``getattr``. An entry carrying no ``name()`` is skipped now, so a foreign
+    object parked in the dict cannot abort the whole system's pre-run check.
+    """
+    index = ordering.engine_name_index(
+        {
+            "REAL": _NamedStub("engine_real"),
+            "FOREIGN": object(),
+            "ALSO_FOREIGN": {"name": "not callable"},
+        }
+    )
+
+    assert index == {"engine_real": "REAL"}
+
+    # First declaration wins for a duplicated engine name, which cannot be
+    # told apart from the message boxes' side.
+    duplicated = ordering.engine_name_index(
+        {"FIRST": _NamedStub("same"), "SECOND": _NamedStub("same")}
+    )
+
+    assert duplicated == {"same": "FIRST"}
+
+
+class _NamedStub:
+    """The only thing ``engine_name_index`` asks of an entry."""
+
+    def __init__(self, engine_name):
+        self._engine_name = engine_name
+
+    def name(self):
+        return self._engine_name
+
+
 # ----------------------------------------------------------------------
 # R30 / AE18 -- measurement links and control flows are not continuous flows
 # ----------------------------------------------------------------------

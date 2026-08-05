@@ -1,6 +1,7 @@
 from .obj import ObjFlow
 from .system import System
 from .flow import (
+    FlowDiscrete,
     FlowDiscreteIn,
     FlowDiscreteOut,
     FlowDiscreteOutOnTrigger,
@@ -15,6 +16,7 @@ from .flow_continuous import (
     FlowContinuousIn,
     FlowContinuousOut,
 )
+from .ordering import ContinuousFlowCycleError, RateComparisonLoopError
 from .rules import Rule, RuleOperand, RuleSet
 from .capacity import Capacity, CapacityFlow, MeasurementIn
 from .obj_logic import LogicOr, LogicAnd, ObjLogicGate
