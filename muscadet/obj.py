@@ -261,6 +261,16 @@ class ObjFlow(cod3s.PycComponent):
         # Measurement links this component imports, keyed by channel name.
         self.measurements_in = {}
 
+        # What each two-state mode automaton READS and WRITES, keyed by mode
+        # name: ``{"conditions": [variable basename], "effects": [basename]}``.
+        # Recorded at declaration time by add_atm2states, because the condition
+        # a transition is given is handed straight to the engine and is not
+        # readable back from the automaton afterwards. Consumed by
+        # ``muscadet.ordering``, which has to follow a threshold through the
+        # memory that holds it -- a deadband is exactly a mode reading one
+        # discrete output and clamping the availability of another.
+        self.mode_signals = {}
+
         # True once ``compute_capacities`` was registered as a PDMP equation
         # method for this component: one registration covers every capacity.
         self._capacity_equation_registered = False
@@ -2912,6 +2922,18 @@ class ObjFlow(cod3s.PycComponent):
         # Update automata dict
         # --------------------
         self.automata_d[aut.name] = aut
+
+        # What this mode reads and what it writes, for the loop analysis of
+        # ``muscadet.ordering``. A boolean condition reads nothing.
+        self.mode_signals[name] = {
+            "conditions": [
+                cond for cond in (cond_occ_12, cond_occ_21) if isinstance(cond, str)
+            ],
+            "effects": [
+                var.basename()
+                for var, _ in list(var_value_list_12) + list(var_value_list_21)
+            ],
+        }
 
     def add_exp_failure_mode(
         self,

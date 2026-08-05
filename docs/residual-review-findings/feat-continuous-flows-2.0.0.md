@@ -10,7 +10,23 @@ No issue tracker is declared for this repository, so this committed file is the 
 
 ## Correctness and semantics
 
-### R-1. The first sample of a batch schedule over-counts delivery (P2, adversarial)
+### R-1. The first sample of a batch schedule over-counts delivery (P2, adversarial) — FIXED
+
+*Fixed.* A producer that has allocated nothing now hands out a **provisional
+split** (`FlowContinuousOut.provisional_share`) instead of its raw exported
+value, so the shares of one output's consumers never total more than what it
+exports. The split is recomputed on every read rather than seeded once: a
+component whose `compute_production` writes its exported variable itself never
+allocates at all, and a stored seed would freeze there while the variable went
+on moving. A demand of zero before the first sweep is read as "not derived yet"
+and widened to unbounded, which keeps a guarded consumer from latching on an
+idle rule it then derives a zero demand from. `FlowContinuousOut.allocated` is
+also dropped at the start of every Monte Carlo sequence, being Python state no
+engine reinitialisation touches. Regression tests in
+`tests/test_demand_allocation_001.py`; the assertion in
+`tests/test_flow_continuous_001.py::test_several_producers_sum` encoded the bug
+(it asserted a consumer receiving 3.25 from producers delivering 2.25) and was
+corrected to what the run settles at.
 
 Before the first production sweep runs, `FlowContinuousIn.get_delivered` falls back to the producer's raw exported value, because the allocation dict is empty until a production equation has executed — which happens strictly after t=0. Every consumer of one producer therefore reads the producer's whole output at instant 0.
 
@@ -20,7 +36,29 @@ Reproduced: one source at rate 10 feeding two consumers demanding 2 and 3, `sche
 
 *Suggested direction:* seed the allocation at t=0 with a start method on the producing component, the way `FlowContinuousIn.update_sensitive_methods` already seeds the input mirror.
 
-### R-2. A rate threshold can close an instantaneous loop the acyclicity check accepts (P2, adversarial)
+### R-2. A rate threshold can close an instantaneous loop the acyclicity check accepts (P2, adversarial) — FIXED
+
+*Fixed.* The first-run check now also walks the discrete channels a comparison
+on a continuous **input flow** drives, and refuses a path returning to a
+component upstream of that flow whose own production depends on the arriving
+signal (`muscadet.ordering.find_rate_comparison_loops`,
+`RateComparisonLoopError`, a subclass of `ContinuousFlowCycleError`). The walk
+follows a signal through a mode automaton as well as through production
+conditions, so a deadband declared over a rate is caught too.
+
+*The suggested deadband exemption was not applied, and the suggestion was
+wrong.* Measured on the reported model with `activate=8` / `release=3` against
+a source at 10: identical flip dates with and without the band (first at
+6.25e-4, ~1400 flips per unit of simulated time either way). A deadband damps a
+value that moves *through* the band; a rate jumps across it, crossing both
+edges in one step, so the band is never inhabited. The refusal therefore does
+not depend on it.
+
+Comparisons on a capacity level read over a measurement link are untouched at
+three independent points, so the sensor pattern of AE18 keeps building.
+Regression tests, including four near misses that must NOT be refused, in
+`tests/test_ordering_001.py`. The constraint is documented in the README beside
+the threshold-alarm example.
 
 `R29` refuses only a guard naming a *capacity*, and the acyclicity check drops every non-continuous channel. So a discrete output thresholded on a continuous *rate* and wired back to a producer's guard closes a genuine within-instant loop with no integrated state to break it, and the first-run check passes it.
 
@@ -81,8 +119,8 @@ Four new f-string error messages in `obj.py` exceed the 88-character convention,
 ## Test coverage gaps worth closing
 
 - No assertion that a `shares` output with a connected consumer absent from the share map behaves as intended — the configuration `check_allocation` cannot validate, because it runs before any consumer is connected.
-- No test reads continuous values at instant 0 of a batch schedule, so R-1 is entirely unasserted despite `start: 0` being the documented shape.
-- No test exercises a control loop closed by a rate comparison rather than a capacity level, so the claim that the within-instant case is removed is never tested against the path that defeats it (R-2).
+- ~~No test reads continuous values at instant 0 of a batch schedule, so R-1 is entirely unasserted despite `start: 0` being the documented shape.~~ Closed with R-1.
+- ~~No test exercises a control loop closed by a rate comparison rather than a capacity level, so the claim that the within-instant case is removed is never tested against the path that defeats it (R-2).~~ Closed with R-2.
 - No test asserts the five shipped components reject an unknown declaration key (R-3).
 - No test declares a standalone failure mode against a component carrying continuous outputs (R-4).
 - No parity test over the two operand-shape validators (R-5).

@@ -34,6 +34,21 @@ TRACE = []
 
 CLOCK_DELAY = 5.0
 
+#: The rate a gated source exports while its control port is unfed.
+RATE_LOOP_RATE = 10.0
+
+#: The threshold a rate comparison closing a loop is declared at.
+RATE_LOOP_THRESHOLD = 5.0
+
+#: The two edges of the deadband variant, declared the way a sensor declares
+#: its band. A source at 10 cut to 0 crosses BOTH in one jump, which is why a
+#: band damps nothing here.
+RATE_LOOP_ACTIVATE = 8.0
+RATE_LOOP_RELEASE = 3.0
+
+#: What a gate asks for: enough not to throttle what it watches.
+RATE_LOOP_DEMAND = 1e6
+
 
 def simu_params():
     """A fresh, minimal batch-run parameter set."""
@@ -131,6 +146,189 @@ class MixedNode(DiscreteNode):
         super().add_flows(**kwargs)
         self.add_flow_continuous_in(name="q")
         self.add_flow_continuous_out(name="q", var_fed_default=1.0)
+
+
+# -- The loop the continuous graph does not carry ----------------------
+
+
+class OrdGatedSource(muscadet.ObjFlow):
+    """Produces its rate while ``run`` is UNFED, nothing once it is fed.
+
+    The producing half of the loop: what it exports THIS instant is a function
+    of the control port it reads this instant, with no state in between.
+    """
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        self.add_flow_continuous_out(name="q", var_fed_default=RATE_LOOP_RATE)
+        self.add_flow_in(name="run", logic="and")
+        self.add_rules(
+            name="q_control",
+            rules=[
+                dict(name="idle", cond="run", prod={"q": 0.0}),
+                dict(name="supply", cond="not run", prod={"q": RATE_LOOP_RATE}),
+            ],
+        )
+
+
+class OrdSpareSource(muscadet.ObjFlow):
+    """Gated on a control port too, but on one no comparison decides."""
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        self.add_flow_continuous_out(name="q", var_fed_default=RATE_LOOP_RATE)
+        self.add_flow_in(name="spare", logic="and")
+        self.add_rules(
+            name="q_control",
+            rules=[
+                dict(name="idle", cond="spare", prod={"q": 0.0}),
+                dict(name="supply", cond="not spare", prod={"q": RATE_LOOP_RATE}),
+            ],
+        )
+
+
+class OrdOpenSource(muscadet.ObjFlow):
+    """The same ports, but nothing reads the control one.
+
+    A discrete input no rule guard and no mode watches cannot change what this
+    component produces, so a signal arriving here closes nothing.
+    """
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        self.add_flow_continuous_out(name="q", var_fed_default=RATE_LOOP_RATE)
+        self.add_flow_in(name="run", logic="and")
+
+
+class OrdRateGate(muscadet.ObjFlow):
+    """A discrete output thresholded on the CONTINUOUS RATE it receives."""
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        self.add_flow_continuous_in(name="q", var_demand_default=RATE_LOOP_DEMAND)
+        self.add_flow(
+            dict(
+                cls="FlowDiscreteOut",
+                name="run",
+                var_prod_cond=[{"name": "q", "op": ">=", "value": RATE_LOOP_THRESHOLD}],
+            )
+        )
+
+
+class OrdRateGateBand(muscadet.ObjFlow):
+    """The same gate, carrying a DEADBAND: activates at 8, releases below 3.
+
+    Declared exactly as the shipped sensor declares its band -- two edge
+    outputs and a mode clamping the availability of the port actually wired
+    out -- but over a rate rather than over a capacity level.
+    """
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        self.add_flow_continuous_in(name="q", var_demand_default=RATE_LOOP_DEMAND)
+
+        for suffix, op, value in (
+            ("activate", ">=", RATE_LOOP_ACTIVATE),
+            ("release", "<", RATE_LOOP_RELEASE),
+        ):
+            self.add_flow(
+                dict(
+                    cls="FlowDiscreteOut",
+                    name=f"run_{suffix}",
+                    var_prod_cond=[{"name": "q", "op": op, "value": value}],
+                )
+            )
+
+        self.add_flow(
+            dict(
+                cls="FlowDiscreteOut",
+                name="run",
+                var_prod_default=True,
+                var_fed_available_out_init=False,
+            )
+        )
+
+    def set_flows(self, **kwargs):
+        super().set_flows(**kwargs)
+        self.add_atm2states(
+            name="run_band",
+            st1="released",
+            st2="activated",
+            init_st2=False,
+            cond_occ_12="run_activate_fed_out",
+            cond_occ_21="run_release_fed_out",
+            effects_12=[(r"^run_fed_available_out$", True)],
+            effects_21=[(r"^run_fed_available_out$", False)],
+        )
+
+
+class OrdBypassGate(OrdRateGate):
+    """Thresholds the rate, and ALSO carries a signal derived from nothing.
+
+    Discrete traffic between two components that exchange a continuous flow is
+    not by itself a loop: ``spare`` is produced unconditionally, so wiring it
+    back to the producer -- which does gate its production on it -- feeds that
+    producer nothing the comparison decided.
+    """
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        self.add_flow_out(name="spare", var_prod_default=True)
+
+
+class OrdSignalSink(muscadet.ObjFlow):
+    """Somewhere downstream for a control signal to end up."""
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        self.add_flow_in(name="run", logic="or")
+
+
+class OrdLevelGate(muscadet.ObjFlow):
+    """Receives the rate, but thresholds the LEVEL of a tank it observes.
+
+    The discriminator itself, wired into the refused shape: this component IS
+    the target of a continuous edge from the producer it gates, and it does
+    drive that producer's control port from a comparison. Only one thing
+    differs from the refused model -- what the comparison reads. A level is
+    integrated, so the loop closes around a state and settles; a rate is not.
+    """
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        self.add_flow_continuous_in(name="q", var_demand_default=RATE_LOOP_DEMAND)
+        self.add_measurement_in(name="buf")
+        self.add_flow(
+            dict(
+                cls="FlowDiscreteOut",
+                name="run",
+                var_prod_cond=[
+                    {"name": "buf", "op": ">=", "value": RATE_LOOP_THRESHOLD}
+                ],
+            )
+        )
+
+
+class OrdLevelSensor(muscadet.ObjFlow):
+    """The sanctioned pattern: the comparison reads a capacity LEVEL (F4, AE18).
+
+    Same topology as the refused ones -- it gates the very component filling
+    the capacity it observes -- and it must keep building, because a level is
+    integrated state and integrated state is what breaks a loop.
+    """
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        self.add_measurement_in(name="buf")
+        self.add_flow(
+            dict(
+                cls="FlowDiscreteOut",
+                name="run",
+                var_prod_cond=[
+                    {"name": "buf", "op": ">=", "value": RATE_LOOP_THRESHOLD}
+                ],
+            )
+        )
 
 
 # ----------------------------------------------------------------------
@@ -340,6 +538,105 @@ def run_discrete_cycle_scenario(obs):
     system.deleteSys()
 
 
+def run_rate_loop_scenario(obs, key, gate_cls, system_name):
+    """A rate comparison wired back to the component producing that rate.
+
+    The continuous graph is a single edge and perfectly acyclic; the loop
+    closes through the discrete control port, which the graph never carries.
+    Run to the very same point as the cycle scenario -- the FIRST run, before
+    any equation is evaluated.
+    """
+    system = OrderingSystem(name=system_name)
+
+    system.add_component(name="RL_SRC", cls="OrdGatedSource")
+    system.add_component(name="RL_GATE", cls=gate_cls)
+
+    system.connect_flow(source="RL_SRC", target="RL_GATE", flow_name="q")
+    system.connect_flow(source="RL_GATE", target="RL_SRC", flow_name="run")
+
+    obs[f"{key}_error"] = None
+    try:
+        system.isimu_start()
+        system.isimu_stop()
+    except ordering.ContinuousFlowCycleError as err:
+        obs[f"{key}_error"] = err
+
+    obs[f"{key}_started"] = system.prerun_done and obs[f"{key}_error"] is None
+
+    system.deleteSys()
+
+
+def build_allowed_loop_system():
+    """Every shape the rate-comparison check must NOT refuse, in one system.
+
+    Refusing a legitimate model is worse than missing a loop, so each of these
+    is a near miss of the refused shape: same components, same continuous edge,
+    and one thing different.
+    """
+    system = OrderingSystem(name="OrderingRateLoopAllowed")
+
+    # -- The sanctioned pattern (F4, AE18): the comparison reads a LEVEL.
+    system.add_component(name="OK_SRC", cls="OrdGatedSource")
+    system.add_component(name="OK_TANK", cls="BufferedSink")
+    system.add_component(name="OK_SENS", cls="OrdLevelSensor")
+    system.connect_flow(source="OK_SRC", target="OK_TANK", flow_name="q")
+    system.connect("OK_TANK", "buf_level_out", "OK_SENS", "buf_level_in")
+    system.connect_flow(source="OK_SENS", target="OK_SRC", flow_name="run")
+
+    # -- The same shape as the refused one, thresholding a LEVEL instead: the
+    #    gate sits on the continuous edge AND drives its producer's control.
+    system.add_component(name="LG_SRC", cls="OrdGatedSource")
+    system.add_component(name="LG_TANK", cls="BufferedSink")
+    system.add_component(name="LG_GATE", cls="OrdLevelGate")
+    system.connect_flow(source="LG_SRC", target="LG_TANK", flow_name="q")
+    system.connect_flow(source="LG_SRC", target="LG_GATE", flow_name="q")
+    system.connect("LG_TANK", "buf_level_out", "LG_GATE", "buf_level_in")
+    system.connect_flow(source="LG_GATE", target="LG_SRC", flow_name="run")
+
+    # -- The comparison drives a signal that travels DOWNSTREAM only.
+    system.add_component(name="DOWN_SRC", cls="OrdGatedSource")
+    system.add_component(name="DOWN_GATE", cls="OrdRateGate")
+    system.add_component(name="DOWN_SINK", cls="OrdSignalSink")
+    system.connect_flow(source="DOWN_SRC", target="DOWN_GATE", flow_name="q")
+    system.connect_flow(source="DOWN_GATE", target="DOWN_SINK", flow_name="run")
+
+    # -- A signal DOES travel back upstream to a port the producer gates on,
+    #    but it derives from no comparison.
+    system.add_component(name="BY_SRC", cls="OrdSpareSource")
+    system.add_component(name="BY_GATE", cls="OrdBypassGate")
+    system.add_component(name="BY_SINK", cls="OrdSignalSink")
+    system.connect_flow(source="BY_SRC", target="BY_GATE", flow_name="q")
+    system.connect_flow(source="BY_GATE", target="BY_SINK", flow_name="run")
+    system.connect_flow(source="BY_GATE", target="BY_SRC", flow_name="spare")
+
+    # -- The comparison DOES reach the producer, which does not read it.
+    system.add_component(name="OPEN_SRC", cls="OrdOpenSource")
+    system.add_component(name="OPEN_GATE", cls="OrdRateGate")
+    system.connect_flow(source="OPEN_SRC", target="OPEN_GATE", flow_name="q")
+    system.connect_flow(source="OPEN_GATE", target="OPEN_SRC", flow_name="run")
+
+    return system
+
+
+def run_allowed_loop_scenario(obs):
+    """None of the near misses above may be refused."""
+    system = build_allowed_loop_system()
+
+    obs["allowed_error"] = None
+    try:
+        system.isimu_start()
+        system.isimu_stop()
+    except Exception as err:  # pragma: no cover - a failure is the assertion
+        obs["allowed_error"] = err
+
+    order = system.equation_order
+
+    obs["allowed_started"] = system.prerun_done
+    obs["allowed_edges"] = [] if order is None else list(order.graph.edges)
+
+    system.deleteSys()
+
+
 def build_non_data_channel_system():
     """Continuous components wired by everything EXCEPT continuous data.
 
@@ -384,6 +681,9 @@ def the_run():
     run_branch_scenario(obs)
     run_growth_scenario(obs)
     run_discrete_cycle_scenario(obs)
+    run_rate_loop_scenario(obs, "rate_loop", "OrdRateGate", "OrderingRateLoop")
+    run_rate_loop_scenario(obs, "rate_band", "OrdRateGateBand", "OrderingRateLoopBand")
+    run_allowed_loop_scenario(obs)
 
     # Kept alive for the teardown test, per the module convention.
     system = build_non_data_channel_system()
@@ -655,6 +955,103 @@ def test_the_data_channel_predicate_accepts_only_continuous_data_boxes(the_run):
     assert ordering.continuous_data_channel(comp, "q_out", "in") is None
     assert ordering.continuous_data_channel(comp, "buf_level_out", "out") is None
     assert ordering.continuous_data_channel(comp, "nope", "out") is None
+
+
+# ----------------------------------------------------------------------
+# R30 -- the loop the continuous graph does not carry
+# ----------------------------------------------------------------------
+
+
+def test_a_rate_comparison_wired_back_upstream_fails_at_the_first_run(the_run):
+    """The continuous graph is acyclic and the model is still refused.
+
+    ``RL_GATE`` compares the rate it receives and drives ``RL_SRC``'s control
+    port with the result, so the two production regimes select each other
+    inside one instant. Left to run, that model does not diverge: it flips
+    regime every 6.25e-4 of simulated time and never finishes, which is worse
+    than being refused.
+    """
+    error = the_run["rate_loop_error"]
+
+    assert error is not None, "a rate comparison closing a loop must not start"
+    assert isinstance(error, ordering.RateComparisonLoopError)
+    assert isinstance(error, ordering.ContinuousFlowCycleError)
+    assert isinstance(error, ValueError)
+    assert the_run["rate_loop_started"] is False
+
+
+def test_the_rate_loop_error_names_the_connections_and_the_way_out(the_run):
+    """It names both closing connections, the comparison, and the alternative."""
+    error = the_run["rate_loop_error"]
+    message = str(error)
+
+    assert "RL_SRC.q_out -> RL_GATE.q_in" in message
+    assert "RL_GATE.run_out -> RL_SRC.run_in" in message
+
+    # The comparison itself, so the modeller knows which operand to move
+    assert "q >= 5" in message
+
+    # ... and where to move it to: the sanctioned pattern, named
+    assert "CAPACITY LEVEL" in message
+    assert "measurement link" in message
+
+    assert error.reader == "RL_GATE"
+    assert error.flow == "q"
+    assert error.cycle == ["RL_SRC", "RL_GATE", "RL_SRC"]
+
+
+def test_a_deadband_over_a_rate_does_not_lift_the_refusal(the_run):
+    """A band damps a value that moves through it; a rate JUMPS across it.
+
+    Measured on this very model: a source at 10 cut to 0 by its own guard
+    crosses the activation edge at 8 and the release edge at 3 in one step, so
+    the band is never inhabited and the flip dates are the same with it as
+    without it. The refusal therefore does not depend on the band.
+
+    The band is also what makes the check non-trivial: the port actually wired
+    out carries no comparison at all -- it is a mode reading the two edge
+    outputs that clamps it -- so the signal has to be followed through that
+    mode.
+    """
+    error = the_run["rate_band_error"]
+
+    assert error is not None, "a deadband over a rate must not lift the refusal"
+    assert isinstance(error, ordering.RateComparisonLoopError)
+    assert the_run["rate_band_started"] is False
+
+    message = str(error)
+    assert "RL_GATE.run_out -> RL_SRC.run_in" in message
+    assert "deadband does not damp it" in message
+
+
+def test_the_near_misses_of_that_shape_all_build(the_run):
+    """Four loops that are not loops, all refused would be worse than the bug.
+
+    * ``OK_*``  -- the sanctioned pattern (F4, AE18): a sensor carrying no
+      continuous flow at all reads a capacity LEVEL and gates its supplier;
+    * ``LG_*``  -- the same shape as the refused one, one thing different: the
+      gate sits ON the continuous edge and drives the producer's control port,
+      but what it compares is a LEVEL, which is integrated state;
+    * ``DOWN_*`` -- the signal the comparison drives travels downstream only;
+    * ``BY_*``  -- a signal does return to the producer, on a port that
+      producer gates on, but it is produced unconditionally and carries
+      nothing the comparison decided;
+    * ``OPEN_*`` -- the comparison does reach the producer, whose production
+      reads nothing of it.
+    """
+    assert the_run["allowed_error"] is None, str(the_run["allowed_error"])
+    assert the_run["allowed_started"] is True
+
+    # The continuous graph is exactly the supply edges, unchanged by any of the
+    # discrete traffic wired over them.
+    assert the_run["allowed_edges"] == [
+        ("OK_SRC", "OK_TANK"),
+        ("LG_SRC", "LG_TANK"),
+        ("LG_SRC", "LG_GATE"),
+        ("DOWN_SRC", "DOWN_GATE"),
+        ("BY_SRC", "BY_GATE"),
+        ("OPEN_SRC", "OPEN_GATE"),
+    ]
 
 
 def test_delete(the_run):

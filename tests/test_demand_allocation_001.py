@@ -47,6 +47,12 @@ CLOCK_DELAY = 5.0
 #: machine precision, so a date is asserted within one default PDMP step.
 CROSSING_TOL = 0.05
 
+#: The cluster read at instant 0, before any production sweep has run: one
+#: producer of 10, two consumers asking for 2 and 3.
+FIRST_SAMPLE_RATE = 10.0
+FIRST_SAMPLE_DEMANDS = {"FS_C1": 2.0, "FS_C2": 3.0}
+FIRST_SAMPLE_HORIZON = 10.0
+
 #: Every producer / consumers cluster built below, ``{prefix: consumer names}``.
 #: What makes the conservation invariant assertable over all of them at once:
 #: whatever the policy, ``{f}_fed_out`` is the total delivered downstream, so
@@ -473,6 +479,69 @@ def run_allocation_scenario(obs):
     system.deleteSys()
 
 
+def build_first_sample_system(name):
+    """One producer of 10 and two consumers asking for 2 and 3."""
+    system = muscadet.System(name=name)
+
+    add_cluster(system, "FS", FIRST_SAMPLE_RATE, FIRST_SAMPLE_DEMANDS)
+
+    return system
+
+
+def run_first_sample_scenario(obs):
+    """What a consumer reads BEFORE the first production sweep has run.
+
+    The sweep runs strictly after t=0, so at instant 0 of a schedule declared
+    ``{"start": 0, ...}`` -- the documented shape -- no output has allocated
+    anything yet. Read twice, on both paths a modeller has to that instant: the
+    interactive session that never advances time, and the first sample of a
+    batch schedule.
+    """
+    system = build_first_sample_system("DemandFirstSampleLive")
+
+    system.isimu_start()
+    obs["first_sample_live"] = {
+        name: delivered(system, name) for name in FIRST_SAMPLE_DEMANDS
+    }
+    obs["first_sample_live"]["FS_SRC"] = out_value(system, "FS_SRC")
+    system.isimu_stop()
+
+    system.deleteSys()
+
+    system = build_first_sample_system("DemandFirstSampleBatch")
+
+    for name in FIRST_SAMPLE_DEMANDS:
+        system.add_indicator_var(component=name, var="q_fed_in", stats=["mean"])
+    system.add_indicator_var(component="FS_SRC", var="q_fed_out", stats=["mean"])
+
+    system.simulate(
+        {
+            "nb_runs": 1,
+            "schedule": [{"start": 0, "end": FIRST_SAMPLE_HORIZON, "nvalues": 3}],
+        }
+    )
+
+    obs["first_sample_batch"] = {
+        (record["component"], record["instant"]): record["values"]
+        for record in system.indic_to_frame().to_dict("records")
+        if record["stat"] == "mean"
+    }
+
+    # The split the production sweep wrote, and what dropping it leaves a
+    # consumer reading: the provisional split has to agree with it, or a
+    # sequence would open on a different figure from the one it closed on.
+    source_flow = system.comp["FS_SRC"].flows_out["q"]
+    obs["first_sample_allocated"] = dict(source_flow.allocated)
+
+    source_flow.reset_allocation()
+    obs["first_sample_after_reset"] = dict(source_flow.allocated)
+    obs["first_sample_reset_received"] = {
+        name: delivered(system, name) for name in FIRST_SAMPLE_DEMANDS
+    }
+
+    system.deleteSys()
+
+
 def build_capacity_demand_system():
     """AE11: the same unit, once against a full tank and once with room left."""
     system = muscadet.System(name="DemandCapacityBound")
@@ -541,6 +610,7 @@ def the_run():
     obs = {}
 
     run_allocation_scenario(obs)
+    run_first_sample_scenario(obs)
     run_capacity_demand_scenario(obs)
 
     return obs
@@ -1041,6 +1111,72 @@ def test_the_capacity_reaches_its_volume_at_the_expected_date(the_run):
 
     assert the_run["full_dates"][0] == pytest.approx(2.0 / 3.0, abs=CROSSING_TOL)
     assert the_run["capacity_time"] == pytest.approx(CLOCK_DELAY)
+
+
+# ----------------------------------------------------------------------
+# Before the first sweep -- what a consumer reads at instant 0
+# ----------------------------------------------------------------------
+
+
+def test_the_first_sample_of_a_batch_schedule_reads_an_allocated_share(the_run):
+    """Instant 0 of ``{"start": 0, ...}``: 2 and 3, not 10 and 10.
+
+    No production sweep has run at instant 0, so the producer has allocated
+    nothing -- and handing each consumer the raw exported value there made both
+    of them record the producer's whole output, 20 units received against 10
+    produced, correcting only from the next sample on.
+    """
+    samples = the_run["first_sample_batch"]
+
+    assert samples[("FS_C1", 0.0)] == pytest.approx(2.0)
+    assert samples[("FS_C2", 0.0)] == pytest.approx(3.0)
+
+
+def test_the_first_sample_never_delivers_more_than_the_producer_exports(the_run):
+    """The invariant behind it: a split, whatever else it is, conserves.
+
+    Asserted on both paths to instant 0, since an interactive session that
+    never advances time sees nothing but this reading.
+    """
+    samples = the_run["first_sample_batch"]
+
+    exported = samples[("FS_SRC", 0.0)]
+    received = samples[("FS_C1", 0.0)] + samples[("FS_C2", 0.0)]
+
+    assert received <= exported + 1e-9
+
+    live = the_run["first_sample_live"]
+
+    assert live["FS_C1"] + live["FS_C2"] <= live["FS_SRC"] + 1e-9
+    assert live["FS_C1"] == pytest.approx(2.0)
+    assert live["FS_C2"] == pytest.approx(3.0)
+
+
+def test_the_first_sample_agrees_with_the_settled_ones(the_run):
+    """Instant 0 carries no correction step: it reads what the run settles at."""
+    samples = the_run["first_sample_batch"]
+
+    for name in FIRST_SAMPLE_DEMANDS:
+        assert samples[(name, 0.0)] == pytest.approx(
+            samples[(name, FIRST_SAMPLE_HORIZON)]
+        )
+
+
+def test_dropping_the_allocation_leaves_the_same_shares(the_run):
+    """A Monte Carlo sequence opens on a split of its own, not the last one's.
+
+    ``allocated`` is Python state no engine reinitialisation touches, so it is
+    dropped at the start of every sequence -- and what a consumer then reads is
+    the provisional split, which on this cluster is the very same figure.
+    """
+    assert the_run["first_sample_allocated"] == pytest.approx(
+        {"FS_C1": 2.0, "FS_C2": 3.0}
+    )
+
+    assert the_run["first_sample_after_reset"] == {}
+
+    for name, demand in FIRST_SAMPLE_DEMANDS.items():
+        assert the_run["first_sample_reset_received"][name] == pytest.approx(demand)
 
 
 def test_delete(the_run):

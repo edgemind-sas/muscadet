@@ -558,9 +558,16 @@ class FlowContinuousIn(FlowContinuous):
         read back from the producing flow's allocation, keyed by the consumer's
         component name.
 
-        Falls back to the raw exported value for a connection whose producer has
-        allocated nothing yet -- before the first production sweep, an output
-        simply delivers what it holds.
+        A producer that has not allocated anything -- before the first
+        production sweep, or because its ``compute_production`` writes the
+        exported variable itself and never splits it -- hands out a PROVISIONAL
+        share instead (:meth:`FlowContinuousOut.provisional_share`). Reading the
+        raw exported value there is what let every consumer of one producer
+        record its whole output at instant 0 of a batch schedule, delivering
+        several times what was produced.
+
+        The raw value is still the answer for a connection whose producer is
+        not a continuous output at all: there is no split behind it to read.
         """
         count = self.var_in.cnctCount()
 
@@ -570,9 +577,10 @@ class FlowContinuousIn(FlowContinuous):
         total = 0.0
         for index in range(count):
             var = self.var_in.variable(index)
+            value = float(var.value())
             flow = self.supplier_flow(var)
-            share = None if flow is None else flow.allocated_for(self.comp_name)
-            total += float(var.value()) if share is None else float(share)
+            share = None if flow is None else flow.share_for(self.comp_name, value)
+            total += value if share is None else float(share)
 
         return total
 
@@ -858,10 +866,88 @@ class FlowContinuousOut(FlowContinuous):
         """What was allocated to one consumer, or None when nothing was.
 
         None and 0.0 are deliberately different: None means "this output has not
-        allocated anything to that consumer", which is what makes a consumer
-        fall back to the raw exported value before the first production sweep.
+        allocated anything to that consumer", which is what sends a consumer to
+        the provisional split of :meth:`provisional_share`.
         """
         return self.allocated.get(comp_name)
+
+    def reset_allocation(self):
+        """Forget the split, registered as a start method.
+
+        :attr:`allocated` is Python state that no engine reinitialisation
+        touches, so without this the first sample of every Monte Carlo sequence
+        but the first would read what the PREVIOUS sequence ended on. Cleared
+        rather than recomputed: an empty allocation is the honest statement
+        that this sequence's production sweep has not run yet, and it is what
+        routes a consumer to the provisional split.
+        """
+        self.allocated = {}
+
+    # -- what a consumer reads before the first sweep ------------------
+
+    def provisional_demands(self):
+        """The demands a PRE-SWEEP split is proposed over.
+
+        The demand channel carries two different things before the first demand
+        sweep has run, and :attr:`FlowContinuousIn.var_demand_default` documents
+        both: the DECLARED demand of a pure consumer, which is final, and the
+        placeholder of a consumer that derives its demand from its own outputs,
+        which is not. Nothing on the wire tells them apart, so a demand of zero
+        is read here as "this consumer has not said what it wants yet" and
+        widened to :data:`UNBOUNDED` -- the same convention
+        :meth:`get_demand_bound` applies to an output nobody is connected to.
+
+        Reading it the other way round would be destructive rather than merely
+        approximate: a component whose production rule is GUARDED on what it
+        receives would start at zero, select the idle rule, derive a zero demand
+        from it and stay there -- a self-consistent standstill the demand sweep
+        never leaves. Over-stating an underived demand only costs an optimistic
+        first sample, which is exactly what such a consumer read before.
+        """
+        return {
+            name: (demand if demand > 0.0 else UNBOUNDED)
+            for name, demand in self.consumer_demands().items()
+        }
+
+    def provisional_share(self, comp_name, available):
+        """One consumer's share of ``available``, when nothing was allocated.
+
+        Proposed over :meth:`provisional_demands`, through this flow's own
+        policy. What it guarantees is the conservation the raw exported value
+        broke: the provisional shares of one output's consumers never total
+        more than what that output exports, whereas handing each of them the
+        whole exported value multiplied it by the consumer count.
+
+        Deliberately NOT written to :attr:`allocated`. A component whose
+        ``compute_production`` writes its exported variable itself never
+        allocates at all, so a stored split would freeze at its first value
+        while the variable it splits went on moving -- and a threshold watched
+        downstream would never see the crossing.
+
+        Deliberately not routed through
+        :meth:`muscadet.ObjFlow.allocate_output` either: that override point
+        shapes what a component DELIVERS once it has produced, and this splits
+        what has not been produced yet.
+        """
+        split = allocate(
+            available, self.provisional_demands(), self.get_allocation_split()
+        )
+
+        return split.get(comp_name)
+
+    def share_for(self, comp_name, available):
+        """What one consumer receives over one connection carrying ``available``.
+
+        The allocated share when a production sweep wrote one, the provisional
+        split otherwise. None when this output has nothing to say about that
+        consumer at all -- it is not among the ones publishing a demand here.
+        """
+        share = self.allocated_for(comp_name)
+
+        if share is not None:
+            return share
+
+        return self.provisional_share(comp_name, available)
 
     # -- how much of it a failure mode leaves (R18, R19, R20) ----------
 
@@ -923,7 +1009,10 @@ class FlowContinuousOut(FlowContinuous):
         # No transformation rule and no capacity at this stage: the produced
         # rate holds the value it was declared with. Rule-driven recomputation
         # is installed by the rule/equation layer.
-        pass
+        #
+        # The split, on the other hand, is Python state surviving the end of a
+        # Monte Carlo sequence, so it is dropped at the beginning of each one.
+        comp.addStartMethod(f"reset_{self.name}_allocation", self.reset_allocation)
 
     def __repr__(self) -> str:
         base_str = super().__repr__()

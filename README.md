@@ -939,6 +939,8 @@ class Alarm(muscadet.ObjFlow):
 
 A comparison operand over a continuous input reads **what this component is allocated**, which is the same quantity its rules would consume — never the total its producer publishes to all of its consumers. An input therefore has to ask for what it means to watch: an input left at the default demand of 0 is allocated 0, and a threshold over it never fires. To observe a quantity *without* asking for any of it, use the measurement link below, which is the channel for reading a value one does not consume.
 
+Such an alarm may be read anywhere **except back upstream of the flow it watches**. A comparison against a continuous *rate* is algebraic — the rate a producer exports this instant is a function of the guard it reads this instant, with nothing in between — so wiring the alarm's signal to a component producing that very rate closes a loop within one instant, and the two regimes select each other for ever. That is refused at the first run, like any other continuous-flow cycle. A deadband does not make it safe: a deadband damps a value that moves *through* the band, and a rate jumps across it, crossing both edges at once. To gate production on a quantity, threshold a **capacity level** instead — see the sensor pattern below. A level is integrated, and integrated state is what breaks the loop.
+
 The same operand thresholds a level read over a **measurement link** — a read-only channel through which a component observes another component's capacity. It carries no quantity and enters no allocation:
 
 ```python

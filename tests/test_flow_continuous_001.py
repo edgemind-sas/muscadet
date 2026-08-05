@@ -108,12 +108,19 @@ def test_value_round_trip(the_system):
 
 
 def test_several_producers_sum(the_system):
-    """Two producers feeding one continuous input deliver their sum."""
+    """Two producers feeding one continuous input deliver their sum.
+
+    Their sum of ALLOCATED shares, which is what the input actually receives:
+    ``SUM`` publishes a demand of 1.5, so PA -- which could hold 2.5 -- is
+    capped there, while PB's 0.75 passes whole. 2.25 is also what the run
+    settles at once the production sweep has allocated, so the reading before
+    the first sweep and the reading after it agree.
+    """
     the_system.isimu_start()
 
     assert the_system.comp["PA"].flows_out["q"].var_fed.value() == pytest.approx(2.5)
     assert the_system.comp["PB"].flows_out["q"].var_fed.value() == pytest.approx(0.75)
-    assert the_system.comp["SUM"].flows_in["q"].var_fed.value() == pytest.approx(3.25)
+    assert the_system.comp["SUM"].flows_in["q"].var_fed.value() == pytest.approx(2.25)
 
     the_system.isimu_stop()
 
