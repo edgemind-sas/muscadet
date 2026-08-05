@@ -5,8 +5,225 @@ from .flow_continuous import FlowContinuous
 import re
 import copy
 
+#: Name of the single PDMP manager a muscadet system owns. Every continuous
+#: declaration registers on *this* manager, which is what makes PyCATSHOO
+#: sequence equation methods of *different* components against each other
+#: (verified: flipping the order integers flips the observed call sequence).
+PDMP_MANAGER_NAME = "muscadet_pdmp"
+
 
 class System(cod3s.PycSystem):
+    """A muscadet system.
+
+    Beyond the connection helpers, this class owns the two pieces the
+    continuous layer needs and that its ``cod3s`` base does not provide.
+
+    PDMP manager ownership (KTD5)
+    -----------------------------
+    The system owns **one** PDMP manager, created lazily on the first
+    continuous declaration and reached by components through
+    ``self.system().get_or_create_pdmp_manager()``. A system whose components
+    declare only discrete flows never creates one, which is what keeps purely
+    discrete models identical to 1.x.
+
+    The pre-run step (KTD14)
+    ------------------------
+    muscadet has no build step: the modeller adds components, connects them,
+    then simulates. The only moment where every connection exists and no
+    equation has run yet is the *start of a run* -- and the two run entry
+    points do not converge in ``cod3s``: :meth:`simulate` goes through
+    ``prepare_simu``, while :meth:`isimu_start` calls the engine directly.
+    Both are overridden here so they call :meth:`prerun` first.
+
+    :meth:`prerun` is the idempotent driver; :meth:`prerun_step` is the
+    extension point that does the actual work (empty here, filled by the
+    ordering unit). ``prerun_done`` / ``prerun_count`` are the inspection
+    accessors.
+    """
+
+    # ------------------------------------------------------------------
+    # PDMP manager ownership
+    # ------------------------------------------------------------------
+
+    @property
+    def pdmp_manager(self):
+        """The system's PDMP manager, or ``None`` while it is purely discrete.
+
+        Deliberately read-only and lazily backed: a discrete-only system must
+        never carry one, and no ``__init__`` override is needed to hold it.
+        """
+        return getattr(self, "_pdmp_manager", None)
+
+    def get_or_create_pdmp_manager(self):
+        """Return the system's PDMP manager, creating it on first need.
+
+        This is the entry point components use, through ``self.system()``,
+        when a declaration needs the continuous solver.
+        """
+        manager = self.pdmp_manager
+        if manager is None:
+            manager = self.addPDMPManager(PDMP_MANAGER_NAME)
+            self._pdmp_manager = manager
+        return manager
+
+    @staticmethod
+    def component_has_continuous_flow(comp):
+        """True when ``comp`` declares at least one continuous flow."""
+        for flows_attr in ("flows_in", "flows_out"):
+            flows = getattr(comp, flows_attr, None) or {}
+            for flow in flows.values():
+                if isinstance(flow, FlowContinuous):
+                    return True
+        return False
+
+    def add_component(self, **comp_specs):
+        """Add a component, creating the PDMP manager on the first continuous one.
+
+        This is where "lazily created on the first continuous declaration"
+        actually happens: a component carrying a continuous flow is the first
+        thing that makes the system continuous.
+        """
+        comp = super().add_component(**comp_specs)
+
+        if comp is not None and self.component_has_continuous_flow(comp):
+            self.get_or_create_pdmp_manager()
+
+        return comp
+
+    # ------------------------------------------------------------------
+    # PDMP registration helpers
+    # ------------------------------------------------------------------
+    #
+    # PyCATSHOO does NOT freeze registration at component construction:
+    # ``addODEVariable`` / ``addExplicitVariable`` / ``addEquationMethod`` /
+    # ``addWatchedTransition`` all accept calls made long after the components
+    # exist -- including from the pre-run step, on both the batch and the
+    # interactive path. That is what makes the graph-derived ordering possible.
+
+    def pdmp_add_ode_variable(self, var):
+        """Register ``var`` as a variable integrated by the ODE solver."""
+        manager = self.get_or_create_pdmp_manager()
+        manager.addODEVariable(self._unwrap_bkd(var))
+        return manager
+
+    def pdmp_add_explicit_variable(self, var):
+        """Register ``var`` as a variable computed alongside the ODE system."""
+        manager = self.get_or_create_pdmp_manager()
+        manager.addExplicitVariable(self._unwrap_bkd(var))
+        return manager
+
+    def pdmp_add_equation_method(self, method_name, comp, order):
+        """Register ``comp.method_name`` as an equation method at ``order``.
+
+        ``order`` is mandatory and must be an ``int``: PyCATSHOO falls back to
+        alphabetical equation-name order when two equations share an order
+        value, so a derived evaluation order only holds if every equation gets
+        a distinct integer (KTD3). The caller owns that allocation.
+        """
+        if not isinstance(order, int) or isinstance(order, bool):
+            raise TypeError(
+                f"PDMP equation order must be an int, got {type(order).__name__} "
+                f"for {method_name!r}"
+            )
+        manager = self.get_or_create_pdmp_manager()
+        manager.addEquationMethod(method_name, comp, order)
+        return manager
+
+    def pdmp_add_watched_transition(self, transition):
+        """Register ``transition`` as a stop condition of the integration.
+
+        Accepts either a ``cod3s.PycTransition`` wrapper or the raw backend
+        transition, mirroring what ``PycComponent.add_aut2st`` does with its
+        ``pdmp_managers`` parameter.
+        """
+        manager = self.get_or_create_pdmp_manager()
+        manager.addWatchedTransition(self._unwrap_bkd(transition))
+        return manager
+
+    @staticmethod
+    def _unwrap_bkd(obj):
+        """Return the PyCATSHOO backend object behind a cod3s wrapper."""
+        bkd = getattr(obj, "_bkd", None)
+        return obj if bkd is None else bkd
+
+    # ------------------------------------------------------------------
+    # The shared pre-run step
+    # ------------------------------------------------------------------
+
+    @property
+    def prerun_done(self):
+        """True once the pre-run step has run for the current engine system."""
+        return getattr(self, "_prerun_done", False)
+
+    @property
+    def prerun_count(self):
+        """How many times :meth:`prerun_step` was actually invoked.
+
+        Purely diagnostic, and therefore *not* reset by :meth:`deleteSys`: it
+        is what a test asserts on to prove the step ran exactly once across a
+        restart or a second run.
+        """
+        return getattr(self, "_prerun_count", 0)
+
+    def prerun(self):
+        """Run the pre-run step once, before either run entry point starts.
+
+        Idempotent: a second run, or a restart after a stop, is a no-op.
+
+        Returns
+        -------
+        bool
+            True when :meth:`prerun_step` was invoked by this call, False when
+            it had already run.
+        """
+        if self.prerun_done:
+            return False
+
+        self._prerun_done = True
+        self._prerun_count = self.prerun_count + 1
+        self.prerun_step()
+
+        return True
+
+    def prerun_step(self):
+        """The work done once, at the start of the first run.
+
+        Extension point: this is where the evaluation order is computed from
+        the connection graph and registered on the PDMP manager. It sees the
+        fully connected system and no equation has run yet.
+
+        A purely discrete system reaches this too, and it must stay a no-op
+        there -- no manager, no registration, nothing observable.
+        """
+        return None
+
+    # ------------------------------------------------------------------
+    # Run entry points -- both must go through the pre-run step
+    # ------------------------------------------------------------------
+
+    def simulate(self, *args, **kwargs):
+        """Batch (Monte Carlo) run, preceded by the pre-run step."""
+        self.prerun()
+        return super().simulate(*args, **kwargs)
+
+    def isimu_start(self, *args, **kwargs):
+        """Interactive session start, preceded by the pre-run step.
+
+        ``cod3s.PycSystem.isimu_start`` never touches ``prepare_simu``, so a
+        step wired only into :meth:`simulate` would silently do nothing here.
+        """
+        self.prerun()
+        return super().isimu_start(*args, **kwargs)
+
+    def deleteSys(self, *args, **kwargs):
+        """Delete the engine system and release everything bound to it.
+
+        Dropping the manager handle and the pre-run flag is what lets a
+        following test module build a clean system in the same process.
+        """
+        self._pdmp_manager = None
+        self._prerun_done = False
+        return super().deleteSys(*args, **kwargs)
 
     def auto_connect(
         self,
