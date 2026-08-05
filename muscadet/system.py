@@ -1,6 +1,7 @@
 import cod3s
 
 from .obj_logic import LogicOr, LogicAnd
+from .flow_continuous import FlowContinuous
 import re
 import copy
 
@@ -151,9 +152,23 @@ class System(cod3s.PycSystem):
         else:
 
             if check_authorization:
-                source_flow_comp_auth_pat = (
-                    self.comp[source].flows_out[flow_key].component_authorized
-                )
+                source_flow = self.comp[source].flows_out[flow_key]
+                target_flow = self.comp[target].flows_in[flow_key]
+
+                source_is_continuous = isinstance(source_flow, FlowContinuous)
+                target_is_continuous = isinstance(target_flow, FlowContinuous)
+                if source_is_continuous != target_is_continuous:
+                    source_kind = "continuous" if source_is_continuous else "discrete"
+                    target_kind = "continuous" if target_is_continuous else "discrete"
+                    raise ValueError(
+                        f"Cannot connect {source}.{flow_key} "
+                        f"({source_kind} {type(source_flow).__name__}) to "
+                        f"{target}.{flow_key} "
+                        f"({target_kind} {type(target_flow).__name__}): "
+                        "continuous and discrete flows cannot be connected"
+                    )
+
+                source_flow_comp_auth_pat = source_flow.component_authorized
                 check_source_auth = self.check_comp_attributes(
                     target, source_flow_comp_auth_pat
                 )
@@ -164,9 +179,7 @@ class System(cod3s.PycSystem):
                         )
                     return None
 
-                target_flow_comp_auth_pat = (
-                    self.comp[target].flows_in[flow_key].component_authorized
-                )
+                target_flow_comp_auth_pat = target_flow.component_authorized
                 check_target_auth = self.check_comp_attributes(
                     source, target_flow_comp_auth_pat
                 )
