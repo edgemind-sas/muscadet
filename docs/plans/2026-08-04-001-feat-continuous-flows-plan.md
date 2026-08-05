@@ -651,11 +651,13 @@ The rename is unit one and lands alone, because it is the only unit that can bre
 
 | Gate | Command | Applies to | Done signal |
 |---|---|---|---|
-| Existing suite unmodified | `pytest` | Every unit | All pass, and `git status` shows no modification to pre-existing files under `tests/` |
-| Slow tests | `pytest --runslow` | U1, U13, U14 | All pass |
+| Existing suite unmodified | `pytest tests/` | Every unit | 318 passed, 2 skipped or better, and `git status` shows no modification to pre-existing files under `tests/` |
+| Slow tests | `pytest tests/ --runslow` | U1, U13, U14 | All pass |
 | New unit tests | `pytest tests/<new file>` | Each unit | Every scenario listed for that unit passes |
 | Formatting | `black .` and `isort .` | Every unit | No diff |
 | Example | run the script under `examples/continuous_01/` | U14 | Completes and produces its indicators |
+
+The test command is scoped to `tests/` rather than bare `pytest`: `pytest.ini` takes precedence over the `testpaths` setting in `pyproject.toml` and declares none, so an unscoped run also collects `old_stuffs/`, which fails at import on a missing third-party dependency unrelated to this work.
 
 Type checking is deliberately excluded. `mypy muscadet/` reports 30 errors across 7 files on the current tree, including pre-existing signature violations in `muscadet/obj_logic.py`, so it cannot serve as a regression signal for this work.
 
