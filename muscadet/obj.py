@@ -1799,6 +1799,7 @@ class ObjFlow(cod3s.PycComponent):
     add_derating = derating.add_derating
     derating_vars_of = derating.derating_vars_of
     continuous_endpoint_names = derating.continuous_endpoint_names
+    pat_to_var_value_list = derating.pat_to_var_value_list
     resolve_mode_effects = derating.resolve_mode_effects
     release_deratings = derating.release_deratings
 

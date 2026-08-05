@@ -685,6 +685,7 @@ Per continuous flow named `f`, MUSCADET creates:
 
 - `f_fed_out` — on an output flow, the total value delivered downstream. Always equal to the sum of the shares its consumers receive
 - `f_demand_in` — on an output flow, the demands published by its consumers
+- `f_out_rate` — on an output flow, the rate its production is multiplied by, holding `1.0`. The one endpoint a failure mode clamps; see [deratings](#failure-modes-on-a-continuous-output-deratings)
 - `f_fed_in` — on an input flow, the value received: the **sum**, over every incoming connection, of the share that producer allocated to this consumer
 - `f_demand_out` — on an input flow, the demand this consumer publishes upstream
 
@@ -922,10 +923,35 @@ The rate and the per-mode variables are readable back:
 ```python
 flow = my_plant.comp["P"].flows_out["water"]
 
-flow.get_effective_rate()                  # the minimum over the active deratings
+flow.get_effective_rate()                  # the minimum over everything derating it
+flow.var_out_rate                          # the shared rate variable, water_out_rate
 flow.derating                              # {mode name: variable}
 my_plant.comp["P"].derating_vars_of("wear")  # {variable basename: variable}
 ```
+
+#### The shared rate variable: `{flow}_out_rate`
+
+Every continuous output also carries **one shared rate variable**, named `{flow}_out_rate` — `water` gives `water_out_rate` — created with the flow itself and holding `1.0`. It is public, writable, and in existence from the moment the flow is declared. Setting it to `0` is a total loss of production, exactly like a derating of `0`.
+
+It exists so that **anything targeting a component variable by name can derate a continuous output**, with no MUSCADET-specific call anywhere in the declaration. A native `cod3s.ObjMode2S` / `cod3s.ObjFM*` resolves its effects against the target component's declared variables by name, and this is the one a continuous output offers it:
+
+```python
+my_plant.add_component(
+    cls="ObjMode2S",
+    mode_name="leak",
+    targets=["P"],
+    occ_law={"cls": "delay", "time": 13.0},
+    not_occ_law={"cls": "delay", "time": 2.0},
+    occ_effects={"water_out_rate": 0.5},      # 50 % of nominal while the mode holds
+    not_occ_effects={"water_out_rate": 1.0},  # back to nominal on repair
+)
+```
+
+The output's two other variables, `water_fed_out` and `water_demand_in`, belong to the PDMP solver and are rewritten at every integration step: a clamp on either is erased inside the step. `water_out_rate` is the endpoint to clamp.
+
+**The two mechanisms compose, they do not compete.** `get_effective_rate()` is the minimum over the shared variable *and* every per-mode derating, so a mode declared outside MUSCADET and a mode declared on the component can degrade one output at once and neither hides the other. MUSCADET itself never writes `{flow}_out_rate`: it keeps the per-mode variables for the modes whose identity it knows, precisely so that two of them stay independent on repair.
+
+For a caller holding a pattern rather than an exact name, `comp.pat_to_var_value_list(("water", 0.5))` resolves onto `water_out_rate` and drops the solver-owned endpoints.
 
 #### Standalone failure modes derate too
 

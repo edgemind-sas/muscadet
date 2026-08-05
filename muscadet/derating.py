@@ -18,6 +18,8 @@ variables (:func:`release_deratings`), a derating having no per-step reset.
 
 import re
 
+import cod3s
+
 from .flow_continuous import (
     NOMINAL_RATE,
     FlowContinuous,
@@ -131,6 +133,63 @@ def continuous_endpoint_names(comp):
                 names.add(var.basename())
 
     return names
+
+
+def pat_to_var_value_list(comp, *pat_value_list):
+    """
+    Resolves effect patterns onto variables, continuous outputs included.
+
+    Overrides ``cod3s.PycComponent.pat_to_var_value_list``, whose plain regex
+    over the component's variable basenames has two wrong answers on a
+    continuous output: it returns ``{flow}_fed_out``, which the production
+    equation rewrites at every integration step so that a clamp on it never
+    survives, and -- since KD10 gave every continuous output a
+    ``{flow}_out_rate`` -- it would ALSO return that one, so a single pattern
+    would resolve to a variable that works and one that silently does not.
+
+    Here a pattern naming a continuous output resolves to its rate variable
+    and to nothing else, and the solver-owned endpoints are dropped whatever
+    the pattern (R19).
+
+    Note that this is NOT the path muscadet's OWN modes take on a continuous
+    output: :func:`resolve_mode_effects` routes those to the per-mode derating
+    variable before ever getting here, because muscadet knows the declaring
+    mode's identity and can therefore keep concurrent deratings apart (R18,
+    R20). This function is what is left for everything else -- a caller holding
+    only a pattern and a value, with no mode to attribute them to.
+
+    Parameters
+    ----------
+    *pat_value_list : list of tuples
+        ``(pattern, value)`` pairs, patterns being regular expressions.
+
+    Returns
+    -------
+    list of tuples
+        ``(variable, value)`` pairs.
+    """
+    rates = []
+    patterns = []
+
+    for pattern, value in pat_value_list:
+        flow_names = comp.match_continuous_outputs(pattern)
+
+        if not flow_names:
+            patterns.append((pattern, value))
+            continue
+
+        rates += [
+            (comp.flows_out[flow_name].var_out_rate, float(value))
+            for flow_name in flow_names
+        ]
+
+    solver_owned = comp.continuous_endpoint_names()
+
+    return [
+        (var, value)
+        for var, value in cod3s.PycComponent.pat_to_var_value_list(comp, *patterns)
+        if var.basename() not in solver_owned
+    ] + rates
 
 
 def resolve_mode_effects(comp, mode_name, effects):

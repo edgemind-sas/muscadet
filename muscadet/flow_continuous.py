@@ -98,19 +98,31 @@ whatever it produces is multiplied. A rate of 0 is a total loss of production:
 there is no separate boolean availability gate on a continuous flow (R19, KD10),
 so the one number expresses both the cut and the degradation.
 
-A failure mode declares its effect against the output flow, and the library
-allocates **one derating variable per (mode, output flow)** pair, named
-``{mode}_derating_{flow}`` (:data:`DERATING_VAR_FMT`) and held in
-:attr:`FlowContinuousOut.derating`. The effective rate is the **minimum** over
-them (R20, KD11, KTD8) -- see :meth:`FlowContinuousOut.get_effective_rate`.
+That rate is folded from TWO kinds of variable, and the fold is a **minimum**
+(R20, KD11, KTD8) -- see :meth:`FlowContinuousOut.get_effective_rate`.
 
-The per-mode variable is what makes that minimum reachable. Were several modes
-to clamp one shared variable, whichever fired last would win, and the first of
-them to repair would write the rate back to 1 while the other degradation was
-still standing. The reset-and-reclamp convention that lets boolean effects
-compose for free -- a gate reinitialised at every step and re-clamped by every
-active mode, so ``False`` wins whatever the order -- does not transpose to
-numbers, because no reset value is neutral for a minimum.
+* ``{flow}_out_rate`` (:data:`RATE_VAR_FMT`, :attr:`FlowContinuousOut.
+  var_out_rate`) -- the SHARED rate of KD10, created with the flow itself and
+  holding :data:`NOMINAL_RATE`. Public, writable, and in existence from the
+  moment the flow is declared, so anything that targets a component variable by
+  name can reach it: a native ``cod3s.ObjMode2S`` / ``ObjFM*`` resolves its
+  effects against the target's declared variables, and this is the one a
+  continuous output offers it. muscadet never writes it.
+* ``{mode}_derating_{flow}`` (:data:`DERATING_VAR_FMT`, held in
+  :attr:`FlowContinuousOut.derating`) -- **one per (mode, output flow) pair**
+  (R18), allocated for the modes muscadet declares itself and therefore knows
+  the identity of.
+
+The per-mode variable is what makes the minimum reachable *between modes
+muscadet owns*. Were several of them to clamp one shared variable, whichever
+fired last would win, and the first of them to repair would write the rate back
+to 1 while the other degradation was still standing. The reset-and-reclamp
+convention that lets boolean effects compose for free -- a gate reinitialised at
+every step and re-clamped by every active mode, so ``False`` wins whatever the
+order -- does not transpose to numbers, because no reset value is neutral for a
+minimum. That is exactly why the shared ``{flow}_out_rate`` is left to what
+muscadet does NOT own: a mode declared outside the library clamps it, muscadet
+folds it in, and the two mechanisms compose instead of competing.
 
 Scope
 -----
@@ -168,6 +180,15 @@ NOMINAL_RATE = 1.0
 #: output it bears on (R18). Two modes derating one output therefore own two
 #: distinct variables, which is what makes the minimum of R20 reachable.
 DERATING_VAR_FMT = "{mode}_derating_{flow}"
+
+#: How the SHARED rate variable of a continuous output is named (KD10). Every
+#: continuous output carries one, created with the flow itself and holding
+#: :data:`NOMINAL_RATE`: ``H2`` gives ``H2_out_rate``. It exists so that a mode
+#: muscadet knows nothing about -- a native ``cod3s.ObjMode2S`` / ``ObjFM*``,
+#: which resolves its effects against the target's variables BY NAME -- has
+#: something to clamp that is neither owned by the solver nor conjured by a
+#: muscadet-specific call.
+RATE_VAR_FMT = "{flow}_out_rate"
 
 
 # ----------------------------------------------------------------------
@@ -696,6 +717,20 @@ class FlowContinuousOut(FlowContinuous):
         ),
     )
 
+    var_out_rate: typing.Any = pydantic.Field(
+        None,
+        exclude=True,
+        repr=False,
+        description=(
+            "The SHARED rate variable of this output, ``{flow}_out_rate`` "
+            "(KD10), created with the flow at NOMINAL_RATE. Public and "
+            "writable: it is what a mode declared OUTSIDE muscadet clamps, "
+            "having no way to ask for a per-mode variable. Setting it to 0 is "
+            "a total loss of production -- a continuous output carries no "
+            "separate boolean availability gate (R19)."
+        ),
+    )
+
     derating: typing.Dict[str, typing.Any] = pydantic.Field(
         default_factory=dict,
         exclude=True,
@@ -703,9 +738,10 @@ class FlowContinuousOut(FlowContinuous):
         description=(
             "The derating variables bearing on this output, {declaring mode "
             "name: variable}. One per (mode, output flow) pair (R18): a mode "
-            "clamps the variable IT owns and never a shared one, so the "
-            "effective rate can be the minimum over them (R20) instead of "
-            "whatever the mode that fired last happened to write."
+            "muscadet declares itself clamps the variable IT owns and never "
+            "the shared one, so the effective rate can be the minimum over "
+            "them (R20) instead of whatever the mode that fired last happened "
+            "to write."
         ),
     )
 
@@ -758,6 +794,16 @@ class FlowContinuousOut(FlowContinuous):
 
         # Demand channel: the demands published by the downstream consumers.
         self.var_demand = comp.addReference(f"{self.name}_demand_in")
+
+        # The shared rate of KD10, declared HERE rather than allocated on
+        # demand: a mode that knows nothing of muscadet cannot ask for a
+        # variable to be created, it can only name one that already exists.
+        # ``var_fed`` and ``var_demand`` are the solver's -- rewritten at every
+        # integration step -- so this is the only endpoint such a mode can
+        # usefully clamp.
+        self.var_out_rate = comp.addVariable(
+            self.rate_var_name(), pyc.TVarType.t_double, NOMINAL_RATE
+        )
 
     def add_mb(self, comp, **kwargs):
 
@@ -951,6 +997,16 @@ class FlowContinuousOut(FlowContinuous):
 
     # -- how much of it a failure mode leaves (R18, R19, R20) ----------
 
+    def rate_var_name(self):
+        """Name of the shared rate variable of this output (KD10).
+
+        ``H2`` gives ``H2_out_rate``. Derived from the flow name alone, since
+        the point of this one is to be guessable from outside the library: a
+        mode declares its effect against it by name, with no muscadet-specific
+        call to allocate anything.
+        """
+        return RATE_VAR_FMT.format(flow=self.name)
+
     def derating_var_name(self, mode_name):
         """Name of the derating variable ``mode_name`` owns on this output.
 
@@ -995,15 +1051,23 @@ class FlowContinuousOut(FlowContinuous):
     def get_effective_rate(self):
         """The rate this output's production is multiplied by (R18, R20, KD11).
 
-        The **minimum** over the derating variables registered against it, and
-        :data:`NOMINAL_RATE` when no mode derates it at all. The minimum is
-        order-independent: two modes degrading at 0.5 and 0.8 give 0.5 whichever
-        fired first, and the one repairing leaves the other's 0.8 standing.
-        """
-        if not self.derating:
-            return NOMINAL_RATE
+        The **minimum** over the shared ``{flow}_out_rate`` (KD10) and the
+        per-mode derating variables registered against it, and
+        :data:`NOMINAL_RATE` when nothing derates it at all.
 
-        return min(float(var.value()) for var in self.derating.values())
+        The two mechanisms compose rather than compete: a mode declared outside
+        muscadet clamps the shared variable, a mode muscadet declares itself
+        clamps the one it owns, and the deeper of the two is what the output
+        produces at. The minimum is order-independent: two modes degrading at
+        0.5 and 0.8 give 0.5 whichever fired first, and the one repairing leaves
+        the other's 0.8 standing.
+        """
+        rates = [float(var.value()) for var in self.derating.values()]
+
+        if self.var_out_rate is not None:
+            rates.append(float(self.var_out_rate.value()))
+
+        return min(rates) if rates else NOMINAL_RATE
 
     def update_sensitive_methods(self, comp):
         # No transformation rule and no capacity at this stage: the produced

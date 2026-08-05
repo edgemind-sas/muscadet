@@ -117,7 +117,7 @@ flowchart TB
 
 **Failure modes**
 
-- R18. Each continuous output flow carries an effective rate, defaulting to 1, by which its production is multiplied. A failure mode declares its effect against the output flow, and the library allocates one derating variable per mode and output rather than letting several modes clamp one shared variable.
+- R18. Each continuous output flow carries **a single rate variable**, named `{flow}_out_rate` and defaulting to 1, by which its production is multiplied (KD10). It is public, writable, and created with the flow, so any mode that targets a component variable by name — a native `cod3s.ObjMode2S` / `ObjFM*` in particular — can derate the output with no muscadet-specific call. A failure mode muscadet declares itself states its effect against the output flow, and the library allocates one derating variable per mode and output *in addition*, so that concurrent deratings stay independent (R20). The effective rate is the minimum over the shared variable and the per-mode ones.
 - R19. A rate variable at 0 expresses a total loss of production. Continuous flows carry no separate boolean availability gate.
 - R20. When several modes derate the same output flow at once, the effective rate is the minimum of the active deratings, computed by the library rather than left to the order in which effects are applied. This rule is stated in the user documentation.
 
@@ -257,7 +257,9 @@ Corrected during implementation: R36 was first written as an unconditional claim
 
 Added after the pre-implementation audit: R35 brings shared-volume composition extraction into scope, because the reference model turned out to depend on it in its control path rather than incidentally.
 
-Added during review: R33 defines the measurement link the sensor pattern already depended on but never declared; R34 states how an output's demand maps back onto its inputs. R18, R25 and R31 were tightened where they promised more than the design delivers — respectively that mode effects clamp one shared rate variable, that every 1.x inheritance relation survives, and that identity transfer is defined for every flow arrangement.
+Added during review: R33 defines the measurement link the sensor pattern already depended on but never declared; R34 states how an output's demand maps back onto its inputs. R25 and R31 were tightened where they promised more than the design delivers — respectively that every 1.x inheritance relation survives, and that identity transfer is defined for every flow arrangement.
+
+Restored after review: R18 had been rewritten during review to describe what the implementation had built — per-mode derating variables only — rather than what KD10 decided. The single rate variable KD10 calls for never existed, and its absence broke the primary integration path: a native `cod3s.ObjMode2S` / `ObjFM*` resolves its effects against the target component's declared variables **by exact name**, so with only `{flow}_fed_out` and `{flow}_demand_in` on offer (both rewritten by the PDMP solver at every step) and per-mode variables that muscadet only allocates when it declares the mode itself, such a mode could not derate a continuous output at all — it raised `ValueError: ... has no attribute nor variable named X`. R18 now says what KD10 says, and `{flow}_out_rate` exists. The per-mode variables are kept alongside it, unchanged: they are what makes R20's minimum reachable between modes muscadet owns, and the two mechanisms compose by minimum rather than one replacing the other.
 
 Clarified without scope change: R30 said a cycle is refused "at build time". Research established that `muscadet.System` has no build step, so the wording now names the moment that exists — the start of the first run, before any equation is evaluated. AE17 and AE18 follow. The behaviour is unchanged: a cyclic model never evaluates an equation.
 
@@ -270,7 +272,7 @@ Clarified without scope change: R30 said a cycle is refused "at build time". Res
 - KTD5. **`muscadet.System` owns the PDMP manager, created lazily on the first continuous declaration.** Both prototypes put it on the system, and a lazily created manager keeps purely discrete systems byte-identical to 1.x. Governs R8.
 - KTD6. **The rename lands as a single unit before any continuous work.** `FlowDiscrete*` become the canonical classes, the legacy names become subclasses placed inside the chain per KD17, and the three `isinstance` sites in `muscadet/obj.py` are repointed to the canonical bases. Governs R24, R25.
 - KTD7. **The COD3S Platform importer keeps emitting legacy `cls` strings.** Three tests assert the exact runtime class name of flows it builds, so switching it to canonical names would break them. Governs R25.
-- KTD8. **The effective rate is computed by the library as the minimum over the active derating variables, not by successive writes to one variable.** Independent modes each own their own derating variable; a single shared variable would give last-writer-wins instead of a minimum. Governs R20.
+- KTD8. **The effective rate is computed by the library as the minimum over the active rate variables, not by successive writes to one variable.** Independent modes muscadet declares each own their own derating variable; were they to share one, the result would be last-writer-wins instead of a minimum, and the first repair would restore the nominal rate while another degradation still stood. The single `{flow}_out_rate` of KD10 is folded into the same minimum, and is what a mode declared *outside* muscadet clamps — muscadet cannot allocate a per-mode variable for a mode whose identity it never sees. The two mechanisms therefore compose rather than replace one another. Governs R18, R20.
 - KTD9. **The guard operand is a pydantic model carrying name, negation, port, operator and threshold, and the string form is normalised into it at validation time.** `postprocess_flow_specs` already normalises short operand forms, so this extends an established pattern rather than introducing one. Governs R10, R11.
 - KTD10. **Continuous flows are declared on the existing `ObjFlow` component class, and the new flow classes sit on the shared `FlowModel` base beside the discrete ones.** No new component base class is introduced. A component mixes discrete and continuous flows in the same declaration — the reference example gates a continuous output on a discrete input — so splitting either hierarchy would force multiple inheritance on ordinary components. Governs R1, R21.
 - KTD11. **A capacity owns one ODE variable per flow it holds plus a total, and one empty/full automaton driven by the total weighted fill.** Per-flow levels are what R28 reports; the automaton is what watches the bounds. Governs R4, R7, R28.
@@ -582,12 +584,13 @@ The rename is unit one and lands alone, because it is the only unit that can bre
 - **Goal.** Failure modes derate a continuous output through its rate variable, and concurrent deratings compose by minimum.
 - **Requirements.** R18, R19, R20. Realises F3. Covers AE13, AE14, AE15.
 - **Dependencies.** U8.
-- **Files.** `muscadet/flow_continuous.py`, `muscadet/obj.py`, `tests/test_derating_001.py`.
+- **Files.** `muscadet/flow_continuous.py`, `muscadet/derating.py`, `muscadet/obj.py`, `tests/test_derating_001.py`, `tests/test_out_rate_native_mode_001.py`.
 - **Approach.**
   1. Add the effective-rate multiplication to the production equation U8 registered, defaulting the rate to 1.
-  2. Retarget effects at declaration time: an `ObjMode2S` effect declared against a continuous output allocates a derating variable named from the declaring mode and that output, and the effect is rewritten onto it. Two modes declaring the same effect string therefore write two variables, not one.
-  3. Compute the effective rate as the minimum over the derating variables registered against that output, per KTD8.
-  4. Extend `compute_effects_tuples` to carry numeric effect values alongside the boolean form.
+  2. Give every continuous output its `{flow}_out_rate` variable at construction, holding 1 (KD10). Public and writable, so a mode declared outside muscadet — which resolves its effects against the target's variables by exact name — has an endpoint to clamp that the solver does not own.
+  3. Retarget effects at declaration time: an effect muscadet resolves itself against a continuous output allocates a derating variable named from the declaring mode and that output, and the effect is rewritten onto it. Two modes declaring the same effect string therefore write two variables, not one.
+  4. Compute the effective rate as the minimum over `{flow}_out_rate` and the derating variables registered against that output, per KTD8.
+  5. Extend `compute_effects_tuples` to carry numeric effect values alongside the boolean form.
 - **Patterns to follow.** `ObjMode2S` state-clamp effects; the reset-and-reclamp convention documented on `var_fed_available_out_reset` in `muscadet/flow.py`.
 - **Test scenarios.**
   - Covers AE13. Two simultaneous deratings yield the minimum, not the last applied.
