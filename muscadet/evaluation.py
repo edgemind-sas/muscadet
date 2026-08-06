@@ -36,6 +36,7 @@ from .flow_continuous import (
     FlowContinuousIn,
     FlowContinuousOut,
 )
+from .profile import NOMINAL_FACTOR
 from .rules import (
     UNCONSTRAINED_SCALE,
     rule_consumption,
@@ -369,6 +370,23 @@ def get_input_required_demand(comp, flow_name):
         return UNBOUNDED
 
     return flow.demand_required
+
+
+def current_time(comp):
+    """
+    Returns the simulation instant the sweeps are being evaluated at.
+
+    Read from the engine, inside an equation method, which is where the
+    solver's integration clock is meaningful: it is the instant a time
+    profile is a function of. The override point for a component that
+    reckons time differently -- an offset epoch, a shifted season.
+
+    Falls back to 0 only when there is no engine system to ask, which is
+    what a flow primitive exercised outside a run sees.
+    """
+    system = comp.system()
+
+    return 0.0 if system is None else float(system.currentTime())
 
 
 def compute_production(comp):
@@ -789,11 +807,28 @@ def apply_production(comp, production):
     consumers asked for (R6, KD4), and that quantity is then split among
     them by the output's allocation policy (R16).
 
-    Each rate is first multiplied by the **effective rate** of the output it
-    is produced on (R18): what the failure modes bearing on that output
-    leave of it, the minimum over their derating variables (R20). A rate of
-    0 is a total loss of production -- a continuous output carries no
-    separate boolean availability gate (R19, KD10).
+    Each rate is then scaled by two INDEPENDENT terms, whose composition is
+    a **product**::
+
+        produced = what the rule (or the declared rate) produces
+                   x  profile(t)
+                   x  min(out_rate, per-mode deratings)
+
+    - the **time profile** of the output, if it declares one: a continuous
+      function of simulation time saying how large the output is at this
+      instant -- a solar curve, a daily cycle;
+    - the **effective rate** of the output (R18): what the failure modes
+      bearing on it leave of it, the minimum over their derating variables
+      and the shared ``{flow}_out_rate`` (R20). A rate of 0 is a total loss
+      of production -- a continuous output carries no separate boolean
+      availability gate (R19, KD10).
+
+    The two must not be collapsed into one another. Deratings compose by
+    MINIMUM among themselves, because that is what makes them
+    order-independent and safe on repair; a profile MULTIPLIES whatever the
+    deratings left, because it is the size of the thing being degraded and
+    not a competing degradation. A panel at 0.3 of its curve that is also
+    derated to 0.5 produces 0.15, where a minimum would give 0.3.
 
     Parameters
     ----------
@@ -805,6 +840,12 @@ def apply_production(comp, production):
     # served (R35).
     buffered = {}
 
+    # Read at most once per evaluation, and only when something reads it: the
+    # profiles of one component are functions of the SAME instant, and a model
+    # declaring none must not start consulting the clock at every step of
+    # every run for a factor that is always 1.
+    time = None
+
     for flow_name, rate in production.items():
         flow = comp.flows_out.get(flow_name)
 
@@ -813,11 +854,18 @@ def apply_production(comp, production):
         if not isinstance(flow, FlowContinuous):
             continue
 
-        # Derating (R18): what the rules computed, times what the failure
-        # modes bearing on this output leave of it. Applied HERE, before the
-        # demand is reconciled and before a capacity is filled, so a derated
+        # Profile then derating, by product. Applied HERE, before the demand
+        # is reconciled and before a capacity is filled, so a scaled-down
         # output fills its buffer more slowly rather than draining it faster.
-        rate = float(rate) * flow.get_effective_rate()
+        factor = NOMINAL_FACTOR
+
+        if flow.profile is not None:
+            if time is None:
+                time = comp.current_time()
+            factor = flow.get_profile_factor(time)
+            flow.publish_profile_factor(factor)
+
+        rate = float(rate) * factor * flow.get_effective_rate()
 
         request = comp.get_output_request(flow, rate)
         capacity = comp.get_capacity_of_flow(flow_name, "out")

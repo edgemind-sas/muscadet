@@ -31,6 +31,7 @@ from muscadet.kb.continuous import (  # noqa: F401
     ConsumerContinuous,
     SensorContinuous,
     SourceContinuous,
+    SourceSinusoidalContinuous,
     TransformerContinuous,
 )
 
@@ -85,6 +86,7 @@ CHAIN_DEMAND = 3.0
 # typo report wrong numbers rather than fail.
 UNKNOWN_KEY_DECLARATIONS = {
     "SourceContinuous": dict(raet=5.0),
+    "SourceSinusoidalContinuous": dict(amplitude=1.0, peroid=24.0),
     "TransformerContinuous": dict(flows_in=["a"], flow_out=["x"]),
     "CapacityContinuous": dict(flow="q", capacity=10.0, content_intit={"q": 1.0}),
     "ConsumerContinuous": dict(flow="q", demmand=3.0),
@@ -100,6 +102,27 @@ FULL_DECLARATIONS = {
         rate=1.0,
         control="c",
         control_logic="and",
+        profile=muscadet.SinusoidalProfile(period=24.0, offset=1.0),
+        allocation="proportional",
+        allocation_shares={},
+        allocation_priorities={},
+        allocation_fun=None,
+    ),
+    "SourceSinusoidalContinuous": dict(
+        flow="q",
+        rate=1.0,
+        control="c",
+        control_logic="and",
+        amplitude=2.0,
+        period=24.0,
+        phase_shift=6.0,
+        offset=3.0,
+        value_min=0.0,
+        value_max=10.0,
+        # Inherited from SourceContinuous and legal only at None: the sinusoid
+        # BUILDS its profile, so declaring one alongside is refused rather than
+        # silently ignored. Exercised here exactly as allocation_fun is.
+        profile=None,
         allocation="proportional",
         allocation_shares={},
         allocation_priorities={},
@@ -1016,6 +1039,7 @@ def test_every_declared_key_still_builds(the_run):
         ConsumerContinuous,
         SensorContinuous,
         SourceContinuous,
+        SourceSinusoidalContinuous,
         TransformerContinuous,
     ],
     ids=lambda cls: cls.__name__,

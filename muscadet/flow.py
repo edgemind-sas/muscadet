@@ -105,6 +105,17 @@ class FlowModel(cod3s.ObjCOD3S):
         clsname = f"Flow{port_name}"
         return clsname
 
+    def initial_fed_value(self):
+        """The value ``{name}_fed_{port}`` is CREATED at.
+
+        The declared default, and the override point for a flow whose value at
+        instant 0 is not simply that -- a continuous output carrying a time
+        profile, whose production at 0 is the default scaled by the profile
+        there. It is the engine's init value, restored at the start of every
+        Monte Carlo sequence, so it must be a pure function of the declaration.
+        """
+        return self.var_fed_default
+
     def add_variables(self, comp, port, **kwargs):
 
         py_type, pyc_type = get_pyc_type(self.var_type)
@@ -114,7 +125,7 @@ class FlowModel(cod3s.ObjCOD3S):
         )
 
         self.var_fed = comp.addVariable(
-            f"{self.name}_fed_{port}", pyc_type, py_type(self.var_fed_default)
+            f"{self.name}_fed_{port}", pyc_type, py_type(self.initial_fed_value())
         )
 
     def add_automata(self, comp):

@@ -997,6 +997,21 @@ class ObjFlow(cod3s.PycComponent):
             {consumer: quantity}``, used in PREFERENCE to the declared policy.
             It proposes a split and inherits the surplus redistribution, so it
             never has to reimplement the convergence.
+        profile : muscadet.Profile or dict, optional
+            A declared CONTINUOUS function of simulation time this output's
+            production is multiplied by -- a solar curve, a daily cycle. Given
+            either as a :class:`muscadet.Profile` (``muscadet.Profile(fun,
+            continuous=True)``, ``muscadet.SinusoidalProfile(...)``) or as the
+            ``{"cls": "SinusoidalProfile", ...}`` mapping form. A **bare
+            callable is refused**: the ``continuous`` flag is an attestation
+            muscadet cannot make for the modeller, and a discontinuous profile
+            would need a watched transition at every breakpoint that muscadet
+            does not derive.
+
+            It composes with the derating rate by **product**, never by
+            minimum: ``produced = rule x profile(t) x min(out_rate,
+            deratings)``. An output at 0.3 of its profile that is also derated
+            to 0.5 produces 0.15.
         component_authorized : list of dict, optional
             Connection authorization patterns, as on a discrete flow.
         **params : dict
@@ -1006,9 +1021,10 @@ class ObjFlow(cod3s.PycComponent):
         Raises
         ------
         ValueError
-            If an output flow of that name already exists, or if the declared
+            If an output flow of that name already exists, if the declared
             allocation policy cannot be applied -- an unknown policy name, or a
-            share map that does not sum to 1.
+            share map that does not sum to 1 -- or if the declared profile is
+            not a :class:`muscadet.Profile` attested continuous.
         """
         flow_name = params.get("name")
         if not (flow_name in self.flows_out):
@@ -1617,6 +1633,7 @@ class ObjFlow(cod3s.PycComponent):
     get_input_required_demand = evaluation.get_input_required_demand
 
     # -- Production, the forward sweep
+    current_time = evaluation.current_time
     compute_production = evaluation.compute_production
     fill_input_capacities = evaluation.fill_input_capacities
     refresh_continuous_inputs = evaluation.refresh_continuous_inputs
@@ -1694,6 +1711,13 @@ class ObjFlow(cod3s.PycComponent):
                 # demand variable -- an output holds a reference on the demands
                 # its consumers publish, and a reference is never written.
                 self.system().pdmp_add_explicit_variable(flow.var_demand)
+
+            if getattr(flow, "var_profile", None) is not None:
+                # Same reason again: the production sweep publishes the profile
+                # factor it applied. Only an output that DECLARES a profile
+                # carries the variable, so an unprofiled model registers
+                # nothing new.
+                self.system().pdmp_add_explicit_variable(flow.var_profile)
 
             # Add default failure automata for output flows if enabled
             if self.has_default_out_automata and isinstance(flow, FlowDiscreteOut):

@@ -686,6 +686,7 @@ Per continuous flow named `f`, MUSCADET creates:
 - `f_fed_out` — on an output flow, the total value delivered downstream. Always equal to the sum of the shares its consumers receive
 - `f_demand_in` — on an output flow, the demands published by its consumers
 - `f_out_rate` — on an output flow, the rate its production is multiplied by, holding `1.0`. The one endpoint a failure mode clamps; see [deratings](#failure-modes-on-a-continuous-output-deratings)
+- `f_out_profile` — on an output flow **that declares a time profile**, the factor currently applied. A read-only publication, rewritten at every step; see [time profiles](#time-profiles-production-as-a-function-of-the-clock)
 - `f_fed_in` — on an input flow, the value received: the **sum**, over every incoming connection, of the share that producer allocated to this consumer
 - `f_demand_out` — on an input flow, the demand this consumer publishes upstream
 
@@ -978,6 +979,109 @@ Each automaton the mode builds owns its own derating variable on each target, so
 
 The classes stay available indefinitely under their own names, and keep emitting a `DeprecationWarning` at construction pointing at the `cod3s.ObjFM*` equivalent. Two `cod3s.ObjFM` keywords are **refused** rather than silently honoured with no effect, because they route effects through the engine's exact-variable-name path that a flow pattern never matches: `behaviour` and `failure_effects_trans` / `repair_effects_trans`. A model needing them wants `cod3s.ObjFM*` directly.
 
+### Time profiles: production as a function of the clock
+
+A continuous output's production is otherwise either a constant — the rate it was declared with — or whatever its transformation rule computes from what its inputs deliver. A **profile** is the third term: a declared function of simulation time scaling what the output produces, so a solar curve or a daily demand cycle is stated on the flow rather than wired as a component recomputing an equation of its own.
+
+```python
+import math
+import muscadet
+
+
+class Panel(muscadet.ObjFlow):
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+
+        self.add_flow_continuous_out(
+            name="power",
+            var_fed_default=100.0,  # the nominal the curve scales
+            profile=muscadet.SinusoidalProfile(
+                amplitude=0.5,
+                offset=0.5,
+                period=24.0,
+                phase_shift=6.0,
+            ),
+        )
+```
+
+A profile **multiplies a declared nominal**; it never sets the produced value outright. That is what lets it compose with the rules — a profiled output of a transformer scales what the rule produced — and what makes a negative quantity unreachable.
+
+#### The composition rule
+
+```
+production = what the rule (or the declared rate) produces
+             × profile(t)
+             × min(out_rate, per-mode deratings)
+```
+
+**A profile and a derating compose by product; deratings compose by minimum among themselves.** The two rules are different on purpose and neither can be expressed through the other:
+
+- a derating says how much of the output a failure mode *left*. Several of them fold by **minimum**, which is what makes them order-independent and safe on repair;
+- a profile says how *large* the output is at this instant. It is the size of the thing being degraded, not a competing degradation, so it **multiplies** whatever the deratings left.
+
+A panel at 30 % of its curve that is also 50 % derated produces **15 %**, not 30 %. That is why a profile is a channel of its own and is never folded into `{flow}_out_rate`: written there, the three numbers would fold by minimum, production would read 50 % of nominal, and nothing would signal the error.
+
+```python
+flow = my_plant.comp["PV"].flows_out["power"]
+
+flow.profile                    # the declared Profile
+flow.get_profile_factor(6.0)    # the factor at t = 6
+flow.var_profile                # power_out_profile, the published factor
+flow.get_effective_rate()       # unchanged: the minimum over the deratings
+```
+
+#### Only continuous profiles, and continuity is declared
+
+A profile is read inside the production equation, at the integration points the solver chooses, so a **smooth** curve is integrated to the solver's own accuracy. A **discontinuous** one is not: nothing makes the solver place a step boundary at the jump, so it crosses the breakpoint inside a step and overshoots by up to that step, undetectably. Getting that right needs a watched transition at every breakpoint — the mechanism a rule guard's threshold compiles into — and MUSCADET does not derive those from a Python callable.
+
+Continuity cannot be inspected, so it is **declared**. `muscadet.Profile` takes a `continuous` flag with **no default**, and a bare callable is refused:
+
+```python
+# refused: no attestation
+comp.add_flow_continuous_out(name="q", profile=lambda t: 0.5 + 0.5 * math.sin(t))
+
+# accepted: the modeller states what MUSCADET cannot check
+comp.add_flow_continuous_out(
+    name="q",
+    var_fed_default=10.0,
+    profile=muscadet.Profile(lambda t: 0.5 + 0.5 * math.sin(t), continuous=True),
+)
+```
+
+`continuous=False` is refused too, with an error naming what would be needed. A step, a schedule or a lookup table is therefore modelled the way every other discontinuity in MUSCADET is: as a mode with a watched transition — a rule guard, or a `control` port driven by a sensor.
+
+A profile factor may not be **negative**, at declaration for the shipped shapes and at evaluation for a callable. A negative production in a conserved-quantity flow model means either nothing or a reverse flow, and MUSCADET models neither: a negative quantity is clamped away on a plain output and would *drain* a buffered one.
+
+#### The shipped shapes
+
+`muscadet.SinusoidalProfile` covers `amplitude`, `period`, `phase_shift`, `offset` and the clamps `value_min` / `value_max`:
+
+```
+amplitude × sin(2π (t − phase_shift) / period) + offset,  clamped into [value_min, value_max]
+```
+
+`value_min` defaults to **0** and may not be negative, so a curve dipping below zero is cut rather than admitted. `period` must be strictly positive. The `{"cls": ...}` mapping form the rest of the declaration API uses works too:
+
+```python
+profile={"cls": "SinusoidalProfile", "amplitude": 25.0, "offset": 30.0, "period": 24.0}
+```
+
+And `SourceSinusoidalContinuous` in `muscadet.kb.continuous` declares the whole thing by parameters:
+
+```python
+my_plant.add_component(
+    name="PV",
+    cls="SourceSinusoidalContinuous",
+    flow="power",
+    amplitude=25.0,
+    offset=30.0,
+    period=24.0,
+    phase_shift=6.0,
+)
+```
+
+Its `amplitude` and `offset` are in **flow units**, so `rate` defaults to `1` there and the curve *is* the production. Everything a `SourceContinuous` does applies unchanged: a `control` port, an allocation policy, a failure mode derating it.
+
 ### Driving a discrete output from a continuous value
 
 A boolean output may be conditioned on a continuous quantity: `var_prod_cond` accepts the very same `{name, op, value}` comparison operand a rule guard uses. That is the whole declaration of a threshold alarm — no component code reads the level, and no equation is written by hand:
@@ -1099,11 +1203,12 @@ Restarting an *unchanged* system is unaffected: `isimu_stop()` followed by `isim
 
 ### The shipped continuous components
 
-MUSCADET ships five domain-neutral continuous components in `muscadet.kb.continuous`. Import them, and they resolve by name in `add_component(cls=...)`:
+MUSCADET ships six domain-neutral continuous components in `muscadet.kb.continuous`. Import them, and they resolve by name in `add_component(cls=...)`:
 
 | Class                    | What it is                                                                    |
 |--------------------------|-------------------------------------------------------------------------------|
-| `SourceContinuous`       | a continuous output delivering a declared `rate`, optionally gated by a `control` port |
+| `SourceContinuous`       | a continuous output delivering a declared `rate`, optionally gated by a `control` port or scaled by a `profile` |
+| `SourceSinusoidalContinuous` | the same source, its rate following a sinusoid of simulation time             |
 | `TransformerContinuous`  | continuous inputs turned into continuous outputs by rules given as a **parameter** |
 | `CapacityContinuous`     | a volume held over one or more flows: buffer (`ports="both"`), accumulator (`"in"`) or reservoir (`"out"`) |
 | `ConsumerContinuous`     | a continuous input publishing a declared `demand`                             |

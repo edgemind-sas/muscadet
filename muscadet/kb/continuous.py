@@ -1,9 +1,10 @@
 """The continuous components MUSCADET ships (R32).
 
-Five domain-neutral shapes, and nothing else: a **source** holding a declared
-rate, a **transformer** taking its rules as parameters, a **capacity** wrapping
-the volume declaration, a **consumer** publishing a declared demand, and a
-**sensor** reading a capacity level and driving a discrete control output.
+Six domain-neutral shapes, and nothing else: a **source** holding a declared
+rate, a **sinusoidal source** whose rate follows a curve of simulation time, a
+**transformer** taking its rules as parameters, a **capacity** wrapping the
+volume declaration, a **consumer** publishing a declared demand, and a **sensor**
+reading a capacity level and driving a discrete control output.
 
 Only shapes that appeared TWICE outside the library ship here. An electrolyser
 with a membrane leak percentage or a battery with a start-up policy stays with
@@ -170,22 +171,38 @@ class SourceContinuous(ContinuousComponent):
         unconditionally.
     control_logic : str or int, optional
         Input logic of the control port, as ``add_flow_in`` takes it.
+    profile : muscadet.Profile or dict, optional
+        A declared CONTINUOUS function of simulation time the rate is
+        multiplied by. Composed with any derating by PRODUCT, never by minimum.
     allocation, allocation_shares, allocation_priorities, allocation_fun
         Forwarded to the output flow, where an insufficient supply is split.
     """
 
-    DECLARATION_KEYS = ("flow", "rate", "control", "control_logic") + ALLOCATION_KEYS
+    DECLARATION_KEYS = (
+        "flow",
+        "rate",
+        "control",
+        "control_logic",
+        "profile",
+    ) + ALLOCATION_KEYS
+
+    #: Rate a source produces when it declares none. A subclass whose profile
+    #: carries the whole quantity -- :class:`SourceSinusoidalContinuous`, whose
+    #: amplitude and offset are in flow units -- raises this to 1 so that the
+    #: nominal it scales is neutral.
+    DEFAULT_RATE = 0.0
 
     def add_flows(self, **kwargs):
         super().add_flows(**kwargs)
 
         flow = kwargs.get("flow", DEFAULT_FLOW)
-        rate = float(kwargs.get("rate", 0.0))
+        rate = float(kwargs.get("rate", self.DEFAULT_RATE))
         control = kwargs.get("control")
 
         self.add_flow_continuous_out(
             name=flow,
             var_fed_default=rate,
+            **self.profile_params(kwargs),
             **allocation_params(kwargs),
         )
 
@@ -200,6 +217,107 @@ class SourceContinuous(ContinuousComponent):
                 dict(name="idle", cond=f"not {control}", prod={flow: 0.0}),
             ],
         )
+
+    def profile_params(self, kwargs):
+        """The ``profile`` parameter of the output flow, if one is declared.
+
+        The seam :class:`SourceSinusoidalContinuous` overrides to BUILD its
+        profile out of its own declaration keys instead of taking one ready
+        made.
+        """
+        profile = kwargs.get("profile")
+
+        return {} if profile is None else {"profile": profile}
+
+
+class SourceSinusoidalContinuous(SourceContinuous):
+    """A source whose rate follows a sinusoid of simulation time.
+
+    The shipped time profile: a solar curve, a daily demand cycle, a seasonal
+    swing. It is a plain :class:`SourceContinuous` carrying a
+    :class:`muscadet.SinusoidalProfile`, so everything a source does -- the
+    ``control`` port of the sensor pattern, the allocation policies, a failure
+    mode derating it -- applies here unchanged.
+
+    ``amplitude`` and ``offset`` are in **flow units**, exactly as they are in
+    the reference implementation this shape is ported from, which is why
+    ``rate`` defaults to 1 here rather than to 0: the profile carries the
+    quantity, and ``rate`` is a further nominal multiplier for a caller who
+    wants one.
+
+    **Composition.** The profile multiplies; a derating takes the minimum among
+    deratings and then multiplies in turn. A panel at 0.3 of its curve that a
+    failure mode has cut to 0.5 produces 0.15 of ``rate``, not 0.3.
+
+    **Non-negative by declaration.** ``value_min`` defaults to 0 and may not be
+    negative -- unlike the reference implementation, whose ``-inf`` default
+    admitted a negative production. No model there relied on it: every
+    declaration site clamped at 0, and the few that did not were arranged so
+    the curve stayed non-negative over the simulated window. A negative
+    quantity in a conserved-flow model would be clamped away on a plain output
+    and would drain a buffered one, so it is refused here instead.
+
+    Parameters
+    ----------
+    flow : str, optional
+        Name of the continuous output. Defaults to ``"q"``.
+    rate : float, optional
+        Nominal the sinusoid scales. Defaults to 1, so the curve is the
+        production.
+    amplitude : float, optional
+        Half the peak-to-peak swing, in flow units. Defaults to 1.
+    period : float, optional
+        Duration of one cycle. Must be strictly positive. Defaults to ``2*pi``.
+    phase_shift : float, optional
+        Time at which the sine crosses zero going up. Defaults to 0.
+    offset : float, optional
+        Value the sinusoid oscillates around. Defaults to 0.
+    value_min : float, optional
+        Lower clamp, defaulting to 0 and refused below it.
+    value_max : float, optional
+        Upper clamp. Defaults to ``math.inf``.
+    control, control_logic, allocation, allocation_shares, ...
+        As on :class:`SourceContinuous`.
+
+    Raises
+    ------
+    ValueError
+        If ``period`` is not strictly positive, if ``value_min`` is negative,
+        if the clamps are the wrong way round, or if a ``profile`` is declared
+        alongside the sinusoid parameters -- this component builds its own.
+    """
+
+    DECLARATION_KEYS = (
+        "amplitude",
+        "period",
+        "phase_shift",
+        "offset",
+        "value_min",
+        "value_max",
+    )
+
+    #: The sinusoid is expressed in flow units, so the nominal it scales is 1.
+    DEFAULT_RATE = 1.0
+
+    #: Sinusoid parameters, mapped onto the profile's own argument names.
+    PROFILE_KEYS = ("amplitude", "period", "phase_shift", "offset")
+
+    def profile_params(self, kwargs):
+        if kwargs.get("profile") is not None:
+            raise ValueError(
+                f"Object {self.name()}: {type(self).__name__} builds its own "
+                "profile out of amplitude / period / phase_shift / offset, so "
+                "it does not take a 'profile' of its own. Declare a plain "
+                "SourceContinuous to carry an arbitrary profile"
+            )
+
+        params = {key: kwargs[key] for key in self.PROFILE_KEYS if key in kwargs}
+
+        for key in ("value_min", "value_max"):
+            if key in kwargs:
+                params[key] = kwargs[key]
+
+        return {"profile": muscadet.SinusoidalProfile(**params)}
 
 
 class TransformerContinuous(ContinuousComponent):
@@ -217,7 +335,9 @@ class TransformerContinuous(ContinuousComponent):
         parameters.
     flows_out : str or dict or list, optional
         Continuous outputs, same forms. Allocation parameters declared on the
-        component apply to every one of them.
+        component apply to every one of them, and an entry may carry its own
+        ``profile`` -- the mapping is forwarded verbatim to
+        ``add_flow_continuous_out``.
     controls : str or dict or list, optional
         Discrete inputs the guards read, ``logic`` defaulting to ``"and"``.
     rules : list, optional

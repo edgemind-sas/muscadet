@@ -23,6 +23,8 @@ Variable                         Owner        Meaning
 ``f_fed_in``   (``t_double``)    in flow      value received, sum of the connections
 ``f_in``       (reference)       in flow      upstream produced values
 ``f_demand_out`` (``t_double``)  in flow      demand published upstream
+``f_out_rate`` (``t_double``)    out flow     shared derating rate, 1 by default
+``f_out_profile`` (``t_double``) out flow     applied time-profile factor, if any
 ===============================  ===========  =======================================
 
 The ``_in`` / ``_out`` suffix denotes the **direction of travel** of the quantity,
@@ -124,6 +126,25 @@ minimum. That is exactly why the shared ``{flow}_out_rate`` is left to what
 muscadet does NOT own: a mode declared outside the library clamps it, muscadet
 folds it in, and the two mechanisms compose instead of competing.
 
+Time profiles
+-------------
+A continuous output may also carry a :class:`muscadet.Profile`: a declared
+CONTINUOUS function of simulation time scaling what it produces. The three terms
+compose as a **product**::
+
+    produced = what the rule (or the declared rate) produces
+               x  profile(t)
+               x  min(out_rate, per-mode deratings)
+
+The profile is a channel of its own and is never folded into
+``{flow}_out_rate``, because the two must compose differently: deratings fold by
+MINIMUM among themselves, while a profile MULTIPLIES whatever is left of the
+output. A panel at 30 % irradiance that is also 50 % derated produces 15 %; the
+minimum of 0.3 and 0.5 is 0.3, which overstates it by a factor of two with
+nothing to signal it. See :mod:`muscadet.profile` for the continuity rule -- why
+a discontinuous profile is refused rather than integrated wrong -- and for why a
+profile factor may not be negative.
+
 Scope
 -----
 This module owns the channels, the allocation policies and the two accessors
@@ -142,6 +163,7 @@ import pydantic
 from colored import fg, attr
 
 from .flow import FlowModel
+from .profile import NOMINAL_FACTOR, PROFILE_VAR_FMT, build_profile
 
 #: "Nothing bounds this quantity". Read on a demand: an output no consumer is
 #: connected to is not throttled by anybody, and a component that derives no
@@ -745,6 +767,49 @@ class FlowContinuousOut(FlowContinuous):
         ),
     )
 
+    profile: typing.Any = pydantic.Field(
+        None,
+        exclude=True,
+        repr=False,
+        description=(
+            "A :class:`muscadet.Profile`: a declared CONTINUOUS function of "
+            "simulation time this output's production is multiplied by -- a "
+            "solar curve, a daily cycle. Kept strictly apart from the derating "
+            "rate above, and composed with it by PRODUCT: a profile is the "
+            "size of the thing being degraded, not a competing degradation, so "
+            "an output at 0.3 of profile that is also derated to 0.5 produces "
+            "0.15. Folded into ``{flow}_out_rate`` the two would compose by "
+            "MINIMUM instead, and production would read 0.5. A bare callable is "
+            "refused: it carries no continuity attestation."
+        ),
+    )
+
+    var_profile: typing.Any = pydantic.Field(
+        None,
+        exclude=True,
+        repr=False,
+        description=(
+            "``{flow}_out_profile``, created only on an output that declares a "
+            "profile. A read-only PUBLICATION of the factor currently applied, "
+            "rewritten by the production sweep at every evaluation: it exists "
+            "so the profile can be observed and indicated next to the rate, "
+            "never so it can be driven. Writing it has no effect."
+        ),
+    )
+
+    @pydantic.model_validator(mode="after")
+    def check_profile(self):
+        """Normalise the declared profile, and refuse one that is not usable.
+
+        At DECLARATION time, like every other malformed declaration in this
+        release: a profile that is not a declared-continuous
+        :class:`muscadet.Profile` -- a bare callable, an unknown shape -- would
+        otherwise only be found on the first integration step of the first run.
+        """
+        self.profile = build_profile(self.profile, self.name)
+
+        return self
+
     @pydantic.model_validator(mode="after")
     def check_allocation(self):
         """Refuse a policy that cannot be applied, at DECLARATION time.
@@ -788,6 +853,23 @@ class FlowContinuousOut(FlowContinuous):
 
         return self
 
+    def initial_fed_value(self):
+        """What this output carries before the first production sweep has run.
+
+        The declared rate, scaled by the profile AT INSTANT 0 when one is
+        declared. Without it the first sample of every Monte Carlo sequence
+        would report the unprofiled default -- a solar source announcing its
+        peak rate at midnight -- because the engine samples instant 0 before it
+        evaluates any equation, and the init value is what a sequence restarts
+        from.
+        """
+        if self.profile is None:
+            return self.var_fed_default
+
+        factor = self.profile.factor(0.0, self.name)
+
+        return float(self.var_fed_default or 0.0) * factor
+
     def add_variables(self, comp, **kwargs):
 
         super().add_variables(comp, port="out", **kwargs)
@@ -804,6 +886,15 @@ class FlowContinuousOut(FlowContinuous):
         self.var_out_rate = comp.addVariable(
             self.rate_var_name(), pyc.TVarType.t_double, NOMINAL_RATE
         )
+
+        # Only when a profile is declared: an output nothing profiles must stay
+        # byte-identical to what it was, variable list included.
+        if self.profile is not None:
+            self.var_profile = comp.addVariable(
+                self.profile_var_name(),
+                pyc.TVarType.t_double,
+                float(self.profile.factor(0.0, self.name)),
+            )
 
     def add_mb(self, comp, **kwargs):
 
@@ -1068,6 +1159,45 @@ class FlowContinuousOut(FlowContinuous):
             rates.append(float(self.var_out_rate.value()))
 
         return min(rates) if rates else NOMINAL_RATE
+
+    # -- how much of it the time profile calls for ---------------------
+
+    def profile_var_name(self):
+        """Name of the published profile variable of this output.
+
+        ``H2`` gives ``H2_out_profile``. Deliberately distinct from
+        ``H2_out_rate``: the two multiply, they do not fold together, and
+        naming them alike would invite exactly the substitution that turns a
+        product into a minimum.
+        """
+        return PROFILE_VAR_FMT.format(flow=self.name)
+
+    def get_profile_factor(self, time):
+        """The factor this output's production is multiplied by at ``time``.
+
+        :data:`~muscadet.profile.NOMINAL_FACTOR` when no profile is declared,
+        so an unprofiled output is unaffected.
+
+        **Multiplied with the effective rate, never folded into it.** The rate
+        is what failure modes leave of the output and composes by minimum
+        (R20); the profile is how large the output is at this instant. A panel
+        at 0.3 of its curve that is also derated to 0.5 produces 0.15, and the
+        minimum of the two would give 0.5.
+        """
+        if self.profile is None:
+            return NOMINAL_FACTOR
+
+        return self.profile.factor(time, self.name)
+
+    def publish_profile_factor(self, factor):
+        """Mirror the applied factor onto ``{flow}_out_profile``, if it exists.
+
+        A publication and not a channel: nothing reads it back, so a model that
+        never declared a profile pays nothing and one that did can indicate the
+        curve alongside the quantity it scales.
+        """
+        if self.var_profile is not None:
+            self.var_profile.setDValue(float(factor))
 
     def update_sensitive_methods(self, comp):
         # No transformation rule and no capacity at this stage: the produced
