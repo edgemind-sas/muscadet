@@ -698,7 +698,7 @@ my_plant.comp["B"].flows_in["water"].var_demand.value()        # published upstr
 my_plant.comp["P"].flows_out["water"].get_var_demand_value()   # demand read back
 ```
 
-A component declaring continuous flows but **no** transformation rule transfers each input onto the output of the same name. A transfer carries the downstream demand across unchanged, so — unlike a rule, see below — such a pass-through with an unwired output still claims without bound from its producers.
+A component declaring continuous flows but **no** transformation rule transfers each input onto the output of the same name. A transfer carries the downstream demand across unchanged — including an unbounded one a real consumer published. An output **nothing is connected to** asks for nothing, so a pass-through whose far end is unwired transfers nothing and claims nothing upstream: the same rule that governs a rule's outputs, below, so the two paths agree. A pipe standing for a discharge to atmosphere is modelled by declaring the discharge as a consumer with its own demand, which states the intent instead of resting it on an absent connection.
 
 ### Transformation rules
 

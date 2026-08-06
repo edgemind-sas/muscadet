@@ -88,13 +88,18 @@ def evaluate_demand(comp):
     records it.
 
     A component declaring no rule transfers each input to the output of the
-    same name (R31), so its demand crosses it unchanged -- including an
-    UNBOUNDED one. That is the one path an unconnected output still claims
-    without bound on: :meth:`get_demand_scale` drops such an output from the
-    rule scale, but a transfer has no declared coefficients and therefore no
-    nominal scale to fall back to, so what a rule-less pass-through should
-    ask for when nothing consumes it is an open question rather than a
-    filter. Recorded as a residual.
+    same name (R31), so its demand crosses it unchanged -- but only from an
+    output that can carry one. An unconnected output asks for nothing, so the
+    transfer asks for nothing either: the rule :meth:`get_demand_scale`
+    applies to a rule's outputs (R-10), applied to the one path that has no
+    declared coefficients to fall back on. An unwired output therefore never
+    makes its component compete for the supply upstream, whether that
+    component declares rules or not -- the two paths agree, which they did
+    not while a pass-through claimed without bound.
+
+    A deliberate open discharge stays modellable, and more legibly: declare
+    the vent as a consumer with its own demand, so the intent is visible
+    instead of resting on a connection that is absent.
 
     An input no rule and no transfer covers is a pure consumer's input: it
     claims the demand it was DECLARED with, ``var_demand_default``.
@@ -103,8 +108,8 @@ def evaluate_demand(comp):
     -------
     dict
         ``{input flow name: demand}``, possibly ``math.inf``: a connected
-        consumer may publish an unbounded demand, and a rule-less transfer
-        carries an unconnected output's absent one across unchanged.
+        consumer may publish an unbounded demand -- a capacity claiming its
+        fill rate -- and a rule-less transfer carries that across unchanged.
 
     Raises
     ------
@@ -147,6 +152,14 @@ def evaluate_demand(comp):
                 accumulate(flow_name, coefficient * scale)
     else:
         for flow_name in comp.get_transferable_flows():
+            if not comp.output_constrains_demand(flow_name):
+                # Accumulated as an explicit zero rather than skipped: a name
+                # left out of ``demands`` falls through to the
+                # ``var_demand_default`` of a pure consumer's input below,
+                # which would turn "asks for nothing" into "asks for its
+                # declared default" -- the opposite of the intent.
+                accumulate(flow_name, 0.0)
+                continue
             accumulate(flow_name, comp.get_output_demand(flow_name))
 
     # A continuous input no rule and no transfer covers claims what it was

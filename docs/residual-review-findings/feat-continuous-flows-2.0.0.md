@@ -398,17 +398,35 @@ premise were corrected to the fixed values, and the `0 × inf` arithmetic itself
 was **moved, not dropped**, to a scenario where it survives R-10: a connected
 consumer publishing an unbounded demand.
 
-**Not closed on the rule-LESS path, deliberately.** `evaluate_demand`'s other
-branch — the R31 identity transfer of a component declaring no rule — carries
-an output's demand across unchanged, unbounded one included, and was left
-alone. Measured: a pass-through pipe whose output is unwired, sharing a source
-of 10 with a consumer asking for 5, still publishes `inf` and takes 6.67 to the
-consumer's 3.33 — the same shape as the fixed case. The fix does not transpose,
-because a transfer has no declared coefficients and therefore no nominal scale
-to fall back to: what a rule-less pipe should ask for when nothing consumes it
-is 0, or what arrives, or unbounded, and those are three different physical
-statements. Choosing one is a design decision, not a mechanical correction, so
-it is recorded below rather than invented here.
+**Closed on the rule-LESS path too, after a decision.** `evaluate_demand`'s
+other branch — the R31 identity transfer of a component declaring no rule —
+carried an output's demand across unchanged, unbounded one included. Measured
+before the fix: a pass-through pipe whose output is unwired, sharing a source
+of 10 with a consumer asking for 5, took 6.67 to the consumer's 3.33 — the same
+shape as the fixed case. The filter does not transpose mechanically, a transfer
+having no declared coefficients and therefore no nominal scale to fall back to,
+so what a rule-less pipe asks for when nothing consumes it — 0, what arrives,
+or unbounded — was put to the user as a design decision.
+
+**Decided: nothing.** An unwired output constrains nothing on both paths. The
+argument is consistency rather than physics. Read as physics the unbounded
+answer is the faithful one, an open pipe end being a discharge to atmosphere —
+but leaving it there would mean one physical arrangement answers differently
+depending on whether the modeller happened to write a rule, which is the part
+no user could be expected to predict. A deliberate vent stays modellable, and
+more legibly, by declaring the discharge as a consumer with its own demand.
+
+Two facts settled it beyond the consistency argument. The unbounded reading was
+never actually implemented: `regularize_demands` rewrites `inf` as the whole
+quantity available before any split, so the pipe was treated as having asked
+for exactly the supply — a true unbounded demand would have taken all 10, not
+6.67. And the artefact scales: two dangling pipes both regularise to 10, driving
+the real consumer from 3.33 down to 2.0. The share a wired consumer received
+depended on how many unconnected outputs existed elsewhere in the model.
+
+Regression tests in `tests/test_passthrough_unwired_demand_001.py`; the AE9
+model in `test_rules_eval_001.py` now wires the sink it was previously drawing
+through an unwired output, with its asserted values unchanged.
 
 Regression tests in `tests/test_unconnected_output_demand_001.py` (10 tests, 6
 of which fail against `dabc2b1`). Documented in the README beside the
@@ -500,7 +518,7 @@ whole system before the first run".
 - An input's demand is computed from the active rule's declared coefficients, so a component capped by a scarce input still claims its nominal demand on the others and over-claims a shared upstream supply. Documented in the plan's Scope Boundaries; correcting it needs a second demand pass or an iterative solve.
 - `accept_limit` is read during the demand sweep but the outflow it reads is written during the production sweep, so a full capacity throttles on the previous evaluation's figure. Inherent to the two-sweep design and absorbed by repeated evaluation, but it is a read before the sweep that writes it.
 - The custom allocation extension point never clamps a proposed split's total to what is available; a rule that over-proposes creates quantity.
-- **(R-10, open)** The rule-**less** identity transfer (R31) still carries an unconnected output's unbounded demand across unchanged, so a pass-through pipe whose output is unwired still claims without bound and still out-draws a rival on a shared supply (measured: 6.67 against 3.33 out of 10). `get_demand_scale`'s filter does not transpose — a transfer has no declared coefficients, hence no nominal scale to fall back to — and picking among "0", "what arrives" and "unbounded" is a design decision about what a rule-less pipe means, not a mechanical correction. **This is the one part of R-10 left open, and it needs a decision.**
+- **(R-10)** A rule-**less** pass-through whose output is unwired now transfers nothing, where it previously drew whatever its supply allowed. Same semantic change as the entry below, on the path that has no coefficients to fall back to, and settled by the same rule: an unwired output never makes its component compete upstream. A pipe modelling a discharge must declare the discharge as a consumer with its own demand.
 - **(R-10)** A rule whose outputs are **all** unconnected now runs at its nominal scale: it claims exactly its declared `cons` coefficients and no longer draws an excess supply. That is the price of closing the single-output case of the limitation, and it is a real semantic change — a model relying on "an unwired output takes whatever you make" must now say so, by wiring a consumer and declaring its demand. A consequence rather than a defect: the alternative, keeping the unbounded fallback when no output constrains, would have left a one-output transformer maximising consumption, which is the limitation itself.
 - **(R-11)** A system carrying continuous flows can no longer be extended between runs at all — the refusal covers a late connection as well as a late component, and there is no opt-out. Extending a model means building a fresh `System`. A purely discrete system is unaffected. The check costs one graph read per `simulate()` / `isimu_start()`, which an interactive session that starts and stops repeatedly pays each time.
 - **(R-9)** A standalone failure mode declared against a component that does not exist yet now raises at construction (`Mode 'X': target component 'Y' not found in the system. Create the targets before the mode.`) instead of building a parameter-less shell. Inherited from the engine's fail-fast resolution, and a fix rather than a regression — but a model that declared its modes before their targets *and* left every occurrence rate at zero used to build silently and no longer does.

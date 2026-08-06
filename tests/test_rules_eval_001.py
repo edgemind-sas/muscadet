@@ -297,9 +297,15 @@ def build_production_system():
     # -- A rule with an empty cons map
     system.add_component(name="BOILER", cls="Boiler")
 
-    # -- AE9: continuous flows, no rule, identity transfer
+    # -- AE9: continuous flows, no rule, identity transfer. The sink is what
+    # -- makes the transfer happen at all: since R-10 was carried onto the
+    # -- rule-less path, an output nobody is connected to asks for nothing, so
+    # -- an unwired pipe transfers nothing. This one is asked for more than
+    # -- arrives, so the whole 3.5 crosses and the assertions are unchanged.
     system.add_component(name="PIPE", cls="Pipe")
+    system.add_component(name="PIPE_SINK", cls="RateSink", takes=["q"], demand=1e3)
     feed(system, "PIPE", "q", 3.5)
+    system.connect_flow(source="PIPE", target="PIPE_SINK", flow_name="q")
 
     add_clock(system.comp["BOILER"])
 
