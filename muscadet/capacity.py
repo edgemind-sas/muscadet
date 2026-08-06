@@ -73,6 +73,7 @@ apply to a withdrawal.
 """
 
 import math
+import statistics
 import typing
 
 import Pycatshoo as pyc
@@ -85,6 +86,129 @@ from .common import entity_label, fresh_instant_occ_law
 
 #: The two sides a capacity may sit on, relative to the component's rules.
 SIDES = ("in", "out")
+
+
+# ----------------------------------------------------------------------
+# Combination policies (R37) -- how ONE measurement channel reduces the
+# several readings arriving on it to a single number
+# ----------------------------------------------------------------------
+#
+# The mirror image of the allocation policies of ``muscadet.flow_continuous``.
+# An output declares how it SPLITS one quantity among several consumers; a
+# measurement input declares how it COMBINES the several readings its producers
+# publish. Same shape, same extension point: a named policy, or a Python
+# callable used in preference to it.
+#
+# Deliberately confined to the MEASUREMENT channel, and unreachable from a flow.
+# A continuous flow carries a conserved quantity: taking the median of three
+# pipes delivering water would create or destroy matter, and a continuous input
+# is therefore, and permanently, the SUM of its connections. See
+# ``FlowModel.check_combine_is_not_a_flow_policy``, which refuses the key by
+# name rather than leaving the restriction to a docstring.
+
+
+#: Add the readings up. What a single-connection channel has always done, and
+#: therefore the only policy that leaves an existing model unchanged.
+COMBINE_SUM = "sum"
+
+#: The arithmetic mean of the readings. Rejects nothing: one wild reading drags
+#: the estimate by its full deviation divided by the connection count.
+COMBINE_MEAN = "mean"
+
+#: The median of the readings -- the estimator redundant sensors exist for. With
+#: an odd number of readings a single stuck or wild one cannot move it at all,
+#: which is precisely what a mean does not give.
+COMBINE_MEDIAN = "median"
+
+#: The smallest reading. A conservative reading of a redundant set.
+COMBINE_MIN = "min"
+
+#: The largest reading. The pessimistic counterpart of :data:`COMBINE_MIN`.
+COMBINE_MAX = "max"
+
+#: Every policy name a measurement channel may declare.
+COMBINE_POLICIES = (
+    COMBINE_SUM,
+    COMBINE_MEAN,
+    COMBINE_MEDIAN,
+    COMBINE_MIN,
+    COMBINE_MAX,
+)
+
+
+def combine_sum(values):
+    """Sum of the readings."""
+    return float(sum(values))
+
+
+def combine_mean(values):
+    """Arithmetic mean of the readings."""
+    return float(statistics.fmean(values))
+
+
+def combine_median(values):
+    """Median of the readings.
+
+    On an even count this is the mean of the two central readings, as
+    ``statistics.median`` defines it. Two sensors therefore give no rejection at
+    all -- a redundant set is sized odd for a reason, and the library does not
+    pretend otherwise by inventing a tie-break.
+    """
+    return float(statistics.median(values))
+
+
+def combine_min(values):
+    """Smallest reading."""
+    return float(min(values))
+
+
+def combine_max(values):
+    """Largest reading."""
+    return float(max(values))
+
+
+#: The named policies, resolved to the function each one designates.
+COMBINE_FUNCTIONS = {
+    COMBINE_SUM: combine_sum,
+    COMBINE_MEAN: combine_mean,
+    COMBINE_MEDIAN: combine_median,
+    COMBINE_MIN: combine_min,
+    COMBINE_MAX: combine_max,
+}
+
+
+def combine(values, policy=None, combine_fun=None, default=0.0):
+    """Reduce the readings of one measurement channel to a single number.
+
+    Parameters
+    ----------
+    values : sequence of float
+        One reading per connection, in connection order.
+    policy : str, optional
+        A name from :data:`COMBINE_POLICIES`. Defaults to :data:`COMBINE_SUM`,
+        which is the identity on a single reading.
+    combine_fun : callable, optional
+        ``f(values) -> float``, the Python extension point, used in
+        **preference** to the named policy -- exactly as ``allocation_fun`` is
+        used in preference to ``allocation``.
+    default : float, optional
+        What an EMPTY reading list combines to. A channel connected to nobody
+        reads its declared default rather than raising, which is what a
+        single-connection measurement has always done.
+
+    Returns
+    -------
+    float
+    """
+    values = list(values)
+
+    if not values:
+        return float(default)
+
+    if combine_fun is not None:
+        return float(combine_fun(values))
+
+    return COMBINE_FUNCTIONS[COMBINE_SUM if policy is None else policy](values)
 
 
 class CapacityFlow(cod3s.ObjCOD3S):
@@ -724,18 +848,28 @@ class Capacity(cod3s.ObjCOD3S):
 
 
 class MeasurementIn(cod3s.ObjCOD3S):
-    """The importing side of a measurement link (R33).
+    """The importing side of a measurement link (R33, R37).
 
     Declared with :meth:`muscadet.ObjFlow.add_measurement_in` on the component
-    that *observes* a capacity. Both endpoints are PyCATSHOO references, which
+    that *observes* a level. Both endpoints are PyCATSHOO references, which
     carry no setter: the observing component reads the level and can never
     write it. The link exchanges no quantity and enters no allocation.
+
+    **One source, or several with a stated policy.** By default the channel
+    observes exactly one publisher, and its reading is that publisher's --
+    ``setCnctMax(1)`` refuses a second connection, as it always has. Declaring
+    ``combine`` (or ``combine_fun``) lifts the cap and states how the several
+    readings reduce to one: ``"median"`` is what a redundant sensor set exists
+    for, and ``"sum"`` is the generalisation of the single-source case. There is
+    no way to reach many-to-one WITHOUT saying how the readings combine, which
+    is the point -- a silent sum over redundant sensors is a wrong model, not a
+    default.
     """
 
     name: str = pydantic.Field(
         ...,
         description=(
-            "Measurement channel name. Matches the observed capacity's name, "
+            "Measurement channel name. Matches the observed publisher's name, "
             "which is what makes the exported and imported aliases line up."
         ),
     )
@@ -748,6 +882,29 @@ class MeasurementIn(cod3s.ObjCOD3S):
         0.0, description="Fill read while the link is not connected"
     )
 
+    combine: typing.Optional[str] = pydantic.Field(
+        None,
+        description=(
+            "How the readings of SEVERAL publishers reduce to one (R37): a "
+            "name from COMBINE_POLICIES. None -- the default -- is the "
+            "single-source channel muscadet has always had, capped at one "
+            "connection. Declaring any policy lifts the cap."
+        ),
+    )
+
+    combine_fun: typing.Any = pydantic.Field(
+        None,
+        exclude=True,
+        repr=False,
+        description=(
+            "The Python extension point of R37: a callable "
+            "``f(values) -> float`` over the per-connection readings, used in "
+            "PREFERENCE to the declared policy -- the mirror of "
+            "``FlowContinuousOut.allocation_fun``. Declaring it also lifts the "
+            "single-connection cap."
+        ),
+    )
+
     var_level: typing.Any = pydantic.Field(
         None, exclude=True, repr=False, description="Reference on the observed level"
     )
@@ -756,13 +913,43 @@ class MeasurementIn(cod3s.ObjCOD3S):
         None, exclude=True, repr=False, description="Reference on the observed fill"
     )
 
+    @pydantic.model_validator(mode="after")
+    def check_combine(self):
+        """Refuse an unusable combination policy at DECLARATION time.
+
+        Like every other malformed declaration in this release: a misspelt
+        policy would otherwise only be found on the first reading, and a
+        measurement is read from inside a threshold condition where the
+        exception has nowhere useful to surface.
+        """
+        if self.combine is not None and self.combine not in COMBINE_POLICIES:
+            raise ValueError(
+                f"Measurement channel {self.name}: unknown combination policy "
+                f"{self.combine!r}, expected one of {', '.join(COMBINE_POLICIES)}"
+            )
+
+        if self.combine_fun is not None and not callable(self.combine_fun):
+            raise ValueError(
+                f"Measurement channel {self.name}: combine_fun must be a "
+                f"callable ``f(values) -> float``, got {self.combine_fun!r}"
+            )
+
+        return self
+
+    @property
+    def combines_several(self) -> bool:
+        """True when this channel was declared as a many-to-one reading."""
+        return self.combine is not None or self.combine_fun is not None
+
     def add_variables(self, comp):
         self.var_level = comp.addReference(f"{self.name}_level_in")
         self.var_fill = comp.addReference(f"{self.name}_fill_in")
 
-        # A measurement observes exactly one capacity.
-        self.var_level.setCnctMax(1)
-        self.var_fill.setCnctMax(1)
+        if not self.combines_several:
+            # A measurement observes exactly one publisher unless the
+            # declaration says how several of them combine.
+            self.var_level.setCnctMax(1)
+            self.var_fill.setCnctMax(1)
 
     def add_mb(self, comp):
         mb_name = f"{self.name}_level_in"
@@ -770,23 +957,211 @@ class MeasurementIn(cod3s.ObjCOD3S):
         comp.addMessageBoxImport(mb_name, self.var_level, f"{self.name}_level")
         comp.addMessageBoxImport(mb_name, self.var_fill, f"{self.name}_fill")
 
+    def readings(self, var, default) -> typing.List[float]:
+        """The per-connection readings of one reference, in connection order.
+
+        The whole reason a combination policy needs a channel of its own: a
+        median cannot be recovered from a sum, so the individual values must be
+        reachable. ``sumValue`` is what the single-source path uses and it
+        collapses them irreversibly.
+        """
+        if var is None:
+            return []
+
+        return [float(var.value(index)) for index in range(var.cnctCount())]
+
     def get_level(self) -> float:
-        """The total raw quantity held by the observed capacity."""
-        return self.var_level.sumValue(self.level_default)
+        """The level read on this channel, combined over its publishers."""
+        if not self.combines_several:
+            return self.var_level.sumValue(self.level_default)
+
+        return combine(
+            self.readings(self.var_level, self.level_default),
+            policy=self.combine,
+            combine_fun=self.combine_fun,
+            default=self.level_default,
+        )
 
     def get_fill(self) -> float:
-        """The total weighted fill of the observed capacity."""
-        return self.var_fill.sumValue(self.fill_default)
+        """The fill read on this channel, combined over its publishers."""
+        if not self.combines_several:
+            return self.var_fill.sumValue(self.fill_default)
+
+        return combine(
+            self.readings(self.var_fill, self.fill_default),
+            policy=self.combine,
+            combine_fun=self.combine_fun,
+            default=self.fill_default,
+        )
 
     @property
     def is_connected(self) -> bool:
-        """True once the link is wired to a capacity's export."""
+        """True once the link is wired to at least one publisher."""
         return self.var_level is not None and self.var_level.nbCnx() > 0
 
     def __repr__(self) -> str:
+        policy = f" [{self.combine}]" if self.combine else ""
         return (
             f"{fg('cyan')}{self.__class__.__name__}{attr('reset')} "
-            f"{fg('blue')}{self.name}{attr('reset')} = "
+            f"{fg('blue')}{self.name}{attr('reset')}{policy} = "
+            f"{self.get_level() if self.var_level is not None else 'N/A'}"
+        )
+
+    def __str__(self) -> str:
+        return self.__repr__()
+
+
+class MeasurementOut(cod3s.ObjCOD3S):
+    """The publishing side of a measurement link, on a component (R37).
+
+    A capacity publishes its own level (:meth:`Capacity.add_mb`); this is what
+    lets **any** component publish one. Declared with
+    :meth:`muscadet.ObjFlow.add_measurement_out`, it exports the very same two
+    aliases under the very same box name, so an observer cannot tell a capacity
+    from a republisher and needs no second kind of import.
+
+    Why it has to exist
+    -------------------
+    Redundancy is not several observations of one tank -- those are identical
+    and reject nothing. It is several *instruments*, each able to fail on its
+    own, between the tank and whoever votes on them. An instrument is a
+    component, so a component has to be able to publish a reading.
+
+    What it publishes
+    -----------------
+    Either nothing of its own -- ``{name}_level`` is then a plain writable
+    component variable, driven by a model, a test or a failure mode -- or, with
+    ``source`` declared, the level of a capacity or of a measurement channel of
+    the SAME component, refreshed at every integration step.
+
+    ``{name}_level_gain`` is the public endpoint a failure mode clamps, created
+    at 1 and multiplying whatever is published, exactly as ``{flow}_out_rate``
+    does for a continuous output (KD10): a gain of 0 is a dead instrument, a
+    gain of 5 a wild one. muscadet never writes it.
+
+    Carries no quantity
+    -------------------
+    Like every measurement link: the box exports two doubles and imports
+    nothing, there is no demand alias, no allocation, and the channel is not an
+    edge of the continuous flow graph. ``source`` is restricted to a LEVEL --
+    never a rate -- so a republished reading stays an integrated state, which is
+    what keeps the R30 acyclicity argument intact.
+    """
+
+    name: str = pydantic.Field(
+        ...,
+        description=(
+            "Published channel name. The observing side declares an import of "
+            "the same name, which is what makes the aliases line up."
+        ),
+    )
+
+    source: typing.Optional[str] = pydantic.Field(
+        None,
+        description=(
+            "Name of a CAPACITY or of a measurement channel of the same "
+            "component whose level is republished, refreshed at every "
+            "integration step. None leaves the published variable a plain "
+            "writable one nothing refreshes."
+        ),
+    )
+
+    level_default: float = pydantic.Field(
+        0.0, description="Level published before anything has been written"
+    )
+
+    fill_default: float = pydantic.Field(
+        0.0, description="Fill published before anything has been written"
+    )
+
+    gain_default: float = pydantic.Field(
+        1.0,
+        description=(
+            "Initial value of ``{name}_level_gain``, the factor everything "
+            "published is multiplied by and the endpoint a failure mode clamps."
+        ),
+    )
+
+    var_level: typing.Any = pydantic.Field(
+        None, exclude=True, repr=False, description="Published level variable"
+    )
+
+    var_fill: typing.Any = pydantic.Field(
+        None, exclude=True, repr=False, description="Published fill variable"
+    )
+
+    var_gain: typing.Any = pydantic.Field(
+        None, exclude=True, repr=False, description="Public gain variable"
+    )
+
+    def add_variables(self, comp):
+        self.var_level = comp.addVariable(
+            f"{self.name}_level", pyc.TVarType.t_double, float(self.level_default)
+        )
+        self.var_fill = comp.addVariable(
+            f"{self.name}_fill", pyc.TVarType.t_double, float(self.fill_default)
+        )
+        self.var_gain = comp.addVariable(
+            f"{self.name}_level_gain", pyc.TVarType.t_double, float(self.gain_default)
+        )
+        # A gain a mode clamped must come back to what it was declared at when
+        # the next Monte Carlo sequence starts, exactly like a derating.
+        self.var_gain.setReinitialized(True)
+
+    def add_mb(self, comp):
+        """Publish the reading as a read-only export, capacity-compatible."""
+        mb_name = f"{self.name}_level_out"
+        comp.addMessageBox(mb_name)
+        comp.addMessageBoxExport(mb_name, self.var_level, f"{self.name}_level")
+        comp.addMessageBoxExport(mb_name, self.var_fill, f"{self.name}_fill")
+
+    def get_gain(self) -> float:
+        """The factor currently applied to everything this channel publishes."""
+        return self.var_gain.value() if self.var_gain is not None else 1.0
+
+    def publish(self, level, fill=None):
+        """Write the reading, gain applied. ``fill`` defaults to the level."""
+        gain = self.get_gain()
+        self.var_level.setValue(float(level) * gain)
+        self.var_fill.setValue(float(level if fill is None else fill) * gain)
+
+    def read_source(self, comp):
+        """The ``(level, fill)`` pair the declared source currently holds."""
+        capacity = comp.capacities.get(self.source)
+        if capacity is not None:
+            return capacity.total_quantity(), capacity.total_fill()
+
+        measurement = comp.measurements_in.get(self.source)
+        if measurement is not None:
+            return measurement.get_level(), measurement.get_fill()
+
+        raise ValueError(
+            f"Object {comp.name()}: published measurement {self.name} declares "
+            f"source {self.source!r}, which is neither a capacity nor a "
+            "measurement channel of this component"
+        )
+
+    def compute(self, comp):
+        """Refresh the published reading from its source, if it declares one."""
+        if self.source is None:
+            return
+
+        level, fill = self.read_source(comp)
+        self.publish(level, fill)
+
+    def get_level(self) -> float:
+        """The level currently published."""
+        return self.var_level.value() if self.var_level is not None else 0.0
+
+    def get_fill(self) -> float:
+        """The fill currently published."""
+        return self.var_fill.value() if self.var_fill is not None else 0.0
+
+    def __repr__(self) -> str:
+        origin = f" <- {self.source}" if self.source else ""
+        return (
+            f"{fg('cyan')}{self.__class__.__name__}{attr('reset')} "
+            f"{fg('blue')}{self.name}{attr('reset')}{origin} = "
             f"{self.get_level() if self.var_level is not None else 'N/A'}"
         )
 
@@ -805,4 +1180,18 @@ def allocate_capacity_equation_order(system) -> int:
     """
     order = getattr(system, "_capacity_equation_order_next", 0)
     system._capacity_equation_order_next = order + 1
+    return order
+
+
+def allocate_measurement_equation_order(system) -> int:
+    """Allocate a distinct PDMP equation order for a published measurement.
+
+    Its own band, ABOVE the capacity one: a republished reading is read from the
+    level a capacity holds, so it must be refreshed once that level is current.
+    Within the band the allocation is declaration order, which is what a *chain*
+    of republishers depends on -- declare it upstream first. One hop, the shipped
+    sensor's, needs nothing of the sort.
+    """
+    order = getattr(system, "_measurement_equation_order_next", 0)
+    system._measurement_equation_order_next = order + 1
     return order

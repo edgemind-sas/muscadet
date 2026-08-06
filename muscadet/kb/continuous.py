@@ -547,6 +547,21 @@ class SensorContinuous(ContinuousComponent):
 
     Parameters
     ----------
+    **Redundancy (R37).** ``combine`` makes the observed channel a many-to-one
+    one: several instruments publish a reading, and the sensor votes on them.
+    ``"median"`` is what redundancy exists for -- with an odd number of
+    publishers a single stuck or wild reading cannot move it, while a mean is
+    dragged by its full deviation over the count. Declaring nothing keeps the
+    channel capped at one publisher, exactly as before.
+
+    ``publish`` makes this sensor one of those instruments: it republishes what
+    it reads under a channel name of its own, multiplied by the public
+    ``{publish}_level_gain``. That gain is the endpoint a failure mode clamps --
+    0 for a dead instrument, 5 for a wild one -- and it is what lets a redundant
+    set be exercised at all.
+
+    Parameters
+    ----------
     measurement : str, optional
         Name of the observed capacity, which is also the measurement channel
         name: wire it with ``system.connect(holder, f"{measurement}_level_out",
@@ -554,20 +569,33 @@ class SensorContinuous(ContinuousComponent):
     control : str, optional
         Name of the discrete control output. Defaults to ``"control"``.
     activate : float
-        Level at which the control output comes on.
+        Level at which the control output comes on. A sensor that only
+        republishes may leave it out, and then declares no control port at all.
     release : float, optional
         Level at which it goes off. Defaults to ``activate``.
     direction : str, optional
         ``"above"`` (default) or ``"below"``.
     level_default : float, optional
         What the measurement reads while unconnected.
+    combine : str, optional
+        How several publishers' readings reduce to one (R37): ``"median"``,
+        ``"mean"``, ``"sum"``, ``"min"``, ``"max"``. Declaring it is what lifts
+        the one-publisher cap.
+    combine_fun : callable, optional
+        ``f(values) -> float``, used in preference to ``combine``.
+    publish : str or bool, optional
+        Republish the observed reading under this channel name, so this sensor
+        can itself be voted on. ``True`` republishes under ``measurement``.
+    gain : float, optional
+        Initial value of ``{publish}_level_gain``. Defaults to 1.
 
     Raises
     ------
     ValueError
         If ``direction`` is neither ``"above"`` nor ``"below"``, or if the
-        deadband is declared the wrong way round for that direction, or if a
-        declaration key is not one this component reads.
+        deadband is declared the wrong way round for that direction, or if the
+        sensor neither thresholds nor publishes, or if a declaration key is not
+        one this component reads.
     """
 
     # No allocation keys: the sensor's outputs are discrete control ports.
@@ -578,6 +606,10 @@ class SensorContinuous(ContinuousComponent):
         "release",
         "direction",
         "level_default",
+        "combine",
+        "combine_fun",
+        "publish",
+        "gain",
     )
 
     def add_flows(self, **kwargs):
@@ -586,6 +618,30 @@ class SensorContinuous(ContinuousComponent):
         measurement = kwargs.get("measurement", "capacity")
         control = kwargs.get("control", "control")
         direction = kwargs.get("direction", "above")
+
+        publish = kwargs.get("publish", None)
+        if publish is True:
+            publish = measurement
+        elif publish is False:
+            publish = None
+
+        if "activate" not in kwargs and publish is None:
+            raise ValueError(
+                "A sensor must declare the level it activates at, or a "
+                "'publish' channel to republish its reading on"
+            )
+
+        if "activate" not in kwargs:
+            # A pure republisher: it reads and reports, and gates nothing.
+            self.add_measurement_in(
+                name=measurement, **self._measurement_params(kwargs)
+            )
+            self.add_measurement_out(
+                name=publish,
+                source=measurement,
+                gain_default=float(kwargs.get("gain", 1.0)),
+            )
+            return
 
         if "activate" not in kwargs:
             raise ValueError("A sensor must declare the level it activates at")
@@ -617,10 +673,14 @@ class SensorContinuous(ContinuousComponent):
                 f"Unknown sensor direction '{direction}': use 'above' or 'below'"
             )
 
-        measurement_params = {}
-        if "level_default" in kwargs:
-            measurement_params["level_default"] = kwargs["level_default"]
-        self.add_measurement_in(name=measurement, **measurement_params)
+        self.add_measurement_in(name=measurement, **self._measurement_params(kwargs))
+
+        if publish is not None:
+            self.add_measurement_out(
+                name=publish,
+                source=measurement,
+                gain_default=float(kwargs.get("gain", 1.0)),
+            )
 
         for suffix, op, value in (
             ("activate", activate_op, activate),
@@ -646,11 +706,34 @@ class SensorContinuous(ContinuousComponent):
             )
         )
 
+    @staticmethod
+    def _measurement_params(kwargs):
+        """The measurement-channel parameters this declaration carries (R37).
+
+        Only the keys actually declared are forwarded, so a sensor that says
+        nothing about combination keeps the single-publisher channel it has
+        always had -- byte-identically, ``combine`` never even reaching the
+        model.
+        """
+        params = {}
+        for source, target in (
+            ("level_default", "level_default"),
+            ("combine", "combine"),
+            ("combine_fun", "combine_fun"),
+        ):
+            if source in kwargs:
+                params[target] = kwargs[source]
+        return params
+
     def set_flows(self, **kwargs):
         # The band automaton reads the two edge outputs' state variables, so it
         # is declared once those variables exist -- which is what set_flows
         # creates.
         super().set_flows(**kwargs)
+
+        # A pure republisher declares no control port, hence no band automaton.
+        if "activate" not in kwargs:
+            return
 
         control = kwargs.get("control", "control")
 

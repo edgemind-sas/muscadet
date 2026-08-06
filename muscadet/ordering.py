@@ -34,7 +34,7 @@ Channel                            Why it is not an edge
 ``{f}_available_out`` / ``_in``    availability channel of a *discrete* flow
 ``{f}_trigger_in``                 third channel of a discrete trigger flow
 ``{f}_out`` on a logic gate        exported by no flow object at all
-``{c}_level_out`` / ``_in``        measurement link: carries no quantity (R33)
+``{c}_level_out`` / ``_in``        measurement link: carries no quantity (R33, R37)
 ``{f}_out`` of a discrete flow     discrete flows are not continuous flows
 =================================  ==============================================
 
@@ -91,6 +91,11 @@ PRODUCTION_EQUATION_METHOD = "compute_production"
 #: graph-derived allocation -- they take the top band instead, which also makes
 #: them run after both sweeps, as the evaluation sequence requires.
 CAPACITY_ORDER_BASE = 1_000_000
+
+#: First integer of the published-measurement band (R37). Above the capacity one
+#: because a republished reading is taken from a level a capacity holds: the
+#: level must be current before the instrument reporting it is refreshed.
+MEASUREMENT_ORDER_BASE = 2_000_000
 
 
 # ----------------------------------------------------------------------

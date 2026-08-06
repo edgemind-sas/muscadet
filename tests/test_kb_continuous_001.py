@@ -162,6 +162,13 @@ FULL_DECLARATIONS = {
         release=8.0,
         direction="below",
         level_default=0.0,
+        # R37: the redundancy keys. ``combine`` makes the observed channel a
+        # many-to-one one and ``publish`` makes this sensor an instrument
+        # another one can vote on, gain included.
+        combine="median",
+        combine_fun=None,
+        publish="reported",
+        gain=1.0,
     ),
 }
 

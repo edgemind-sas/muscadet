@@ -19,7 +19,24 @@ from .flow_continuous import (
 from .profile import Profile, SinusoidalProfile, build_profile
 from .ordering import ContinuousFlowCycleError, RateComparisonLoopError
 from .rules import Rule, RuleOperand, RuleSet
-from .capacity import Capacity, CapacityFlow, MeasurementIn
+from .capacity import (
+    COMBINE_MAX,
+    COMBINE_MEAN,
+    COMBINE_MEDIAN,
+    COMBINE_MIN,
+    COMBINE_POLICIES,
+    COMBINE_SUM,
+    Capacity,
+    CapacityFlow,
+    MeasurementIn,
+    MeasurementOut,
+    combine,
+    combine_max,
+    combine_mean,
+    combine_median,
+    combine_min,
+    combine_sum,
+)
 from .obj_logic import LogicOr, LogicAnd, ObjLogicGate
 from .cod3s_wrapper import KBMuscadet, ObjFlowClass, ObjFlowInstance
 from .version import __version__

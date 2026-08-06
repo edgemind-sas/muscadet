@@ -1128,6 +1128,8 @@ and it is wired with an ordinary `connect`, from the capacity holder's exported 
 my_plant.connect("TANK", "tank_level_out", "ALARM", "tank_level_in")
 ```
 
+Such a channel observes **exactly one** publisher — a second `connect` onto it is refused by the engine. To read several publishers and vote on them, declare how they combine: see [redundant instruments](#redundant-instruments-combining-several-readings-on-one-channel) below.
+
 ### The sensor pattern: gating production on a level
 
 A rule guard may read a flow, but **not** a capacity level. To make production depend on a level — a pump that refills a tank, a battery that stops charging when full — read the level over a measurement link and drive a discrete control output, which a producing component's rule guard then reads. That is the sensor pattern, and the shipped `SensorContinuous` is its ready-made form.
@@ -1179,6 +1181,101 @@ my_loop.connect_flow(source="SENS", target="SRC", flow_name="fill")
 
 The connection graph above carries a loop — source to capacity, capacity to sensor, sensor back to source — and the system starts all the same: neither a measurement link nor a discrete control port is a continuous flow, so neither takes part in the acyclicity check that continuous flows are subject to.
 
+### Redundant instruments: combining several readings on one channel
+
+A measurement channel observes **one** publisher by default. Declaring a `combine` policy lifts that cap and says how the several readings arriving on the channel reduce to a single number:
+
+| `combine`  | The reading is                                     |
+|------------|----------------------------------------------------|
+| `"sum"`    | their sum — what a single-source channel has always done, generalised |
+| `"mean"`   | their arithmetic mean                              |
+| `"median"` | their median — the estimator redundancy exists for |
+| `"min"`    | the smallest                                       |
+| `"max"`    | the largest                                        |
+
+`combine_fun=f(values) -> float` is the Python extension point, used in **preference** to the named policy — the exact mirror of `allocation_fun` beside `allocation`. An output declares how it *splits* one quantity among its consumers; a measurement input declares how it *combines* its publishers.
+
+There is no way to reach many-to-one without stating the policy. That is deliberate: a silent sum over three redundant sensors is a wrong model, not a sensible default.
+
+#### Why the median, and why it needs its own channel
+
+A **mean** rejects nothing: one wild reading drags the estimate by its full deviation divided by the count, which is exactly the failure redundant sensors are installed to survive. A **median** over an odd number of readings cannot be moved at all by a single stuck or wild one. And a median cannot be recovered from a sum — it needs the individual values — which is why this is a property of the channel and not something a component can compute after the fact.
+
+Redundancy is not several *observations* of one tank: those are identical and reject nothing. It is several **instruments** between the tank and whoever votes, each able to fail on its own. So a component must be able to publish a reading, which is what `add_measurement_out` is for:
+
+```python
+class Instrument(muscadet.ObjFlow):
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        self.add_measurement_in(name="tank")                     # reads the level
+        self.add_measurement_out(name="reading", source="tank")  # republishes it
+
+
+class Voter(muscadet.ObjFlow):
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        # Several instruments, one reading: the majority's.
+        self.add_measurement_in(name="reading", combine="median")
+        self.add_flow(
+            dict(
+                cls="FlowDiscreteOut",
+                name="alarm",
+                var_prod_cond=[{"name": "reading", "op": ">=", "value": 30.0}],
+            )
+        )
+```
+
+wired with the same plain `connect` a single-source measurement uses, once per instrument:
+
+```python
+for name in ("I1", "I2", "I3"):
+    my_loop.connect("CAP", "tank_level_out", name, "tank_level_in")
+    my_loop.connect(name, "reading_level_out", "VOTE", "reading_level_in")
+```
+
+A published channel exports the same two aliases as a capacity's, so an observer cannot tell a republisher from a capacity and needs no second kind of import. It also carries `{name}_level_gain`, a public variable created at 1 that multiplies everything published — the endpoint a failure mode clamps to make one instrument lie, exactly as `{flow}_out_rate` is for a continuous output:
+
+```python
+my_loop.comp["I3"].add_delay_failure_mode(
+    name="wild",
+    failure_time=2.0,
+    failure_effects=[("^reading_level_gain$", 5.0)],   # reports five times the level
+    repair_cond=False,
+)
+```
+
+With that fault standing and the tank at 26, the three readings are 26, 26 and 130. The median voter reads 26 and stays quiet; a mean voter reads 60.7 and raises an alarm for a level that never happened.
+
+`SensorContinuous` carries all of it as declaration keys — `combine`, `combine_fun`, `publish` (republish the reading under this channel name; `True` reuses `measurement`) and `gain`. A sensor that declares `publish` and no `activate` is a pure instrument, with no control port and no deadband.
+
+#### Combination is a measurement policy, never a flow policy — this is the part to get right
+
+**A continuous flow carries a conserved quantity and is the sum of its connections, permanently.** Taking the median of three pipes delivering water would create or destroy matter. So a combination policy cannot be declared on a flow at all:
+
+```python
+muscadet.FlowContinuousIn(name="water", combine="median")
+# ValueError: Flow water: a combination policy cannot be declared on a flow (R37).
+# A continuous flow carries a CONSERVED quantity and is the sum of its
+# connections; taking a mean or a median of it would create or destroy matter.
+# Combine readings on a MEASUREMENT channel instead ...
+```
+
+The key is *refused by name* rather than left to a docstring, because pydantic ignores unknown keys: without the refusal a `combine="median"` written on a pipe would be accepted, dropped, and the flow would go on summing — a model that reads as a vote and behaves as a sum.
+
+The restriction holds from the other side too. A measurement channel is not a flow, so its name can appear in **no** rule:
+
+```python
+comp.add_rules(name="r", rules=[dict(prod={"reading": 1.0})])
+# ValueError: ... rule 'prod' map references measurement channel reading, which
+# is not a flow: a measurement carries a READING and no quantity -- its channel
+# may combine several publishers by mean or median, which conserves nothing --
+# so it can neither be consumed nor produced
+```
+
+and a rule *guard* may not read one either, for the same reason it may not read a capacity level: gate production on a reading through a sensor driving a control port, and guard on that port.
+
+To **vote on booleans** rather than on numbers, nothing new is needed: a discrete input already accepts an integer `logic`, so `add_flow_in(name="ok", logic=2)` over three connected sources is a 2-out-of-3 majority.
+
 ### Assemble the whole system before the first run
 
 A system carrying continuous flows must be **complete** — every component and every connection — before `simulate()` or `isimu_start()` is called the first time.
@@ -1212,7 +1309,7 @@ MUSCADET ships six domain-neutral continuous components in `muscadet.kb.continuo
 | `TransformerContinuous`  | continuous inputs turned into continuous outputs by rules given as a **parameter** |
 | `CapacityContinuous`     | a volume held over one or more flows: buffer (`ports="both"`), accumulator (`"in"`) or reservoir (`"out"`) |
 | `ConsumerContinuous`     | a continuous input publishing a declared `demand`                             |
-| `SensorContinuous`       | a capacity level read over a measurement link, driving a discrete control output |
+| `SensorContinuous`       | a level read over a measurement link — one publisher, or several combined by `combine="median"` — driving a discrete control output, and optionally republishing what it read (`publish`) so another sensor can vote on it |
 
 A transformer takes its rules as a parameter, so a two-in two-out reaction needs no subclass at all:
 

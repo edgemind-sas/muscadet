@@ -4,6 +4,7 @@ from .obj_logic import LogicOr, LogicAnd
 from .flow_continuous import FlowContinuous
 from .ordering import (
     CAPACITY_ORDER_BASE,
+    MEASUREMENT_ORDER_BASE,
     EquationRegistration,
     build_continuous_flow_graph,
     component_is_continuous,
@@ -169,6 +170,11 @@ class System(cod3s.PycSystem):
     #: Read here resolves to the class attribute; the first allocation writes an
     #: instance attribute, so systems never share a counter.
     _capacity_equation_order_next = CAPACITY_ORDER_BASE
+
+    #: Same mechanism for the published-measurement equations of R37, one band
+    #: higher: a republished reading is taken from a level a capacity integrates,
+    #: so it is refreshed after every capacity equation has run.
+    _measurement_equation_order_next = MEASUREMENT_ORDER_BASE
 
     # ------------------------------------------------------------------
     # PDMP manager ownership

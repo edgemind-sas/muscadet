@@ -95,6 +95,55 @@ class FlowModel(cod3s.ObjCOD3S):
         )
     )
 
+    combine: typing.Any = pydantic.Field(
+        None,
+        exclude=True,
+        repr=False,
+        description=(
+            "Declared ONLY so it can be refused by name (R37). A combination "
+            "policy belongs to a measurement channel and never to a flow; "
+            "pydantic ignores unknown keys, so without this field the key would "
+            "be swallowed and the flow would go on summing while the model read "
+            "as if it took a median."
+        ),
+    )
+
+    combine_fun: typing.Any = pydantic.Field(
+        None,
+        exclude=True,
+        repr=False,
+        description="Refused by name for the same reason as ``combine`` (R37).",
+    )
+
+    @pydantic.model_validator(mode="after")
+    def check_combine_is_not_a_flow_policy(self):
+        """Refuse a combination policy on a FLOW, at declaration time (R37).
+
+        A continuous input is the SUM of its connections, permanently: it
+        carries a conserved quantity, and the median of three pipes delivering
+        water creates or destroys matter. A discrete input already votes, with
+        an integer ``logic`` -- ``logic=2`` over three connections is a
+        2-out-of-3 majority.
+
+        This is what makes the restriction unreachable rather than merely
+        documented. Pydantic's default is to IGNORE an unknown key, so a
+        ``combine="median"`` written on a flow would be accepted, dropped, and
+        the flow would keep summing: the model would read as a vote and behave
+        as a sum, which is the worst of the three possible outcomes.
+        """
+        if self.combine is None and self.combine_fun is None:
+            return self
+
+        raise ValueError(
+            f"Flow {self.name}: a combination policy cannot be declared on a "
+            "flow (R37). A continuous flow carries a CONSERVED quantity and is "
+            "the sum of its connections; taking a mean or a median of it would "
+            "create or destroy matter. Combine readings on a MEASUREMENT "
+            "channel instead -- add_measurement_in(name, combine='median') -- "
+            "or, to vote on discrete inputs, declare an integer logic: "
+            "add_flow_in(name, logic=2) is a 2-out-of-3 majority"
+        )
+
     @classmethod
     def get_clsname(basecls, **specs):
         port_name = specs.pop("port")

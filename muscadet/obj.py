@@ -159,7 +159,9 @@ from .rules import (
 from .capacity import (
     Capacity,
     MeasurementIn,
+    MeasurementOut,
     allocate_capacity_equation_order,
+    allocate_measurement_equation_order,
 )
 
 # The two standalone algorithms over a component, bound as methods of ObjFlow
@@ -297,6 +299,11 @@ class ObjFlow(cod3s.PycComponent):
         # Measurement links this component imports, keyed by channel name.
         self.measurements_in = {}
 
+        # Measurement readings this component PUBLISHES, keyed by channel name
+        # (R37). What lets an instrument sit between the level and whoever votes
+        # on it -- redundancy is several instruments, not several observations.
+        self.measurements_out = {}
+
         # What each two-state mode automaton READS and WRITES, keyed by mode
         # name: ``{"conditions": [variable basename], "effects": [basename]}``.
         # Recorded at declaration time by add_atm2states, because the condition
@@ -310,6 +317,10 @@ class ObjFlow(cod3s.PycComponent):
         # True once ``compute_capacities`` was registered as a PDMP equation
         # method for this component: one registration covers every capacity.
         self._capacity_equation_registered = False
+
+        # The same, for ``compute_measurements``: one registration covers every
+        # published measurement that declares a source (R37).
+        self._measurement_equation_registered = False
 
         # Demand bounds read by the demand sweep, for the production sweep of
         # the SAME evaluation to reuse. Emptied at the head of compute_demand;
@@ -1153,6 +1164,13 @@ class ObjFlow(cod3s.PycComponent):
         if name in self.capacities:
             raise ValueError(f"Capacity {name} already exists")
 
+        if name in self.measurements_out:
+            raise ValueError(
+                f"Object {self.name()}: cannot declare capacity {name}: a "
+                f"published measurement {name} already exports a level under "
+                "that name"
+            )
+
         if flow is not None and flows is not None:
             raise ValueError(
                 f"Object {self.name()}: capacity {name}: give either 'flow' "
@@ -1364,21 +1382,33 @@ class ObjFlow(cod3s.PycComponent):
 
     def add_measurement_in(self, name, **params):
         """
-        Declares the importing side of a measurement link (R33).
+        Declares the importing side of a measurement link (R33, R37).
 
-        The observing component reads a capacity's level through a pair of
-        PyCATSHOO references, which carry no setter: the link is read-only by
+        The observing component reads a level through a pair of PyCATSHOO
+        references, which carry no setter: the link is read-only by
         construction, exchanges no quantity and enters no allocation. Connect
         it with ``system.connect(holder, f"{name}_level_out", observer,
         f"{name}_level_in")``.
 
+        The channel observes exactly ONE publisher unless ``combine`` (or
+        ``combine_fun``) says how several readings reduce to one (R37):
+        ``combine="median"`` over three redundant instruments is a vote that a
+        single stuck or wild reading cannot move, which is the whole reason the
+        redundancy is there. There is no way to reach many-to-one without
+        stating the policy.
+
+        A measurement is NOT a flow: it carries no quantity, so no combination
+        policy can be declared on a continuous input and none of these names may
+        appear in a rule's ``cons`` or ``prod`` map.
+
         Parameters
         ----------
         name : str
-            Measurement channel name. Matches the observed capacity's name,
+            Measurement channel name. Matches the observed publisher's name,
             which is what makes the exported and imported aliases line up.
         **params : dict
-            Additional measurement parameters, e.g. ``level_default``.
+            Additional measurement parameters: ``level_default``,
+            ``fill_default``, ``combine``, ``combine_fun``.
 
         Returns
         -------
@@ -1395,6 +1425,83 @@ class ObjFlow(cod3s.PycComponent):
         self.measurements_in[name] = measurement
 
         return measurement
+
+    def add_measurement_out(self, name, **params):
+        """
+        Declares a measurement reading this component PUBLISHES (R37).
+
+        The counterpart of :meth:`add_measurement_in`, and what makes a
+        redundant sensor set expressible: redundancy is several *instruments*,
+        each able to fail on its own, and an instrument is a component. The
+        exported box and aliases are byte-identical to a capacity's, so an
+        observer cannot tell a republisher from a capacity.
+
+        With ``source`` naming a capacity or a measurement channel of this same
+        component, the published reading follows that level at every integration
+        step. Without it, ``{name}_level`` is simply a writable variable of this
+        component. Either way ``{name}_level_gain`` -- created at 1, public,
+        never written by muscadet -- multiplies what is published: it is the
+        endpoint a failure mode clamps to make one instrument lie, exactly as
+        ``{flow}_out_rate`` is for a continuous output.
+
+        Parameters
+        ----------
+        name : str
+            Published channel name.
+        **params : dict
+            ``source``, ``level_default``, ``fill_default``, ``gain_default``.
+
+        Returns
+        -------
+        muscadet.capacity.MeasurementOut
+            The declared publication.
+
+        Raises
+        ------
+        ValueError
+            If the name is already published, or already used by a capacity of
+            this component -- the two publish the same variable names.
+        """
+        if name in self.measurements_out:
+            raise ValueError(f"Published measurement {name} already exists")
+
+        if name in self.capacities:
+            raise ValueError(
+                f"Object {self.name()}: cannot publish measurement {name}: "
+                f"capacity {name} already publishes a level under that name"
+            )
+
+        measurement = MeasurementOut(name=name, **params)
+        measurement.add_variables(self)
+        measurement.add_mb(self)
+
+        self.measurements_out[name] = measurement
+
+        # Only a SOURCED publication needs the solver: the equation refreshes it
+        # at every integration step, and a variable written from inside an
+        # equation must be declared explicit first. A publication nothing
+        # refreshes stays a plain variable, so a purely discrete model that
+        # declares one never gains a PDMP manager.
+        if measurement.source is not None:
+            system = self.system()
+
+            system.pdmp_add_explicit_variable(measurement.var_level)
+            system.pdmp_add_explicit_variable(measurement.var_fill)
+
+            if not self._measurement_equation_registered:
+                system.pdmp_add_equation_method(
+                    "compute_measurements",
+                    self,
+                    allocate_measurement_equation_order(system),
+                )
+                self._measurement_equation_registered = True
+
+        return measurement
+
+    def compute_measurements(self):
+        """PDMP equation: refresh every published measurement of this component."""
+        for measurement in self.measurements_out.values():
+            measurement.compute(self)
 
     # ------------------------------------------------------------------
     # Rule declaration (KD7, R12, R13, R14)
@@ -1568,7 +1675,31 @@ class ObjFlow(cod3s.PycComponent):
         and forbidding it removes that class of instability by construction
         (KD15). Threshold control over production goes through a sensor
         component that reads the capacity and drives a control port.
+
+        A name that designates a MEASUREMENT channel is refused for the same
+        reason on a guard, and for a stronger one on a coefficient map (R37): a
+        measurement carries a reading, not a quantity, and its channel may
+        combine several publishers by mean or median. Letting one appear in
+        ``cons`` or ``prod`` is exactly how a non-conserved estimator would leak
+        into a mass balance, so the name never resolves there at all.
         """
+        if flow_name in self.measurements_in or flow_name in self.measurements_out:
+            if role == "rule guard":
+                raise ValueError(
+                    f"Object {self.name()}: {where}: {role} references "
+                    f"measurement channel {flow_name}: a rule guard cannot read "
+                    "a measurement. Gate production on a reading through a "
+                    "sensor component that reads it and drives a control port, "
+                    "then guard on that control port"
+                )
+            raise ValueError(
+                f"Object {self.name()}: {where}: {role} references measurement "
+                f"channel {flow_name}, which is not a flow: a measurement "
+                "carries a READING and no quantity -- its channel may combine "
+                "several publishers by mean or median, which conserves nothing "
+                "-- so it can neither be consumed nor produced"
+            )
+
         if flow_name in self.capacities:
             if role == "rule guard":
                 raise ValueError(
