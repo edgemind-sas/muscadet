@@ -5,6 +5,7 @@ from .flow_continuous import FlowContinuous
 from .ordering import (
     CAPACITY_ORDER_BASE,
     EquationRegistration,
+    build_continuous_flow_graph,
     component_is_continuous,
     register_equation_order,
 )
@@ -16,6 +17,98 @@ import copy
 #: sequence equation methods of *different* components against each other
 #: (verified: flipping the order integers flips the observed call sequence).
 PDMP_MANAGER_NAME = "muscadet_pdmp"
+
+
+class ModelChangedAfterPrerunError(ValueError):
+    """The continuous model grew after the pre-run step registered its equations.
+
+    The pre-run step runs **once**, at the start of the first run: it derives
+    the evaluation order from the whole connection graph and registers the two
+    sweep equations of every continuous component on the PDMP manager. A
+    continuous component -- or a continuous connection -- appearing after that
+    is never registered, and there is no way to register it correctly
+    afterwards:
+
+    * PyCATSHOO **refuses** to register an equation the manager already holds
+      (``[E]L'ODE <comp>.<method> appartient déjà au PDMP muscadet_pdmp``), and
+      ``IPDMPManager`` exposes no removal counterpart. The equation set of a
+      manager is append-only;
+    * the order is derived **globally** from the graph, so a late component
+      does not merely add equations, it renumbers existing ones -- and those
+      are exactly the registrations that cannot be redone. Appending the new
+      equations above every order already taken is all that is left, and it
+      puts a demand equation above production equations, breaking the band
+      separation :meth:`muscadet.ObjFlow.get_output_request` relies on.
+
+    Left undiagnosed, the late component runs **inert**: its rules never
+    evaluate, its outputs hold their declared defaults, and the demand it
+    should have published upstream is missing -- so the components feeding it
+    silently produce less too. The acyclicity check of R30 is skipped along
+    with the rest, so a loop closed after the first run is not refused either.
+
+    Raised from :meth:`muscadet.System.prerun`, which both run entry points go
+    through, so it fires at ``simulate()`` / ``isimu_start()`` -- before any
+    result exists to be wrong.
+    """
+
+
+def describe_model_change(before, after):
+    """Describe how a system's continuous graph changed, as a list of phrases.
+
+    Parameters
+    ----------
+    before, after : tuple
+        Signatures as returned by :meth:`muscadet.System.model_signature`:
+        ``(node names, continuous connections)``.
+
+    Returns
+    -------
+    list of str
+        Empty when the two signatures agree.
+    """
+    nodes_before, cnx_before = before
+    nodes_after, cnx_after = after
+
+    changes = []
+
+    added = [name for name in nodes_after if name not in set(nodes_before)]
+    if added:
+        changes.append(f"components added since: {', '.join(added)}")
+
+    removed = [name for name in nodes_before if name not in set(nodes_after)]
+    if removed:
+        changes.append(f"components removed since: {', '.join(removed)}")
+
+    def label(cnct):
+        return f"{cnct.source}.{cnct.flow}_out -> {cnct.target}.{cnct.flow}_in"
+
+    # Only over the components present on BOTH sides: a connection to a
+    # component already reported as added says nothing more.
+    common = set(nodes_before) & set(nodes_after)
+
+    def between_common(connections):
+        return [
+            cnct
+            for cnct in connections
+            if cnct.source in common and cnct.target in common
+        ]
+
+    kept_before = between_common(cnx_before)
+    kept_after = between_common(cnx_after)
+
+    new_cnx = [cnct for cnct in kept_after if cnct not in set(kept_before)]
+    if new_cnx:
+        changes.append(
+            "connections added since: " + ", ".join(label(c) for c in new_cnx)
+        )
+
+    gone_cnx = [cnct for cnct in kept_before if cnct not in set(kept_after)]
+    if gone_cnx:
+        changes.append(
+            "connections removed since: " + ", ".join(label(c) for c in gone_cnx)
+        )
+
+    return changes
 
 
 class System(cod3s.PycSystem):
@@ -45,6 +138,17 @@ class System(cod3s.PycSystem):
     evaluation order from the connection graph and registers the sweep
     equations. ``prerun_done`` / ``prerun_count`` are the inspection accessors,
     and ``equation_order`` is the derived order itself.
+
+    The step is one-shot **per engine system**, and cannot be otherwise:
+    PyCATSHOO refuses to register an equation its PDMP manager already holds
+    and offers no way to remove one, while the order is derived globally, so a
+    late component renumbers registrations that can no longer be redone. A
+    continuous component or connection appearing after the step is therefore
+    refused at the next entry point, by
+    :meth:`check_model_unchanged_since_prerun`, rather than left to run inert.
+    ``model_signature`` is what the two states are compared through, and it is
+    empty on a purely discrete system -- such a system keeps growing between
+    runs exactly as it did in 1.x.
 
     Equation ordering (R8, R30)
     ---------------------------
@@ -231,23 +335,102 @@ class System(cod3s.PycSystem):
         """
         return getattr(self, "_prerun_count", 0)
 
+    def model_signature(self):
+        """The continuous-flow model as the pre-run step sees it.
+
+        ``(node names, continuous connections)``, read back from the engine
+        rather than from anything muscadet caches, so it reflects exactly what
+        :meth:`prerun_step` would derive an order from. Empty on a purely
+        discrete system, which is what keeps such a system free to grow after
+        a run exactly as it did in 1.x.
+        """
+        graph = build_continuous_flow_graph(self)
+
+        return (tuple(graph.nodes), tuple(graph.connections))
+
+    def check_model_unchanged_since_prerun(self):
+        """Refuse a run whose continuous model grew after the pre-run step.
+
+        The pre-run step is **one-shot per engine system**, and it has to be:
+        PyCATSHOO refuses to re-register an equation its manager already holds
+        and offers no way to remove one, while the order is derived globally
+        and a late component renumbers existing equations. So a second pass
+        cannot register a late component *correctly*, and registering it
+        incorrectly is worse than not registering it at all.
+
+        What is left is to say so. Without this, a component added after the
+        first run cycle runs inert -- no rule evaluated, no demand published,
+        its outputs frozen at their declared defaults -- and the acyclicity
+        check of R30 never sees the connections that arrived with it. Both are
+        silent: the run completes and every number it produces is wrong.
+
+        A purely discrete system is untouched: its signature is empty on both
+        sides however many components it gains, so 1.x models keep growing
+        between runs.
+
+        Raises
+        ------
+        ModelChangedAfterPrerunError
+            Naming what appeared or disappeared since the pre-run step.
+        """
+        before = getattr(self, "_prerun_signature", None)
+
+        if before is None:
+            return
+
+        changes = describe_model_change(before, self.model_signature())
+
+        if not changes:
+            return
+
+        raise ModelChangedAfterPrerunError(
+            f"System {self.name()}: the continuous-flow model changed after "
+            f"the pre-run step ({'; '.join(changes)}). That step runs once, at "
+            "the start of the first run: it derives the evaluation order from "
+            "the whole connection graph and registers the sweep equations of "
+            "every continuous component. It cannot run again -- PyCATSHOO "
+            "refuses to re-register an equation its PDMP manager already "
+            "holds, and the order is derived globally, so a late component "
+            "renumbers equations that can no longer be renumbered. Anything "
+            "added since would therefore run inert, contributing nothing and "
+            "publishing no demand upstream. Assemble the whole system -- every "
+            "component and every connection -- before the first simulate() / "
+            "isimu_start()"
+        )
+
     def prerun(self):
         """Run the pre-run step once, before either run entry point starts.
 
-        Idempotent: a second run, or a restart after a stop, is a no-op.
+        Idempotent: a second run, or a restart after a stop, is a no-op --
+        provided the model is still the one the step ran on. A model that grew
+        since is refused by :meth:`check_model_unchanged_since_prerun` rather
+        than run with the late part inert.
 
         Returns
         -------
         bool
             True when :meth:`prerun_step` was invoked by this call, False when
             it had already run.
+
+        Raises
+        ------
+        ModelChangedAfterPrerunError
+            When a continuous component or connection appeared since.
         """
         if self.prerun_done:
+            self.check_model_unchanged_since_prerun()
             return False
 
         self._prerun_done = True
         self._prerun_count = self.prerun_count + 1
         self.prerun_step()
+
+        # Recorded AFTER the step, and only once it has not raised: a system
+        # whose first pre-run raised -- on a cycle (R30), or on a rate
+        # comparison loop -- registered nothing, so there is no baseline for a
+        # later run to be compared against. The check below then stands aside
+        # rather than reporting a spurious change on top of the real defect.
+        self._prerun_signature = self.model_signature()
 
         return True
 
@@ -311,6 +494,7 @@ class System(cod3s.PycSystem):
         """
         self._pdmp_manager = None
         self._prerun_done = False
+        self._prerun_signature = None
         self._equation_order = None
         self._equation_registrations = []
         return super().deleteSys(*args, **kwargs)

@@ -698,7 +698,7 @@ my_plant.comp["B"].flows_in["water"].var_demand.value()        # published upstr
 my_plant.comp["P"].flows_out["water"].get_var_demand_value()   # demand read back
 ```
 
-A component declaring continuous flows but **no** transformation rule transfers each input onto the output of the same name.
+A component declaring continuous flows but **no** transformation rule transfers each input onto the output of the same name. A transfer carries the downstream demand across unchanged, so — unlike a rule, see below — such a pass-through with an unwired output still claims without bound from its producers.
 
 ### Transformation rules
 
@@ -735,6 +735,7 @@ Key points:
 - A rule set is declared **on the component**, not on an output flow. A reaction with correlated outputs cannot be stated one output at a time: declaring `prod={"x": 5, "y": 2}` keeps `x` and `y` in that proportion whatever the scale.
 - `cons` names resolve against the component's **input** flows, `prod` names against its **output** flows. A coefficient left out of a map defaults to `1`.
 - The **scarcest input sets the scale**. With the recipe above, water delivered at 10 and sugar at 2 produce 2 of syrup, not 5: sugar is the limiting reagent.
+- **What the outputs are asked for sets how much is claimed upstream.** A component claims from its inputs only what its outputs are actually asked for, mapped back through the rule's declared coefficients. An output **nothing is connected to** asks for nothing, so it constrains nothing: a deliberately unwired output — a vent, a discharge, a branch not built yet — is a legitimate model and neither raises nor makes the component draw more. A consumer connected and asking for **zero** is a different statement and does constrain, at scale zero. When *no* output of a rule constrains it — every one of them unwired — the rule runs at its **nominal** scale, claiming exactly its declared `cons` coefficients. Wire a consumer, and declare what it wants, whenever a scenario depends on a rule running above nominal.
 - A rule declared **without a guard** is the *default rule* of its set and applies when no other rule matches. A set may declare at most one; declaring two is refused at declaration time.
 - A set with no default rule and no guard holding produces **zero** — it does not fall back on whichever rule it happens to carry.
 - **At most one guard may hold at a time.** Two holding together is a model error, raised at evaluation and naming both rules.
@@ -1073,6 +1074,28 @@ my_loop.connect_flow(source="SENS", target="SRC", flow_name="fill")
 `direction` says which way the level activates the sensor: `"above"` for a high-level detector, in which case `release` must not exceed `activate`, and `"below"` for a low-level one, in which case it must not fall below it. A band declared the wrong way round is refused at declaration time.
 
 The connection graph above carries a loop — source to capacity, capacity to sensor, sensor back to source — and the system starts all the same: neither a measurement link nor a discrete control port is a continuous flow, so neither takes part in the acyclicity check that continuous flows are subject to.
+
+### Assemble the whole system before the first run
+
+A system carrying continuous flows must be **complete** — every component and every connection — before `simulate()` or `isimu_start()` is called the first time.
+
+That first call runs a *pre-run step*: it reads the connection graph back from the engine, checks it for cycles, derives the evaluation order of the two sweeps from it, and registers each sweep equation on the PDMP solver with its order. The step cannot run a second time. PyCATSHOO refuses to register an equation its solver already holds and offers no way to remove one, while the order is derived from the *whole* graph — so a component arriving late does not merely add equations, it renumbers ones that can no longer be renumbered.
+
+A continuous component or connection added after that first call is therefore refused at the next entry point:
+
+```python
+my_plant.simulate(...)                     # the pre-run step runs here
+my_plant.add_component(cls="Boiler", name="B2")
+my_plant.connect_flow(source="P", target="B2", flow_name="water")
+
+my_plant.simulate(...)
+# muscadet.ModelChangedAfterPrerunError: System Plant: the continuous-flow
+# model changed after the pre-run step (components added since: B2) ...
+```
+
+Without the refusal the late component would run **inert** — no rule evaluated, no demand published upstream, its outputs frozen at their declared defaults — and the components feeding it would silently produce less too, with no diagnostic and a run that completes normally. To extend a model, build a fresh `System`.
+
+Restarting an *unchanged* system is unaffected: `isimu_stop()` followed by `isimu_start()` is the no-op it always was. Purely discrete systems are unaffected too — they register no sweep equation, so they keep growing between runs exactly as they did in 1.x.
 
 ### The shipped continuous components
 

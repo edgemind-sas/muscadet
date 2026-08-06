@@ -88,16 +88,23 @@ def evaluate_demand(comp):
     records it.
 
     A component declaring no rule transfers each input to the output of the
-    same name (R31), so its demand crosses it unchanged. An input no rule
-    and no transfer covers is a pure consumer's input: it claims the demand
-    it was DECLARED with, ``var_demand_default``.
+    same name (R31), so its demand crosses it unchanged -- including an
+    UNBOUNDED one. That is the one path an unconnected output still claims
+    without bound on: :meth:`get_demand_scale` drops such an output from the
+    rule scale, but a transfer has no declared coefficients and therefore no
+    nominal scale to fall back to, so what a rule-less pass-through should
+    ask for when nothing consumes it is an open question rather than a
+    filter. Recorded as a residual.
+
+    An input no rule and no transfer covers is a pure consumer's input: it
+    claims the demand it was DECLARED with, ``var_demand_default``.
 
     Returns
     -------
     dict
-        ``{input flow name: demand}``, possibly ``math.inf`` where nothing
-        bounds it -- an output no consumer is connected to throttles no
-        input of the component producing it.
+        ``{input flow name: demand}``, possibly ``math.inf``: a connected
+        consumer may publish an unbounded demand, and a rule-less transfer
+        carries an unconnected output's absent one across unchanged.
 
     Raises
     ------
@@ -156,9 +163,26 @@ def get_demand_scale(comp, rule):
 
     The scale is taken over the ``prod`` coefficients, as a **maximum**: the
     rule's outputs are correlated by construction, so the scale that serves
-    them all is the one the most demanding of them needs. An output nothing
-    is connected to demands without bound, and a rule producing nothing at
-    all is limited by no output, so both fall back to the nominal scale.
+    them all is the one the most demanding of them needs.
+
+    Only the outputs that actually CONSTRAIN the rule take part in it --
+    :meth:`output_constrains_demand`. An output nothing asks anything of
+    constrains nothing, so it must not enter the maximum at all: entering it
+    as an unbounded demand would let a single unwired output dominate every
+    connected one and make the component claim its whole upstream supply, a
+    vent or a half-assembled model silently over-drawing a shared source.
+
+    "Nobody is connected" and "somebody is asking for nothing" stay strictly
+    apart. A consumer publishing a demand of zero is a real bound and gives a
+    scale of zero, which is what stops the rule; only the absence of a
+    consumer is dropped. And a genuinely unbounded demand published BY a
+    connected consumer -- a capacity claiming ``inf`` for its filling (R36),
+    a downstream itself unconstrained -- still travels, because the test is
+    structural (is there a consumer?) and never reads the demand's value.
+
+    A rule left with no constraining output at all -- producing nothing, or
+    producing only into unwired outputs -- falls back to the nominal scale,
+    exactly as a rule producing nothing always did.
 
     Parameters
     ----------
@@ -170,16 +194,64 @@ def get_demand_scale(comp, rule):
     float
         The scale, possibly ``math.inf``.
     """
-    scales = [
-        comp.get_output_demand(flow_name) / coefficient
-        for flow_name, coefficient in rule.prod.items()
-        if coefficient > 0
-    ]
+    scales = []
+
+    for flow_name, coefficient in rule.prod.items():
+        if coefficient <= 0:
+            continue
+
+        # Read unconditionally, and filtered afterwards: get_output_demand
+        # records the bound the production sweep of this same evaluation
+        # reads back (see get_output_request), so every produced output must
+        # go on being read exactly as it was before this filter existed.
+        demand = comp.get_output_demand(flow_name)
+
+        if not comp.output_constrains_demand(flow_name):
+            continue
+
+        scales.append(demand / coefficient)
 
     if not scales:
         return UNCONSTRAINED_SCALE
 
     return max(scales)
+
+
+def output_constrains_demand(comp, flow_name):
+    """
+    Tells whether an output can bound the scale its rule runs at.
+
+    An output constrains a rule when something downstream can ask it for a
+    quantity -- which takes both a demand channel and somebody connected to
+    it. The two ways of failing that are the two ways
+    :meth:`get_output_demand` answers :data:`~muscadet.flow_continuous.
+    UNBOUNDED` without any consumer having said so:
+
+    - a **discrete** output named in a ``prod`` map. It carries no demand
+      channel at all: a boolean production is not a quantity, and it throttles
+      nothing;
+    - a **continuous** output with no connection. Nothing consumes it, so it
+      asks for nothing.
+
+    Purely structural: the demand's value is never read, so an ``inf``
+    published by a real consumer -- a capacity claiming its fill rate (R36) --
+    keeps propagating as the "deliver whatever you can" it means.
+
+    Parameters
+    ----------
+    flow_name : str
+        Name of an output flow of the component.
+
+    Returns
+    -------
+    bool
+    """
+    flow = comp.flows_out.get(flow_name)
+
+    if not isinstance(flow, FlowContinuousOut):
+        return False
+
+    return comp.continuous_flow_is_connected(flow, "out")
 
 
 def get_output_demand(comp, flow_name):

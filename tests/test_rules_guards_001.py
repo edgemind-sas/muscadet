@@ -50,6 +50,10 @@ CROSSING_TOL = 0.05
 #: Components carrying a rule set whose mode is traced through the run.
 GUARDED = ["NOMINAL", "BELOW", "ABOVE", "SCARCE", "GAP", "FLIP", "RAMPED"]
 
+#: What a unit's downstream asks of it: more than any of them can produce, so
+#: nothing downstream throttles the scale its inputs set (see ``GuardDrain``).
+DRAIN_DEMAND = 1e6
+
 
 # ----------------------------------------------------------------------
 # Components
@@ -141,6 +145,24 @@ class Conflicting(muscadet.ObjFlow):
         )
 
 
+class GuardDrain(muscadet.ObjFlow):
+    """A downstream taking whatever the unit it is wired to produces.
+
+    The acceptance examples state what each unit is DELIVERED -- ``F1`` at 12
+    for AE3 -- so every unit must be free to draw whatever its supply allows.
+    That used to be implicit: an output nobody was connected to demanded
+    without bound, and the rule ran at whatever scale its inputs permitted.
+    Since R-10 an unwired output constrains nothing and the rule falls back to
+    its nominal scale instead, so the downstream is declared rather than
+    inferred from the absence of one -- which is also what an acceptance
+    example about a delivered quantity ought to say out loud.
+    """
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        self.add_flow_continuous_in(name="X", var_demand_default=DRAIN_DEMAND)
+
+
 class Ramp(muscadet.ObjFlow):
     """A continuous output that ramps: ``F1`` = ``init`` + t.
 
@@ -177,6 +199,14 @@ def feed(system, target, flow, rate):
     name = f"{target}_{flow}_SRC"
     system.add_component(name=name, cls="GuardRateSource", rates={flow: rate})
     system.connect_flow(source=name, target=target, flow_name=flow)
+    return name
+
+
+def drain(system, target):
+    """Wire a downstream taking whatever ``target`` produces on ``X``."""
+    name = f"{target}_X_DRAIN"
+    system.add_component(name=name, cls="GuardDrain")
+    system.connect_flow(source=target, target=name, flow_name="X")
     return name
 
 
@@ -265,27 +295,32 @@ def build_guard_system():
     system.connect_flow(source="SW_OFF", target="NOMINAL", flow_name="F4")
     feed(system, "NOMINAL", "F3", 3.0)
     feed(system, "NOMINAL", "F2", 2.0)
+    drain(system, "NOMINAL")
 
     # -- AE2: F4 true, F1 at 9 -> X produces 0
     system.add_component(name="BELOW", cls="Unit")
     system.connect_flow(source="SW_ON", target="BELOW", flow_name="F4")
     feed(system, "BELOW", "F1", 9.0)
+    drain(system, "BELOW")
 
     # -- AE3: F4 true, F1 at 12 -> X produces 2
     system.add_component(name="ABOVE", cls="Unit")
     system.connect_flow(source="SW_ON", target="ABOVE", flow_name="F4")
     feed(system, "ABOVE", "F1", 12.0)
+    drain(system, "ABOVE")
 
     # -- AE4: F4 false, F3 at 3 but F2 only at 1 -> X produces 1
     system.add_component(name="SCARCE", cls="Unit")
     system.connect_flow(source="SW_OFF", target="SCARCE", flow_name="F4")
     feed(system, "SCARCE", "F3", 3.0)
     feed(system, "SCARCE", "F2", 1.0)
+    drain(system, "SCARCE")
 
     # -- AE6: the only guard is false and the set declares no default
     system.add_component(name="GAP", cls="Uncovered")
     system.connect_flow(source="SW_OFF", target="GAP", flow_name="F4")
     feed(system, "GAP", "F1", 5.0)
+    drain(system, "GAP")
 
     # -- A guard on a discrete flow, which drops at SWITCH_DATE
     system.add_component(name="FLIP", cls="Unit")
@@ -293,6 +328,7 @@ def build_guard_system():
     feed(system, "FLIP", "F1", 12.0)
     feed(system, "FLIP", "F3", 3.0)
     feed(system, "FLIP", "F2", 1.0)
+    drain(system, "FLIP")
     system.comp["SW_FLIP"].add_delay_failure_mode(
         name="flip",
         failure_time=SWITCH_DATE,
@@ -305,10 +341,12 @@ def build_guard_system():
     system.add_component(name="RAMPED", cls="Unit")
     system.connect_flow(source="SW_ON", target="RAMPED", flow_name="F4")
     system.connect_flow(source="RAMP", target="RAMPED", flow_name="F1")
+    drain(system, "RAMPED")
 
     # -- A rule set carrying no guard: nothing is compiled for it
     system.add_component(name="PLAIN", cls="Plain")
     feed(system, "PLAIN", "F1", 4.0)
+    drain(system, "PLAIN")
 
     add_clock(system.comp["SW_ON"], HORIZON)
 

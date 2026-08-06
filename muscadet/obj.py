@@ -1612,6 +1612,7 @@ class ObjFlow(cod3s.PycComponent):
     evaluate_demand = evaluation.evaluate_demand
     get_demand_scale = evaluation.get_demand_scale
     get_output_demand = evaluation.get_output_demand
+    output_constrains_demand = evaluation.output_constrains_demand
     apply_demand = evaluation.apply_demand
     get_input_required_demand = evaluation.get_input_required_demand
 

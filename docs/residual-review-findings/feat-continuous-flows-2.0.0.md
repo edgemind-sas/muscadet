@@ -332,6 +332,157 @@ condition, the refused keywords). No pre-existing test file was modified.
 
 ---
 
+## Silent wrongness, promoted out of "known limitations"
+
+Both entries below were recorded rather than fixed at the time. They share the
+property this branch has been bitten by twice: neither produces an error, both
+produce a **quietly wrong number**. They were closed for that reason.
+
+### R-10. An unconnected continuous output made a component demand without bound (P2, correctness) — FIXED
+
+*Fixed by dropping it from the maximum, not by forbidding it.* An output
+nothing is connected to is asked for nothing, and
+`FlowContinuousOut.get_demand_bound` reports that absence as `inf` — "nobody is
+throttling me". `get_demand_scale` fed that straight into a **maximum** over the
+active rule's `prod` coefficients, so one unwired output out-voted every
+connected one and the component claimed its whole upstream supply.
+
+Reproduced: a source able to supply 10, feeding a transformer whose `good`
+output is consumed at 5 and whose `vent` output is unwired, alongside a rival
+consumer also asking for 5. The transformer published `inf` upstream, took
+6.67 of the 10 under the proportional policy and left the rival — which asked
+for exactly what it needed — short at 3.33. It now publishes 5 and the two get
+5 each.
+
+The filter is `ObjFlow.output_constrains_demand` (in `muscadet/evaluation.py`,
+bound in `obj.py`), and it is **structural**: it asks whether anything can ask
+this output for a quantity, never what the demand's value is. That distinction
+is the whole design, and it keeps three cases apart:
+
+- **no connection** — dropped. A deliberately unwired output is a legitimate
+  model (a vent), so it is neither refused nor allowed to demand;
+- **connected, demanding zero** — kept, at scale zero. "Nobody is asking" and
+  "somebody is asking for nothing" are different models;
+- **an `inf` published BY a connected consumer** — kept, and still unbounded: a
+  capacity claiming its fill rate (R36) means "deliver whatever you can", and
+  reading the value instead of the wiring would have silently thrown that away.
+
+A **discrete** output named in a `prod` map is dropped on the same grounds: a
+boolean production is not a quantity and carries no demand channel. That was
+the same defect on a second path, previously untested.
+
+**The behavioural consequence, stated plainly.** A rule whose outputs are *all*
+unconnected now reaches the `not scales` branch and runs at its **nominal**
+scale — claiming exactly its declared `cons` coefficients — where it previously
+ran at whatever its supply allowed. That is what closes the limitation for a
+single-output transformer, and it is not free: nine branch-added tests
+depended on the old semantics, in models whose outputs were left unwired
+because the test only ever read `var_fed`.
+
+None of them was weakened. Eight were corrected by declaring the downstream
+they had been getting implicitly — a consumer with a large demand, which
+restores byte-identical behaviour and states out loud what an acceptance
+example about a *delivered* quantity ought to say
+(`tests/test_rules_guards_001.py` AE1–AE6 and `PLAIN`,
+`tests/test_rules_eval_001.py` `BOTTLER`, `tests/test_derating_001.py`
+`ZEROED`, `tests/test_out_rate_native_mode_001.py` `ZEROED`,
+`tests/test_discrete_continuous_interop.py` `MIXED` on both entry points). The
+ninth,
+`tests/test_demand_allocation_001.py::test_a_catalyst_coefficient_demands_nothing_and_publishes_no_nan`,
+**encoded the defect**: its docstring opened with "the rule's output is
+connected to nobody, so nothing throttles it and the scale it would run at is
+unbounded" and it asserted `math.isinf(demand_fuel)`. Its subject — a `cons`
+coefficient of 0 claiming a real 0 rather than `0 × inf` = NaN — is untouched
+and still asserted; the three assertions that were consequences of the unbounded
+premise were corrected to the fixed values, and the `0 × inf` arithmetic itself
+was **moved, not dropped**, to a scenario where it survives R-10: a connected
+consumer publishing an unbounded demand.
+
+**Not closed on the rule-LESS path, deliberately.** `evaluate_demand`'s other
+branch — the R31 identity transfer of a component declaring no rule — carries
+an output's demand across unchanged, unbounded one included, and was left
+alone. Measured: a pass-through pipe whose output is unwired, sharing a source
+of 10 with a consumer asking for 5, still publishes `inf` and takes 6.67 to the
+consumer's 3.33 — the same shape as the fixed case. The fix does not transpose,
+because a transfer has no declared coefficients and therefore no nominal scale
+to fall back to: what a rule-less pipe should ask for when nothing consumes it
+is 0, or what arrives, or unbounded, and those are three different physical
+statements. Choosing one is a design decision, not a mechanical correction, so
+it is recorded below rather than invented here.
+
+Regression tests in `tests/test_unconnected_output_demand_001.py` (10 tests, 6
+of which fail against `dabc2b1`). Documented in the README beside the
+transformation-rule key points.
+
+### R-11. A component added after the pre-run step ran inert, with no diagnostic (P2, correctness) — FIXED, as a refusal
+
+*Established experimentally that it cannot be fixed any other way, then
+refused.* The pre-run step derives the equation order from the whole connection
+graph and registers the sweep equations; `_prerun_done` makes it one-shot. A
+continuous component added afterwards was never registered.
+
+Reproduced: `SRC -> MID -> SNK` run interactively, then a converter branch
+`MID -> CONV -> SNK2` added and the session restarted. Nothing is registered for
+`CONV` or `SNK2`, `CONV` produces **0.0** against 3.0 for the same model built in
+one go, and `MID` demands **4.0** upstream instead of 10.0 — so the component
+that was already there produces less too. The run completes normally. Worse, a
+continuous **cycle** closed after the first run is not refused either: the R30
+check lives in the same one-shot step, and the same graph that raises
+`ContinuousFlowCycleError: MID -> MID2 -> LOOP -> MID closes a loop` when the
+check is allowed to run simulates happily when it is not.
+
+**Why a refusal and not an incremental pre-run.** Measured against the engine,
+not read off the documentation:
+
+1. `addEquationMethod` on a `(component, method)` the manager already holds
+   **raises**: `PycException: [E]L'ODE SNK1.compute_demand appartient déjà au
+   PDMP muscadet_pdmp`. `IPDMPManager` exposes no removal counterpart
+   (`addAlgebraicVariable`, `addEquationMethod`, `addExplicitVariable`,
+   `addODEVariable`, `addWatchedTransition`, … and nothing that removes). A
+   manager's equation set is append-only.
+2. Registering *new* equations after a run **is** accepted — verified — but only
+   at orders above every one already taken, since the taken ones cannot be
+   moved. The order is derived globally from the graph, so a late component
+   does not merely add equations: it renumbers existing ones, and those are
+   exactly the registrations that can no longer be redone.
+3. Appending therefore places a demand equation above production equations,
+   breaking the band separation `get_output_request` documents and relies on
+   ("the WHOLE demand band below the WHOLE production band … every demand in
+   the system is settled before the first production equation runs"). Verified:
+   with the branch appended by hand, `MID2.compute_demand` landed at order 6
+   while `MID.compute_production` held 4.
+
+So the equivalence the acceptance bar asked for — a late-built model behaving
+identically to the same system built in one go — is not reachable, and a
+half-ordered registration is worse than none. `System.prerun` now calls
+`check_model_unchanged_since_prerun`, which compares `model_signature()` — the
+graph nodes and continuous connections, read back from the engine — against the
+one recorded when the step ran, and raises `ModelChangedAfterPrerunError`
+naming what changed:
+
+```
+System Plant: the continuous-flow model changed after the pre-run step
+(components added since: CONV, SNK2). That step runs once, at the start of the
+first run: ... Assemble the whole system -- every component and every
+connection -- before the first simulate() / isimu_start()
+```
+
+It fires on **both** entry points, since both go through `prerun`, and it also
+catches a *connection* added between two components that both already existed —
+a new edge renumbers the order exactly as a new node does. Three things are
+deliberately untouched: an unchanged restart is still the silent no-op it always
+was (`prerun_count` stays 1), a purely discrete system has an empty signature on
+both sides and keeps growing between runs exactly as in 1.x, and a first pre-run
+that raised — on a cycle (R30), on a rate comparison loop — records no
+signature, so the check stands aside rather than reporting a spurious change on
+top of the real defect.
+
+Regression tests in `tests/test_prerun_late_component_001.py` (10 tests, 6 of
+which fail against `dabc2b1`). Documented in the README under "Assemble the
+whole system before the first run".
+
+---
+
 ## Test coverage gaps worth closing
 
 - No assertion that a `shares` output with a connected consumer absent from the share map behaves as intended — the configuration `check_allocation` cannot validate, because it runs before any consumer is connected.
@@ -340,14 +491,17 @@ condition, the refused keywords). No pre-existing test file was modified.
 - ~~No test asserts the five shipped components reject an unknown declaration key (R-3).~~ Closed with R-3.
 - ~~No test declares a standalone failure mode against a component carrying continuous outputs (R-4).~~ Closed with R-4.
 - ~~No parity test over the two operand-shape validators (R-5).~~ Closed with R-5.
+- ~~No test wires a rule with one connected and one unconnected output, so the unbounded-demand path is unasserted (R-10).~~ Closed with R-10.
+- ~~No test adds a continuous component after a first run cycle, so the inert-component path is unasserted (R-11).~~ Closed with R-11.
 - The multi-flow capacity's per-constituent bound added in `e617c41` has no watched transition, so a depleted constituent overshoots by one integration step (−0.005 observed against −25.0 before the fix). Acceptable, but the exact-crossing guarantee that holds for the volume bound does not hold per constituent.
 
 ## Known limitations, recorded rather than fixed
 
 - An input's demand is computed from the active rule's declared coefficients, so a component capped by a scarce input still claims its nominal demand on the others and over-claims a shared upstream supply. Documented in the plan's Scope Boundaries; correcting it needs a second demand pass or an iterative solve.
-- `get_demand_scale` takes the maximum over the active rule's produced coefficients, so a transformer with one unconnected output demands without bound upstream. An unwired output — a vent, or a model still being assembled — silently maximises consumption.
 - `accept_limit` is read during the demand sweep but the outflow it reads is written during the production sweep, so a full capacity throttles on the previous evaluation's figure. Inherent to the two-sweep design and absorbed by repeated evaluation, but it is a read before the sweep that writes it.
 - The custom allocation extension point never clamps a proposed split's total to what is available; a rule that over-proposes creates quantity.
-- The pre-run step is one-shot per engine system, so components added after the first run cycle never have their sweep equations registered and run inert, with no diagnostic.
+- **(R-10, open)** The rule-**less** identity transfer (R31) still carries an unconnected output's unbounded demand across unchanged, so a pass-through pipe whose output is unwired still claims without bound and still out-draws a rival on a shared supply (measured: 6.67 against 3.33 out of 10). `get_demand_scale`'s filter does not transpose — a transfer has no declared coefficients, hence no nominal scale to fall back to — and picking among "0", "what arrives" and "unbounded" is a design decision about what a rule-less pipe means, not a mechanical correction. **This is the one part of R-10 left open, and it needs a decision.**
+- **(R-10)** A rule whose outputs are **all** unconnected now runs at its nominal scale: it claims exactly its declared `cons` coefficients and no longer draws an excess supply. That is the price of closing the single-output case of the limitation, and it is a real semantic change — a model relying on "an unwired output takes whatever you make" must now say so, by wiring a consumer and declaring its demand. A consequence rather than a defect: the alternative, keeping the unbounded fallback when no output constrains, would have left a one-output transformer maximising consumption, which is the limitation itself.
+- **(R-11)** A system carrying continuous flows can no longer be extended between runs at all — the refusal covers a late connection as well as a late component, and there is no opt-out. Extending a model means building a fresh `System`. A purely discrete system is unaffected. The check costs one graph read per `simulate()` / `isimu_start()`, which an interactive session that starts and stops repeatedly pays each time.
 - **(R-9)** A standalone failure mode declared against a component that does not exist yet now raises at construction (`Mode 'X': target component 'Y' not found in the system. Create the targets before the mode.`) instead of building a parameter-less shell. Inherited from the engine's fail-fast resolution, and a fix rather than a regression — but a model that declared its modes before their targets *and* left every occurrence rate at zero used to build silently and no longer does.
 - **(R-9)** `behaviour`, `failure_effects_trans` and `repair_effects_trans` are refused by `ObjFailureMode*`. The engine routes all three through its exact-variable-name effect resolution, which a muscadet flow pattern never matches, so accepting them would build a silently effect-less mode. Supporting them would mean giving `ObjMode2S` an overridable effect-resolution hook for the external and trans-based paths — the same seam the level effects found in `_build_fm_automaton`, which those two paths do not go through. `cod3s.ObjFM*` covers them today.

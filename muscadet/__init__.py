@@ -1,5 +1,5 @@
 from .obj import ObjFlow
-from .system import System
+from .system import ModelChangedAfterPrerunError, System
 from .flow import (
     FlowDiscrete,
     FlowDiscreteIn,

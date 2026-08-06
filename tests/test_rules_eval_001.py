@@ -52,12 +52,22 @@ class RateSource(muscadet.ObjFlow):
 
 
 class RateSink(muscadet.ObjFlow):
-    """A continuous consumer, declared so an output can be wired to something."""
+    """A continuous consumer, declared so an output can be wired to something.
+
+    ``demand`` is what it asks for on every flow it takes. A sink declared
+    with a large one is a downstream that takes whatever is produced: before
+    R-10 an unwired output said that implicitly by demanding without bound,
+    and since R-10 an unwired output constrains nothing and the producing rule
+    falls back to its nominal scale, so a scenario about the scale an ABUNDANT
+    input sets has to state its downstream.
+    """
 
     def add_flows(self, **kwargs):
         super().add_flows(**kwargs)
         for name in kwargs.get("takes", []):
-            self.add_flow_continuous_in(name=name)
+            self.add_flow_continuous_in(
+                name=name, var_demand_default=kwargs.get("demand", 0.0)
+            )
 
 
 class Electrolysis(muscadet.ObjFlow):
@@ -278,6 +288,11 @@ def build_production_system():
     # -- Production into a capacity the output flow then draws from (KTD13)
     system.add_component(name="BOTTLER", cls="Bottler")
     feed(system, "BOTTLER", "H2O", 6.0)
+    # The downstream that takes whatever the bottler makes: the scenario is
+    # about 6 of H2O making 3 of H2, so the rule must be free to run above its
+    # nominal scale (R-10).
+    system.add_component(name="BOTTLE_SINK", cls="RateSink", takes=["H2"], demand=1e3)
+    system.connect_flow(source="BOTTLER", target="BOTTLE_SINK", flow_name="H2")
 
     # -- A rule with an empty cons map
     system.add_component(name="BOILER", cls="Boiler")

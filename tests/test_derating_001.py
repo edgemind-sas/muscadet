@@ -170,6 +170,14 @@ def build_system():
     system.add_component(name="SUPPLY", cls="DeratingSource", flow="q", rate=7.0)
     system.add_component(name="ZEROED", cls="DeratingConverter")
     system.connect_flow(source="SUPPLY", target="ZEROED", flow_name="q")
+    # The downstream that takes everything ZEROED can make, declared the way
+    # PLANT's already is. It used to be left implicit: an unwired output
+    # demanded without bound and the converter drew its whole supply. Since
+    # R-10 an unwired output constrains nothing and the rule falls back to its
+    # nominal scale, so "the input keeps arriving" is stated rather than
+    # inferred from the absence of a consumer.
+    system.add_component(name="ZEROED_SINK", cls="DeratingSink", flow="X", demand=1e3)
+    system.connect_flow(source="ZEROED", target="ZEROED_SINK", flow_name="X")
     system.comp["ZEROED"].add_delay_failure_mode(
         name="cut",
         failure_time=1.0,

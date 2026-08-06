@@ -90,6 +90,21 @@ class OutRateSink(muscadet.ObjFlow):
         self.add_flow_continuous_in(name="H2", var_demand_default=SINK_DEMAND)
 
 
+class OutRateDrain(muscadet.ObjFlow):
+    """The converter's downstream, asking for more than it can ever be served.
+
+    Declared rather than left out. An unwired output used to demand without
+    bound, so the converter drew its whole supply with no consumer at all;
+    since R-10 an unwired output constrains nothing and the rule falls back to
+    its nominal scale, so "the input keeps arriving" is stated here instead of
+    inferred from the absence of a consumer.
+    """
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        self.add_flow_continuous_in(name="X", var_demand_default=SINK_DEMAND)
+
+
 class OutRateSource(muscadet.ObjFlow):
     """Feeds the converter, and is never itself derated."""
 
@@ -182,6 +197,8 @@ def build_system():
     system.add_component(name="SUPPLY", cls="OutRateSource")
     system.add_component(name="ZEROED", cls="OutRateConverter")
     system.connect_flow(source="SUPPLY", target="ZEROED", flow_name="q")
+    system.add_component(name="ZEROED_DRAIN", cls="OutRateDrain")
+    system.connect_flow(source="ZEROED", target="ZEROED_DRAIN", flow_name="X")
     system.add_component(
         cls="ObjMode2S",
         mode_name="cut",

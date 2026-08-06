@@ -386,7 +386,10 @@ def build_allocation_system():
         system.connect_flow(source=prefix, target=f"{prefix}_C", flow_name="x")
 
     # -- A catalyst coefficient of 0, on a rule whose output NOBODY is
-    # -- connected to: the scale is unbounded, and 0 x inf is NaN
+    # -- connected to. The unwired output no longer makes the scale unbounded
+    # -- (R-10), so the rule runs at its nominal scale here; the 0 x inf = NaN
+    # -- trap is exercised against a CONNECTED consumer publishing an
+    # -- unbounded demand, in tests/test_unconnected_output_demand_001.py.
     system.add_component(name="CAT_SRC", cls="AllocSource", flow="cat", rate=10.0)
     system.add_component(name="CAT_FUEL", cls="AllocSource", flow="fuel", rate=10.0)
     system.add_component(name="CATU", cls="AllocCatalysed")
@@ -976,12 +979,22 @@ def test_the_mapping_uses_declared_coefficients_even_when_an_input_is_scarce(the
 def test_a_catalyst_coefficient_demands_nothing_and_publishes_no_nan(the_run):
     """A ``cons`` coefficient of 0 claims 0, whatever the scale of the rule.
 
-    The rule's output is connected to nobody, so nothing throttles it and the
-    scale it would run at is unbounded. Multiplying the coefficient by it
-    without a guard gives ``0 * inf`` -- NaN -- and publishes that upstream as
-    the catalyst's demand, where it poisons every split it reaches. The two
-    halves of one rule must agree: ``rule_scale`` already skips a non-positive
-    coefficient, and so must the demand.
+    The two halves of one rule must agree: ``rule_scale`` already skips a
+    non-positive coefficient, and so must the demand. Multiplying the
+    coefficient by an unbounded scale without that guard gives ``0 * inf`` --
+    NaN -- and publishes it upstream as the catalyst's demand, where it
+    poisons every split it reaches.
+
+    This unit's output is connected to nobody. That used to be what made the
+    scale unbounded, and the assertions below were written against it; since
+    R-10 an unwired output constrains nothing instead of demanding without
+    bound, so the rule runs at its nominal scale. The values changed, the
+    property did not: what is asserted here is still that the catalyst claims
+    a real 0 and that the rule is not limited by it.
+
+    The ``0 * inf`` arithmetic itself is exercised where it survives R-10 --
+    against a CONNECTED consumer publishing an unbounded demand -- in
+    ``tests/test_unconnected_output_demand_001.py``.
     """
     catalyst = the_run["catalyst"]
 
@@ -990,13 +1003,16 @@ def test_a_catalyst_coefficient_demands_nothing_and_publishes_no_nan(the_run):
     assert catalyst["demand_cat"] == catalyst["demand_cat"], "NaN published upstream"
     assert catalyst["delivered_cat"] == pytest.approx(0.0)
 
-    # ... while the flow the rule DOES consume still claims without bound
-    assert math.isinf(catalyst["demand_fuel"])
+    # ... while the flow the rule DOES consume claims what the nominal scale
+    # needs of it. It is bounded because the only output is unwired (R-10),
+    # not because the catalyst limited anything.
+    assert not math.isinf(catalyst["demand_fuel"])
+    assert catalyst["demand_fuel"] == pytest.approx(1.0)
 
     # ... and the catalyst limits the rule no more than it is drawn down: the
-    # unit still burns everything its fuel allows.
-    assert catalyst["delivered_fuel"] == pytest.approx(10.0)
-    assert catalyst["burn"] == pytest.approx(10.0)
+    # unit burns everything it asked for, none of it withheld by the catalyst.
+    assert catalyst["delivered_fuel"] == pytest.approx(1.0)
+    assert catalyst["burn"] == pytest.approx(1.0)
 
 
 # ----------------------------------------------------------------------

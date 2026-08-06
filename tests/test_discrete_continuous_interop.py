@@ -269,6 +269,21 @@ class IopMixed(muscadet.ObjFlow):
         )
 
 
+class IopDrain(muscadet.ObjFlow):
+    """``MIXED``'s downstream, asking for more than it can ever be served.
+
+    Declared rather than left out. An unwired output used to demand without
+    bound, so ``MIXED`` drew the whole of ``F1`` with no consumer at all;
+    since R-10 an unwired output constrains nothing and the rule falls back to
+    its nominal scale, so "F1 is delivered at 12" is stated here instead of
+    inferred from the absence of a consumer.
+    """
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        self.add_flow_continuous_in(name="X", var_demand_default=OBSERVER_DEMAND)
+
+
 class IopDiscreteOnly(muscadet.ObjFlow):
     """A purely discrete component, declared the way it always was.
 
@@ -410,6 +425,8 @@ def run_batch_scenario(obs):
     system.connect_flow(source="SW", target="MIXED", flow_name="cmd")
     feed(system, "MIXED", "F1", NOMINAL_SUPPLY)
     feed(system, "MIXED", "temp", HOT_SUPPLY)
+    system.add_component(name="MIXED_DRAIN", cls="IopDrain")
+    system.connect_flow(source="MIXED", target="MIXED_DRAIN", flow_name="X")
 
     system.simulate({"nb_runs": 1, "schedule": [{"start": 0, "end": 1, "nvalues": 2}]})
 
@@ -493,6 +510,8 @@ def build_interop_system():
     system.connect_flow(source="SW_FLIP", target="MIXED", flow_name="cmd")
     feed(system, "MIXED", "F1", NOMINAL_SUPPLY)
     feed(system, "MIXED", "temp", HOT_SUPPLY)
+    system.add_component(name="MIXED_DRAIN", cls="IopDrain")
+    system.connect_flow(source="MIXED", target="MIXED_DRAIN", flow_name="X")
     system.comp["SW_FLIP"].add_delay_failure_mode(
         name="flip",
         failure_time=SWITCH_DATE,
