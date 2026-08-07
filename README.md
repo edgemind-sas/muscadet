@@ -699,7 +699,7 @@ my_plant.comp["B"].flows_in["water"].var_demand.value()        # published upstr
 my_plant.comp["P"].flows_out["water"].get_var_demand_value()   # demand read back
 ```
 
-A component declaring continuous flows but **no** transformation rule transfers each input onto the output of the same name. A transfer carries the downstream demand across unchanged — including an unbounded one a real consumer published. An output **nothing is connected to** asks for nothing, so a pass-through whose far end is unwired transfers nothing and claims nothing upstream: the same rule that governs a rule's outputs, below, so the two paths agree. A pipe standing for a discharge to atmosphere is modelled by declaring the discharge as a consumer with its own demand, which states the intent instead of resting it on an absent connection.
+A component declaring continuous flows but **no** transformation rule transfers each input onto the output of the same name. A transfer carries the downstream demand across unchanged — including an unbounded one a real consumer published. An output **nothing is connected to** asks for nothing, so a pass-through whose far end is unwired transfers nothing and claims nothing upstream: the same rule that governs a rule's outputs, below, so the two paths agree. A pipe standing for a discharge to atmosphere is modelled by declaring the discharge as a consumer with its own demand, which states the intent instead of resting it on an absent connection. A **capacity** behind that output is the exception both paths make: the volume claims its `fill_rate` for itself, so a two-sided tank at the end of a chain fills instead of asking for nothing.
 
 ### Transformation rules
 
@@ -736,7 +736,7 @@ Key points:
 - A rule set is declared **on the component**, not on an output flow. A reaction with correlated outputs cannot be stated one output at a time: declaring `prod={"x": 5, "y": 2}` keeps `x` and `y` in that proportion whatever the scale.
 - `cons` names resolve against the component's **input** flows, `prod` names against its **output** flows. A coefficient left out of a map defaults to `1`.
 - The **scarcest input sets the scale**. With the recipe above, water delivered at 10 and sugar at 2 produce 2 of syrup, not 5: sugar is the limiting reagent.
-- **What the outputs are asked for sets how much is claimed upstream.** A component claims from its inputs only what its outputs are actually asked for, mapped back through the rule's declared coefficients. An output **nothing is connected to** asks for nothing, so it constrains nothing: a deliberately unwired output — a vent, a discharge, a branch not built yet — is a legitimate model and neither raises nor makes the component draw more. A consumer connected and asking for **zero** is a different statement and does constrain, at scale zero. When *no* output of a rule constrains it — every one of them unwired — the rule runs at its **nominal** scale, claiming exactly its declared `cons` coefficients. Wire a consumer, and declare what it wants, whenever a scenario depends on a rule running above nominal.
+- **What the outputs are asked for sets how much is claimed upstream.** A component claims from its inputs only what its outputs are actually asked for, mapped back through the rule's declared coefficients. An output **nothing is connected to** asks for nothing, so it constrains nothing: a deliberately unwired output — a vent, a discharge, a branch not built yet — is a legitimate model and neither raises nor makes the component draw more. A consumer connected and asking for **zero** is a different statement and does constrain, at scale zero. When *no* output of a rule constrains it — every one of them unwired — the rule runs at its **nominal** scale, claiming exactly its declared `cons` coefficients. Wire a consumer, and declare what it wants, whenever a scenario depends on a rule running above nominal. The one thing that still asks with nobody connected is a **capacity** sitting behind the output: its `fill_rate` is a claim the volume makes for itself, so a buffered output carries it whether or not anything is wired to it — and what is produced into that volume stays there instead of leaving through a connection that does not exist.
 - A rule declared **without a guard** is the *default rule* of its set and applies when no other rule matches. A set may declare at most one; declaring two is refused at declaration time.
 - A set with no default rule and no guard holding produces **zero** — it does not fall back on whichever rule it happens to carry.
 - **At most one guard may hold at a time.** Two holding together is a model error, raised at evaluation and naming both rules.
@@ -807,13 +807,14 @@ The parameters are:
 - `flow` / `flows` — the held flows. `flow` is the single-flow short form; `flows` takes a list of names, or of mappings carrying `name` and `weight`.
 - `capacity` — the volume the held flows **share**, a single strictly positive scalar.
 - `side` — `"in"` places the whole capacity upstream of the component's rules, `"out"` downstream. Left out, it is resolved from the held flows and defaults to `"in"` for a flow carried by both sides. Every held flow must resolve to the same side.
-- `fill_rate` — what the volume claims **for itself** while it has room, on top of the demand crossing it. The default `0` is a pure pass-through buffer: it asks for exactly what passes through it, and therefore never stocks up. `math.inf` means "whatever the producer can deliver" — a tank connected to a pump fills at the pump's rate.
+- `fill_rate` — what the volume claims **for itself** while it has room, on top of the demand crossing it. The default `0` is a pure pass-through buffer: it asks for exactly what passes through it, and therefore never stocks up. `math.inf` means "whatever the producer can deliver" — a tank connected to a pump fills at the pump's rate. The claim is the volume's own, so it does **not** depend on anything being connected downstream: a tank at the end of a chain, its own output wired to nothing, fills at its producer's rate exactly as one in the middle of it does.
 - `content_init` — the initial raw quantity per held flow; an omitted flow starts empty.
 
 The bounds are what a capacity is for, and they are watched by the solver so they are reached exactly:
 
 - a **full** capacity accepts only what leaves it, so the demand it publishes upstream collapses and its producer delivers less;
-- an **empty** one serves only what currently transits through it.
+- an **empty** one serves only what currently transits through it;
+- a **stocked** one answers a consumer asking without bound out of its stock — "deliver whatever you can" is what it holds, not what it produces — and never serves more than what it holds plus what transits it.
 
 **Weights and composition.** Several constituents may share one volume. Each carries a `weight`, the volume one unit of it occupies:
 

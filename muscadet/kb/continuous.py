@@ -394,7 +394,11 @@ class CapacityContinuous(ContinuousComponent):
       what is asked of it downstream, so it smooths a shortage rather than
       stocking up -- unless a ``fill_rate`` is declared, in which case it also
       claims that rate for itself and accumulates whatever its producer delivers
-      beyond what its consumers draw, until it is full (R36).
+      beyond what its consumers draw, until it is full (R36). The claim does not
+      depend on anything being wired downstream, so this is also the shape of a
+      tank at the END of a chain: with its own output connected to nothing, the
+      claim is the whole of what it asks for and what arrives stays in the
+      volume.
     * ``"in"`` -- an **accumulator**. Inputs only: it claims a declared
       ``demand`` of its own rather than one mapped from a downstream, and once
       at its volume it accepts only what leaves it, so the demand it publishes

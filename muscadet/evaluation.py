@@ -44,6 +44,14 @@ from .rules import (
     rule_scale,
 )
 
+#: The demand an output NOTHING draws on faces, before its own capacity claims
+#: on it. The counterpart of :data:`~muscadet.flow_continuous.UNBOUNDED`, and
+#: deliberately a different statement: "nothing asks" is not "asks for
+#: everything". Only reached when a capacity sits behind the output, which is
+#: what makes the volume -- rather than a modelled sink downstream -- the thing
+#: production meets (R36).
+NO_DEMAND = 0.0
+
 
 def compute_demand(comp):
     """
@@ -102,6 +110,11 @@ def evaluate_demand(comp):
     the vent as a consumer with its own demand, so the intent is visible
     instead of resting on a connection that is absent.
 
+    An output **capacity** is the one thing that still asks with nobody
+    connected: it claims a fill rate for the volume itself
+    (:meth:`output_capacity_claims_demand`, R36), which is what makes a tank
+    at the end of a chain fill instead of asking for nothing.
+
     An input no rule and no transfer covers is a pure consumer's input: it
     claims the demand it was DECLARED with, ``var_demand_default``.
 
@@ -153,7 +166,7 @@ def evaluate_demand(comp):
                 accumulate(flow_name, coefficient * scale)
     else:
         for flow_name in comp.get_transferable_flows():
-            if not comp.output_constrains_demand(flow_name):
+            if not comp.output_carries_demand(flow_name):
                 # Accumulated as an explicit zero rather than skipped: a name
                 # left out of ``demands`` falls through to the
                 # ``var_demand_default`` of a pure consumer's input below,
@@ -198,6 +211,12 @@ def get_demand_scale(comp, rule):
     producing only into unwired outputs -- falls back to the nominal scale,
     exactly as a rule producing nothing always did.
 
+    An output **capacity** takes part whether or not the output is wired: it
+    is not the output that constrains there but the volume behind it, which
+    claims a fill rate for itself and is throttled by its own accept bound
+    (:meth:`output_capacity_claims_demand`). The two are added by
+    :meth:`get_output_demand` and enter the maximum as one figure.
+
     Parameters
     ----------
     rule : muscadet.rules.Rule
@@ -220,7 +239,7 @@ def get_demand_scale(comp, rule):
         # go on being read exactly as it was before this filter existed.
         demand = comp.get_output_demand(flow_name)
 
-        if not comp.output_constrains_demand(flow_name):
+        if not comp.output_carries_demand(flow_name):
             continue
 
         scales.append(demand / coefficient)
@@ -268,14 +287,137 @@ def output_constrains_demand(comp, flow_name):
     return comp.continuous_flow_is_connected(flow, "out")
 
 
+def output_capacity_claims_demand(comp, flow_name):
+    """
+    Tells whether the VOLUME behind an unasked output still asks for something.
+
+    The second, additive source of demand an output can carry, and the one
+    R-10 says nothing about: R-10 governs whether an **output** constrains a
+    rule -- it does not, with nobody connected -- while a fill claim belongs
+    to the capacity, which is entitled to fill "for itself, over and above
+    the demand it already carries" (R36) whether or not anything is wired
+    downstream of it.
+
+    Without this, a two-sided capacity at the end of a chain was a silent
+    dead model: its own output being connected to nothing,
+    :meth:`evaluate_demand` never asked it for a demand, the fill claim was
+    never consulted at all, the tank asked for nothing, its producer produced
+    nothing, and the whole plant read zero with the ``fill_rate`` accepted and
+    inert.
+
+    Structural, exactly like :meth:`output_constrains_demand`: it asks
+    whether a capacity is DECLARED on this output's side and never reads what
+    the claim is worth, so an unbounded fill rate keeps travelling as the
+    "deliver whatever you can" it means. A capacity claiming zero -- the
+    default, a pure pass-through buffer -- therefore still carries a demand
+    of zero rather than dropping out of the sizing, which is the same
+    distinction R-10 draws between "nobody is asking" and "somebody is asking
+    for nothing".
+
+    Restricted to an output NOTHING is connected to: with a consumer wired,
+    :meth:`output_constrains_demand` already covers the output and
+    :meth:`get_output_demand` already adds the capacity's claim on top.
+
+    Parameters
+    ----------
+    flow_name : str
+        Name of an output flow of the component.
+
+    Returns
+    -------
+    bool
+    """
+    flow = comp.flows_out.get(flow_name)
+
+    if not isinstance(flow, FlowContinuousOut):
+        return False
+
+    if comp.continuous_flow_is_connected(flow, "out"):
+        return False
+
+    return comp.get_capacity_of_flow(flow_name, "out") is not None
+
+
+def output_carries_demand(comp, flow_name):
+    """
+    Tells whether an output takes part in sizing what the component asks for.
+
+    The union of the two ways an output can carry a demand back into the
+    component, and the single predicate both sizing paths consult -- the rule
+    scale of :meth:`get_demand_scale` and the rule-less transfer of
+    :meth:`evaluate_demand` -- so the two cannot drift apart on what an
+    unwired output means:
+
+    - something downstream can ask it for a quantity
+      (:meth:`output_constrains_demand`, R-10);
+    - a capacity of its own sits behind it and claims for the volume
+      (:meth:`output_capacity_claims_demand`, R36).
+
+    Both are structural and neither reads a demand's value.
+
+    Parameters
+    ----------
+    flow_name : str
+        Name of an output flow of the component.
+
+    Returns
+    -------
+    bool
+    """
+    if comp.output_constrains_demand(flow_name):
+        return True
+
+    return comp.output_capacity_claims_demand(flow_name)
+
+
+def get_output_consumer_demand(comp, flow):
+    """
+    Returns what the CONSUMERS of a continuous output ask it for.
+
+    The demand before any capacity claim, and the one place the three
+    structurally different answers are written down:
+
+    - **connected** -- the sum the consumers publish, possibly
+      :data:`~muscadet.flow_continuous.UNBOUNDED` when one of them asks
+      without bound;
+    - **unconnected, with a capacity behind it** -- :data:`NO_DEMAND`.
+      Nothing draws the volume onward, so what is produced stays in it. This
+      is what stops a buffered output venting a tank into a connection that
+      does not exist, and it is what makes the fill claim of R36 the whole of
+      the demand such an output carries;
+    - **unconnected, with no capacity** -- ``UNBOUNDED``, unchanged: an
+      output nobody is connected to is a modelled sink that takes whatever is
+      produced (R-10), and a vent still discharges what the reaction makes.
+
+    Parameters
+    ----------
+    flow : muscadet.flow_continuous.FlowContinuousOut
+        The output being sized.
+
+    Returns
+    -------
+    float
+    """
+    if comp.continuous_flow_is_connected(flow, "out"):
+        return flow.get_demand_bound()
+
+    if comp.get_capacity_of_flow(flow.name, "out") is not None:
+        return NO_DEMAND
+
+    return UNBOUNDED
+
+
 def get_output_demand(comp, flow_name):
     """
     Returns the demand an output carries back into the component.
 
     Two bounds compose here:
 
-    - what the consumers ask for, :data:`~muscadet.flow_continuous.UNBOUNDED`
-      when none is connected;
+    - what the consumers ask for
+      (:meth:`get_output_consumer_demand`): :data:`NO_DEMAND` when none is
+      connected and a capacity sits behind the output,
+      :data:`~muscadet.flow_continuous.UNBOUNDED` when none is connected and
+      none does;
     - what an interposed output capacity makes of it
       (:meth:`~muscadet.capacity.Capacity.demand_claim`): while it has room
       it adds its own fill claim, so the rules run beyond what the consumers
@@ -303,7 +445,7 @@ def get_output_demand(comp, flow_name):
     if not isinstance(flow, FlowContinuousOut):
         return UNBOUNDED
 
-    demand = flow.get_demand_bound()
+    demand = comp.get_output_consumer_demand(flow)
 
     # Kept for the production sweep of this same evaluation, which needs
     # the bound BEFORE the capacity claim below (see get_output_request).
@@ -892,13 +1034,23 @@ def get_output_request(comp, flow, rate):
     """
     Returns what an output is asked to deliver this step.
 
-    The demand published by the consumers, and the produced ``rate`` when
-    nothing is connected: an output nobody asks anything of delivers what it
-    produces, exactly as it did before demand existed. A capacity behind it
-    does not change that -- an unconnected output is a modelled sink, so
-    what a buffered one produces travels straight through the volume rather
-    than accumulating in it. A tank stocks up when what DRAWS on it asks for
-    less than what arrives, which is what a fill claim arranges (R36).
+    The demand published by the consumers, and -- when nothing is connected
+    -- what :meth:`get_output_consumer_demand` makes of that: the produced
+    ``rate`` for a plain output, which is the modelled sink of R-10
+    delivering what it produces exactly as it did before demand existed, and
+    :data:`NO_DEMAND` for one a capacity sits behind, so that what a rule (or
+    a transfer) produced into the volume STAYS in it. An unwired output is
+    not a hole a tank drains through.
+
+    **An unbounded demand is answered from the stock.** "Deliver whatever you
+    can" is answered by a plain output with what it produces, since that is
+    all it has; a capacity has a stock as well, and answering from production
+    alone made a reservoir -- whose production is its declared default, zero
+    -- serve nothing at all to an unbounded consumer, stalling every model
+    downstream of it with no diagnostic. What a capacity can serve is
+    :meth:`~muscadet.capacity.Capacity.serve_limit`: unbounded while it holds
+    something, what currently transits once empty (R7).
+    :meth:`draw_from_capacity` is where that meets the volume actually held.
 
     Reuses the bound :meth:`get_output_demand` already read this evaluation
     rather than asking the flow again. The two readings cannot differ:
@@ -908,14 +1060,20 @@ def get_output_request(comp, flow, rate):
     settled before the first production equation runs.
 
     The fallback is not a safety net but a real case: a rule-less pure
-    source has no transferable flow, so the demand sweep never looks at its
-    output at all and there is nothing to reuse.
+    source has no transferable flow, and neither has a reservoir, so the
+    demand sweep never looks at their outputs at all and there is nothing to
+    reuse.
     """
     demand = comp._demand_bound.get(flow.name)
     if demand is None:
-        demand = flow.get_demand_bound()
+        demand = comp.get_output_consumer_demand(flow)
 
-    return rate if math.isinf(demand) else max(float(demand), 0.0)
+    if not math.isinf(demand):
+        return max(float(demand), 0.0)
+
+    capacity = comp.get_capacity_of_flow(flow.name, "out")
+
+    return rate if capacity is None else capacity.serve_limit(flow.name)
 
 
 def draw_from_capacity(comp, capacity, requests):
@@ -927,6 +1085,15 @@ def draw_from_capacity(comp, capacity, requests):
     flows is drawn at its raw-quantity composition (R35). One volume holding
     several constituents therefore cannot serve a pure one: asking for more
     of one than its share of the draw allows serves only that share.
+
+    **Conservation is enforced here**: what comes out of the stock is capped
+    at what the stock HOLDS, so a capacity never serves more than it holds
+    plus what transits it. That cap is what makes an unbounded request
+    answerable at all -- :meth:`~muscadet.capacity.Capacity.serve_limit`
+    reports a stocked capacity as unbounded, which is a statement about the
+    absence of a bound and not a quantity -- and it holds per constituent as
+    well as per volume, since :meth:`~muscadet.capacity.Capacity.split_draw`
+    apportions the capped draw at each one's raw share.
 
     Reduces exactly to "an empty capacity serves what transits through it,
     a stocked one serves what is asked for" when it holds a single flow.
@@ -945,9 +1112,10 @@ def draw_from_capacity(comp, capacity, requests):
     """
     transit = {name: capacity.get_inflow(name) for name in requests}
 
-    # What the stock is asked for, over and above what transits.
+    # What the stock is asked for, over and above what transits -- and never
+    # more than the stock holds.
     beyond = sum(max(requests[name] - transit[name], 0.0) for name in requests)
-    draw = capacity.split_draw(beyond)
+    draw = capacity.split_draw(min(beyond, capacity.total_quantity()))
 
     return {
         name: max(min(requests[name], transit[name] + draw.get(name, 0.0)), 0.0)
