@@ -951,17 +951,24 @@ def test_an_output_demand_maps_onto_the_inputs_in_the_declared_ratio(the_run):
 
 
 def test_the_mapping_uses_declared_coefficients_even_when_an_input_is_scarce(the_run):
-    """The recorded limitation of R34, asserted as behaviour.
+    """The recorded limitation of R34 -- and the half of it that is now closed.
 
     ``a`` can only be supplied at 3, so the rule runs at scale 1 and uses 2 of
     ``b``. The demand published on ``b`` is nevertheless the nominal 6: the
-    mapping reads the declared coefficients, not what is available. Correcting
-    it needs a second demand pass or an iterative solve, both outside the
-    two-sweep ordering -- Scope Boundaries records it.
+    mapping reads the declared coefficients, not what is available. That much is
+    unchanged, and it is the **over-demand** half -- it distorts the split of a
+    supply two components compete for, and closing it needs more than the two
+    sweeps hold.
+
+    What the demand FETCHES no longer follows it. The **over-draw** half is
+    closed (R-12): the draw is capped at ``scale x coefficient`` in the
+    production sweep, where the scale is known, so the 4 units of ``b`` the
+    reaction cannot use are released back to the supplier instead of being
+    delivered and destroyed. Asserted here as the two quantities now agreeing.
     """
     mapping = the_run["mapping"]["SC"]
 
-    # The claim is the nominal one, on both inputs
+    # The claim is the nominal one, on both inputs: over-demand, still open
     assert mapping["demand_a"] == pytest.approx(9.0)
     assert mapping["demand_b"] == pytest.approx(6.0)
 
@@ -969,11 +976,12 @@ def test_the_mapping_uses_declared_coefficients_even_when_an_input_is_scarce(the
     assert mapping["delivered_a"] == pytest.approx(3.0)
     assert mapping["x"] == pytest.approx(2.0)
 
-    # ... and ``b`` is over-claimed: 6 delivered, 2 used by the rule at scale 1
-    assert mapping["delivered_b"] == pytest.approx(6.0)
+    # ... and the draw on ``b`` follows the reaction, not the claim: over-draw,
+    # closed. 2 used at scale 1, 2 delivered, the other 4 left with the supplier.
     consumed_b = mapping["x"] / 2.0 * 2.0
     assert consumed_b == pytest.approx(2.0)
-    assert mapping["delivered_b"] > consumed_b
+    assert mapping["delivered_b"] == pytest.approx(consumed_b)
+    assert mapping["delivered_b"] < mapping["demand_b"]
 
 
 def test_a_catalyst_coefficient_demands_nothing_and_publishes_no_nan(the_run):

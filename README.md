@@ -890,6 +890,45 @@ def split_evenly(available, demands):
 self.add_flow_continuous_out(name="q", var_fed_default=10.0, allocation_fun=split_evenly)
 ```
 
+### Demand, delivery and consumption: what agrees, and what does not
+
+Three quantities travel through a continuous component:
+
+| | |
+|---|---|
+| **demand** | what it publishes upstream — the downstream demand mapped back through the rule's declared coefficients |
+| **delivery** | what its suppliers actually give it — the lesser of production, demand and its allocated share |
+| **consumption** | what its rule actually uses — `scale × coefficient`, the scale set by the scarcest input |
+
+**Delivery equals consumption.** A rule limited by one reagent is fetched more of the others than it can use, because the demand was sized before the scale was known. What it does not use is **released back to the supplier** at the end of the production sweep, so nothing is destroyed:
+
+```python
+electro = plant.comp["Electro"]          # 4 H2O + 1 Elec -> 1 H2 + 1 O2
+
+electro.flows_in["H2O"].get_delivered()  # 2.0  -- the source is the bottleneck
+electro.flows_out["H2"].var_fed.value()  # 0.5  -- so the rule runs at 0.5
+electro.flows_in["Elec"].get_delivered() # 0.5  -- and it draws 0.5, not 1.0
+```
+
+Behind a stock, this is the difference between a battery falling from 100 to 97.5 over five time units and one falling to 0.67. What a component draws equals what it consumes plus what it stores, for every component and at every stop.
+
+Three draws are deliberately **not** capped, and none of them destroys anything:
+
+- an input a **capacity** buffers — the surplus enters the volume, which is what a buffer is for, and `draw = consumption + storage` still holds;
+- an input **no rule accounts for** — a pure consumer *is* the sink;
+- a connection whose producer never allocated a split, which has nothing to correct.
+
+**Demand does not equal consumption.** The demand is still the declared coefficients at the demand scale, so a component limited by a scarce reagent still *asks* for its nominal share of the abundant ones. It no longer takes it, but it still competes for it, and two consumers of one supply are therefore split in proportion to a demand one of them cannot honour:
+
+```python
+# SE supplies 1.0.  U1 is limited to 0.1 by another input; U2 can use 1.0.
+u1.flows_in["E"].var_demand.value()   # 1.0    -- the nominal claim
+u1.flows_in["E"].get_delivered()      # 0.1    -- what it takes (capped)
+u2.flows_in["E"].get_delivered()      # 0.5    -- 0.909 would be its fair share
+```
+
+The surplus is *available-but-untaken* rather than lost, so the rival gets it back at the next step and a deprivation is a delay rather than a permanent loss — but the split itself is unchanged. Closing it is not a missing pass: a delivery is `min(capability, demand)`, so a demand recomputed from what arrived is self-referential. Bounding the demand by what the inputs allowed at the previous evaluation converges to **zero** (measured: 0.1 down to 5e-4 over 4000 evaluations), and the variant that only counts a saturated input **oscillates with period 2**. What is missing is the suppliers' *capability*, which `min(capability, demand)` destroys; recovering it needs a channel of its own, which is a design decision and not a bug fix.
+
 ### Failure modes on a continuous output: deratings
 
 A continuous output carries an **effective rate**, defaulting to 1, by which whatever it produces is multiplied. A failure mode declares its effect against the output flow, giving the rate it leaves:

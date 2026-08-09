@@ -1780,6 +1780,9 @@ class ObjFlow(cod3s.PycComponent):
     get_transferable_flows = evaluation.get_transferable_flows
     continuous_flow_is_connected = staticmethod(evaluation.continuous_flow_is_connected)
     apply_consumption = evaluation.apply_consumption
+    release_unused_supply = evaluation.release_unused_supply
+    release_input_surplus = evaluation.release_input_surplus
+    release_output = evaluation.release_output
     apply_production = evaluation.apply_production
     get_output_request = evaluation.get_output_request
     draw_from_capacity = evaluation.draw_from_capacity

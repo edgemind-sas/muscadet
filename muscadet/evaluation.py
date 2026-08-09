@@ -16,8 +16,25 @@ Two sweeps, in this order (R8, KD4):
 - **production**, downstream: :func:`compute_production` runs the active rule
   of each rule set at the scale its scarcest input allows (R15) -- or transfers
   each input to the output of the same name when the component declares no rule
-  at all (R31) -- and delivers the lesser of what was produced and what was
-  asked for, split among the consumers by the output's allocation policy (R16).
+  at all (R31) -- caps the draw on the suppliers at that same scale and hands
+  back what it did not take (:func:`release_unused_supply`, R-12), then delivers
+  the lesser of what was produced and what was asked for, split among the
+  consumers by the output's allocation policy (R16).
+
+Three quantities are meant to agree, and two of them now do::
+
+    demand        what a component publishes upstream
+    delivery      what its suppliers actually give it
+    consumption   what its rule actually uses
+
+``delivery == consumption`` is enforced by :func:`release_unused_supply`: what
+a supplier gives up is what a reaction, a stock or an output receives, so
+nothing is destroyed. ``demand == consumption`` does **not** hold: the demand is
+sized on the declared coefficients before the scale is known, so a rule limited
+by one reagent still ASKS for its nominal share of the others. It no longer
+takes it, but it still competes for it, which distorts the split of a supply two
+components share. Closing that is a design decision, not a missing pass -- see
+Scope Boundaries.
 
 ``muscadet.ordering`` looks the two equation methods up BY NAME and registers
 them with an order derived from the connection graph, so nothing here and
@@ -32,6 +49,7 @@ import math
 
 from .flow_continuous import (
     UNBOUNDED,
+    UPTAKE_TOL,
     FlowContinuous,
     FlowContinuousIn,
     FlowContinuousOut,
@@ -92,9 +110,22 @@ def evaluate_demand(comp):
     coefficients. It uses the **declared** coefficients, never the
     quantities actually available -- a component capped by a scarce input
     therefore still claims its nominal demand on the others, and over-claims
-    a shared upstream supply. Correcting it needs a second demand pass or an
-    iterative solve, both outside the two-sweep ordering; Scope Boundaries
-    records it.
+    a shared upstream supply.
+
+    What it no longer does is TAKE the over-claim: the production sweep caps
+    the draw at the scale it computes and releases the rest (R-12). So the
+    over-claim costs an allocation distortion between rivals and no longer
+    costs conservation.
+
+    The distortion itself cannot be closed by looking at what arrived. A
+    delivery is ``min(capability, demand)``, so a demand computed from
+    deliveries is self-referential: bounding it by what the inputs allowed at
+    the previous evaluation has ZERO as its only fixed point -- measured, a
+    reactor starved from 0.1 to 5e-4 over 4000 evaluations -- and the variant
+    that only counts a saturated input oscillates with period 2 between the
+    nominal claim and the achievable one. What is missing is the suppliers'
+    CAPABILITY, which ``min(capability, demand)`` destroys and which no lag can
+    recover. Scope Boundaries records the decision.
 
     A component declaring no rule transfers each input to the output of the
     same name (R31), so its demand crosses it unchanged -- but only from an
@@ -560,6 +591,7 @@ def compute_production(comp):
     consumption, production = comp.evaluate_production()
 
     comp.apply_consumption(consumption)
+    comp.release_unused_supply(consumption)
     comp.apply_production(production)
 
 
@@ -936,6 +968,162 @@ def apply_consumption(comp, consumption):
             capacity.set_outflow(flow_name, float(rate))
 
 
+def release_unused_supply(comp, consumption):
+    """Give back what the suppliers delivered and the rules did not use (R-12).
+
+    **The over-draw fix.** A rule runs at the scale its scarcest input allows,
+    but the demand that fetched its inputs was sized on the DECLARED
+    coefficients, before that scale was known. So a reaction limited by one
+    reagent is served more of the others than it can use, and the difference --
+    ``delivery - consumption`` -- entered no reaction, no stock and no output.
+    It was destroyed, which behind a stocked supplier turned an accounting
+    discrepancy into lost matter: a battery falling 100 to 95 where the reaction
+    justifies 2.5.
+
+    The scale is already known here: the production sweep computed it a few
+    lines above. So the draw is capped at ``scale x coefficient``, which is
+    exactly what :meth:`evaluate_production` returned, and every supplier is
+    told what was actually taken of what it allocated
+    (:meth:`~muscadet.flow_continuous.FlowContinuousOut.restrict_allocation`).
+
+    Three inputs are deliberately left uncapped, and none of the three is an
+    oversight:
+
+    - an input a **capacity** buffers. What arrives there is not drawn by the
+      rules but stored, and hop 1 of KTD13 has already put all of it in the
+      volume: ``draw = consumption + storage`` is conservation, not a breach of
+      it. Capping the draw would starve the buffer of exactly what a buffer is
+      for;
+    - an input **no rule and no transfer accounts for** -- a pure consumer's
+      input, absent from ``consumption``. There is no scale to cap it against:
+      such a component IS the sink, and what it is given is what it takes;
+    - a connection whose producer is **not a continuous output**, or one that
+      allocated nothing to this consumer. There is no split behind it to
+      correct.
+
+    Nothing is redistributed to a rival consumer of the same supplier: see
+    :meth:`~muscadet.flow_continuous.FlowContinuousOut.restrict_allocation`.
+    This closes the conservation half; the demand a component PUBLISHES is
+    still sized on the declared coefficients, so two rivals on one supply are
+    still split in proportion to demands one of them cannot honour. Scope
+    Boundaries records what closing that would take.
+
+    Runs BEFORE :meth:`apply_production`, so that a rule whose production is
+    written into an output capacity has already had its draw settled: the
+    volume's two sides are then written from one consistent evaluation.
+
+    Notes
+    -----
+    Idempotent under re-evaluation. A release lowers a split to an absolute
+    value and never subtracts from it repeatedly, and every producer's own
+    production equation recomputes its split from scratch earlier in the same
+    sweep, so evaluating the sweep twice at one instant releases the same
+    quantity twice rather than twice the quantity.
+
+    Parameters
+    ----------
+    consumption : dict
+        ``{flow name: rate drawn}``, as :meth:`evaluate_production` returned it.
+    """
+    for flow_name, drawn in consumption.items():
+        flow = comp.flows_continuous_in.get(flow_name)
+
+        if flow is None:
+            continue
+
+        if comp.get_capacity_of_flow(flow_name, "in") is not None:
+            continue
+
+        comp.release_input_surplus(flow, drawn)
+
+
+def release_input_surplus(comp, flow, drawn):
+    """Hand back what one continuous input was given and did not draw (R-12).
+
+    The surplus is given back to the suppliers **in the proportion each of them
+    supplied**: a consumer fed by two producers that uses half of what arrives
+    took half of each one's share, and there is nothing in the model that would
+    single one of them out to bear the whole reduction.
+
+    ``{f}_fed_in`` is re-mirrored afterwards, because
+    :meth:`refresh_continuous_inputs` wrote it at the head of the sweep from the
+    pre-release delivery: what a model reads as received must be what was
+    actually drawn.
+
+    Parameters
+    ----------
+    flow : muscadet.flow_continuous.FlowContinuousIn
+        The input being capped.
+    drawn : float
+        What the rules took from it.
+
+    Returns
+    -------
+    float
+        What the input now draws.
+    """
+    shares = flow.incoming_shares()
+
+    if not shares:
+        return float(flow.var_in_default)
+
+    delivered = sum(quantity for _, _, quantity in shares)
+    drawn = max(float(drawn), 0.0)
+
+    if delivered <= drawn + abs(delivered) * UPTAKE_TOL:
+        return delivered
+
+    ratio = drawn / delivered if delivered > 0.0 else 0.0
+
+    for producer, producing_flow, quantity in shares:
+        if producing_flow is None:
+            continue
+        producer.release_output(producing_flow, flow.comp_name, quantity * ratio)
+
+    flow.var_fed.setValue(flow.get_delivered())
+
+    return drawn
+
+
+def release_output(comp, flow, comp_name, taken):
+    """Record on this producer that one consumer took less than it was given.
+
+    The producing half of :meth:`release_unused_supply`, on the component rather
+    than on the flow because a flow does not know the capacities of the
+    component carrying it: what a reservoir hands out is drained from its
+    volume, and a share that is given back must be put back in the volume too --
+    otherwise the correction reaches the books and not the matter, and the
+    battery goes on emptying.
+
+    Parameters
+    ----------
+    flow : muscadet.flow_continuous.FlowContinuousOut
+        The output the consumer draws on.
+    comp_name : str
+        Engine name of the consuming component.
+    taken : float
+        What it actually drew.
+
+    Returns
+    -------
+    float
+        The quantity released, 0 when there was nothing to release.
+    """
+    released = flow.restrict_allocation(comp_name, taken)
+
+    if released <= 0.0:
+        return 0.0
+
+    capacity = comp.get_capacity_of_flow(flow.name, "out")
+
+    if capacity is not None:
+        capacity.set_outflow(
+            flow.name, max(capacity.get_outflow(flow.name) - released, 0.0)
+        )
+
+    return released
+
+
 def apply_production(comp, production):
     """
     Writes production onto the output flows (KTD13, hops 3 and 4).
@@ -1143,6 +1331,12 @@ def deliver_output(comp, flow, quantity):
     An output NO consumer is connected to is the one case where there is no
     split to read: it delivers what it produces, exactly as it did before
     allocation existed.
+
+    What the flow carries here is what was OFFERED to the consumers. A consumer
+    that then takes less lowers its own share and this same variable by the
+    difference (:meth:`~muscadet.flow_continuous.FlowContinuousOut.
+    restrict_allocation`, R-12), so the equality between ``{f}_fed_out`` and the
+    sum of the shares holds after the release as it does here.
 
     Returns
     -------

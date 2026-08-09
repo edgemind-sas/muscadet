@@ -84,6 +84,13 @@ A consumer that revised its demand after seeing what it was actually served
 would reopen a fixed point inside the forward sweep and invalidate the whole
 two-sweep ordering, so nothing here ever asks a capped consumer again.
 
+A consumer may nevertheless take LESS than it was allocated -- a rule limited by
+its scarcest input cannot use what the others were fetched at -- and it hands
+the difference back through :meth:`FlowContinuousOut.restrict_allocation` (R-12).
+That is not a revised demand and it reopens nothing: the split is lowered to a
+quantity already computed, the surplus is offered again at the next evaluation
+rather than reallocated within this one, and no consumer is consulted twice.
+
 Who computes what
 -----------------
 A message box exports **one** variable to every connection, so a producer
@@ -192,6 +199,13 @@ ALLOCATION_POLICIES = (
 #: keeps a rounding residue from being mistaken for a surplus and spending a
 #: redistribution pass on it.
 ALLOCATION_TOL = 1e-12
+
+#: Relative tolerance on "this consumer took less than it was allocated" (R-12).
+#: Relative rather than absolute: a draw is a physical quantity of any
+#: magnitude, and an absolute epsilon that is meaningless at 1e-3 is a real
+#: release at 1e6. A residue below it is left where it is rather than spending a
+#: write on giving it back.
+UPTAKE_TOL = 1e-12
 
 #: The effective rate of a continuous output nothing derates (R18). Also the
 #: value a derating variable is created at, and the value a mode returns its own
@@ -593,6 +607,37 @@ class FlowContinuousIn(FlowContinuous):
 
         return flow if isinstance(flow, FlowContinuousOut) else None
 
+    def incoming_shares(self):
+        """What each connection currently brings in, and who brings it.
+
+        The connection-by-connection reading :meth:`get_delivered` sums, kept
+        apart so the SAME walk answers both "how much arrives" and "who would
+        have to be told if less than that is taken" (R-12). Two readings of the
+        connections could otherwise disagree about a share, and a release
+        computed against a different total than the draw it caps would give back
+        the wrong quantity.
+
+        Returns
+        -------
+        list of tuple
+            ``(producing component, producing flow, quantity)`` in connection
+            order. The flow is ``None`` for a connection whose producer is not a
+            continuous output -- there is no split behind it to read, and
+            nothing to give anything back to.
+        """
+        shares = []
+
+        for index in range(self.var_in.cnctCount()):
+            var = self.var_in.variable(index)
+            value = float(var.value())
+            flow = self.supplier_flow(var)
+            share = None if flow is None else flow.share_for(self.comp_name, value)
+            shares.append(
+                (var.parent(), flow, value if share is None else float(share))
+            )
+
+        return shares
+
     def get_delivered(self):
         """What this input receives, connection by connection (R6, R16).
 
@@ -612,20 +657,10 @@ class FlowContinuousIn(FlowContinuous):
         The raw value is still the answer for a connection whose producer is
         not a continuous output at all: there is no split behind it to read.
         """
-        count = self.var_in.cnctCount()
-
-        if count == 0:
+        if self.var_in.cnctCount() == 0:
             return float(self.var_in_default)
 
-        total = 0.0
-        for index in range(count):
-            var = self.var_in.variable(index)
-            value = float(var.value())
-            flow = self.supplier_flow(var)
-            share = None if flow is None else flow.share_for(self.comp_name, value)
-            total += value if share is None else float(share)
-
-        return total
+        return sum(quantity for _, _, quantity in self.incoming_shares())
 
     def create_sensitive_set_flow_fed_in(self):
         """Build the closure mirroring what the incoming connections deliver.
@@ -998,6 +1033,64 @@ class FlowContinuousOut(FlowContinuous):
         )
 
         return self.allocated
+
+    def restrict_allocation(self, comp_name, taken):
+        """Lower what one consumer was allocated to what it actually took (R-12).
+
+        The producing half of the over-draw fix. A rule runs at the scale its
+        scarcest input allows, so a component asked -- and served -- on its
+        DECLARED coefficients draws more of its abundant reagents than the
+        reaction can use. What it did not use never entered a reaction, a stock
+        or an output: it was destroyed, and behind a stocked supplier the
+        accounting discrepancy became lost matter.
+
+        The consumer therefore hands the surplus back, and this is where the
+        producer's books are corrected: the split records what was taken, and
+        ``{f}_fed_out`` -- documented as the total delivered downstream -- is
+        reduced by the same amount, so it stays equal to the sum of the shares.
+        The producer's own capacity, if one sits behind the output, is drained
+        by the reduced figure too; that is :meth:`muscadet.ObjFlow.
+        release_output`, which is the only caller.
+
+        Nothing is redistributed to the OTHER consumers of this output. The
+        production sweep is topological and they may already have run, so a
+        surplus released here is available-but-untaken for this evaluation and
+        offered again at the next one -- a deprivation becomes a delay instead
+        of a permanent loss. Redistributing it within the sweep would reopen a
+        fixed point the two-sweep ordering rests on not having (KTD12).
+
+        A consumer this output never allocated anything to is left alone: there
+        is no split to correct, only a provisional share standing in for one
+        (:meth:`provisional_share`), and lowering that would freeze a figure
+        that is meant to follow the exported value.
+
+        Parameters
+        ----------
+        comp_name : str
+            Engine name of the consuming component.
+        taken : float
+            What it actually drew, never more than it was allocated.
+
+        Returns
+        -------
+        float
+            The quantity released, 0 when there was nothing to release.
+        """
+        allocated = self.allocated.get(comp_name)
+
+        if allocated is None:
+            return 0.0
+
+        taken = max(float(taken), 0.0)
+        released = allocated - taken
+
+        if released <= abs(allocated) * UPTAKE_TOL:
+            return 0.0
+
+        self.allocated[comp_name] = taken
+        self.var_fed.setValue(max(float(self.var_fed.value()) - released, 0.0))
+
+        return released
 
     def allocated_for(self, comp_name):
         """What was allocated to one consumer, or None when nothing was.
