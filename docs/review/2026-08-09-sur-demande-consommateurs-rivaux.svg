@@ -1,0 +1,127 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1170 1010" width="1170" height="1010" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif">
+
+  <rect x="0" y="0" width="1170" height="1010" fill="#ffffff"/>
+  <defs>
+    <marker id="a1" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#546e7a"/></marker>
+    <marker id="a2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#c62828"/></marker>
+  </defs>
+
+  <text x="40" y="44" font-size="22" font-weight="600" fill="#263238">Deux consommateurs rivaux : ce que ma correction règle, et ce qu'elle ne règle pas</text>
+  <text x="40" y="69" font-size="14" fill="#607d8b">Mesuré. Un composant affame son rival au prorata d'une demande qu'il est incapable de consommer.</text>
+
+  <!-- ===== LE MONTAGE ===== -->
+  <rect x="40" y="90" width="1090" height="196" rx="8" fill="#fafafa" stroke="#90a4ae" stroke-width="1.4"/>
+  <text x="62" y="118" font-size="15" font-weight="700" fill="#263238">LE MONTAGE</text>
+
+  <rect x="62" y="132" width="150" height="56" rx="6" fill="#ffffff" stroke="#546e7a" stroke-width="1.2"/>
+  <text x="76" y="153" font-size="12.5" font-weight="600" fill="#37474f">SA — source A</text>
+  <text x="76" y="173" font-size="12" fill="#546e7a">débit 1,0 · rare</text>
+
+  <rect x="62" y="204" width="150" height="56" rx="6" fill="#fff3e0" stroke="#ef6c00" stroke-width="1.5"/>
+  <text x="76" y="225" font-size="12.5" font-weight="600" fill="#e65100">SE — source E</text>
+  <text x="76" y="245" font-size="12" fill="#bf360c">débit 1,0 · PARTAGÉE</text>
+
+  <line x1="212" y1="160" x2="286" y2="160" stroke="#546e7a" stroke-width="2" marker-end="url(#a1)"/>
+  <line x1="212" y1="228" x2="286" y2="176" stroke="#ef6c00" stroke-width="2" marker-end="url(#a1)"/>
+  <line x1="212" y1="236" x2="286" y2="256" stroke="#ef6c00" stroke-width="2" marker-end="url(#a1)"/>
+
+  <rect x="288" y="132" width="286" height="70" rx="6" fill="#ffffff" stroke="#37474f" stroke-width="1.4"/>
+  <text x="302" y="153" font-size="12.5" font-weight="600" fill="#263238">U1 — bridé par A</text>
+  <text x="302" y="172" font-size="12" fill="#455a64" font-family="ui-monospace, monospace">10 A + 1 E → 1 P1</text>
+  <text x="302" y="192" font-size="12" font-weight="600" fill="#b71c1c">A limite l'échelle à 0,1 → n'a besoin que de 0,1 E</text>
+
+  <rect x="288" y="216" width="286" height="60" rx="6" fill="#ffffff" stroke="#37474f" stroke-width="1.4"/>
+  <text x="302" y="237" font-size="12.5" font-weight="600" fill="#263238">U2 — bridé par rien</text>
+  <text x="302" y="256" font-size="12" fill="#455a64" font-family="ui-monospace, monospace">1 E → 1 P2</text>
+  <text x="302" y="271" font-size="12" font-weight="600" fill="#1b5e20">a réellement besoin de 1,0 E</text>
+
+  <rect x="614" y="150" width="200" height="90" rx="6" fill="#eceff1" stroke="#546e7a" stroke-width="1.2"/>
+  <text x="628" y="172" font-size="12.5" font-weight="600" fill="#37474f">Besoin réel total</text>
+  <text x="628" y="194" font-size="12.5" fill="#455a64">U1 0,1 + U2 1,0 = 1,1</text>
+  <text x="628" y="213" font-size="12.5" fill="#455a64">pour 1,0 disponible</text>
+  <text x="628" y="233" font-size="12.5" font-weight="600" fill="#263238">partage juste : 0,09 / 0,91</text>
+
+  <rect x="838" y="150" width="270" height="90" rx="6" fill="#fff8e1" stroke="#f57f17" stroke-width="1.2"/>
+  <text x="852" y="172" font-size="12.5" font-weight="600" fill="#e65100">La rareté est réelle</text>
+  <text x="852" y="194" font-size="12" fill="#5d4037">Il manque 0,1. Le problème n'est pas</text>
+  <text x="852" y="211" font-size="12" fill="#5d4037">qu'il faille arbitrer, c'est que l'arbitrage</text>
+  <text x="852" y="228" font-size="12" fill="#5d4037">se fasse sur des demandes irréalisables.</text>
+
+  <!-- ===== MESURES ===== -->
+  <rect x="40" y="302" width="1090" height="178" rx="8" fill="#ffebee" stroke="#c62828" stroke-width="1.8"/>
+  <text x="62" y="330" font-size="15" font-weight="700" fill="#b71c1c">AUJOURD'HUI — la sévérité suit la demande AVAL de U1, qui n'a rien à voir avec ce qu'il peut consommer</text>
+
+  <line x1="62" y1="344" x2="1108" y2="344" stroke="#ef9a9a" stroke-width="1"/>
+  <text x="76" y="366" font-size="12.5" font-weight="600" fill="#b71c1c">demande aval de U1</text>
+  <text x="330" y="366" font-size="12.5" font-weight="600" fill="#b71c1c">U1 demande E</text>
+  <text x="500" y="366" font-size="12.5" font-weight="600" fill="#b71c1c">U1 reçoit / utilise</text>
+  <text x="700" y="366" font-size="12.5" font-weight="600" fill="#b71c1c">U2 reçoit</text>
+  <text x="860" y="366" font-size="12.5" font-weight="600" fill="#b71c1c">U2 devrait</text>
+  <text x="1000" y="366" font-size="12.5" font-weight="600" fill="#b71c1c">manque à U2</text>
+  <line x1="62" y1="376" x2="1108" y2="376" stroke="#ef9a9a" stroke-width="1"/>
+
+  <text x="76" y="400" font-size="12.5" fill="#4e342e">1,0  (modeste)</text>
+  <text x="330" y="400" font-size="12.5" fill="#4e342e">1,000</text>
+  <text x="500" y="400" font-size="12.5" fill="#4e342e">0,500 / 0,100</text>
+  <text x="700" y="400" font-size="12.5" fill="#4e342e">0,500</text>
+  <text x="860" y="400" font-size="12.5" fill="#4e342e">0,909</text>
+  <text x="1000" y="400" font-size="12.5" font-weight="600" fill="#c62828">−45 %</text>
+
+  <text x="76" y="428" font-size="12.5" fill="#4e342e">1000  (non bornée)</text>
+  <text x="330" y="428" font-size="12.5" font-weight="600" fill="#b71c1c">1000,0</text>
+  <text x="500" y="428" font-size="12.5" fill="#4e342e">0,999 / 0,100</text>
+  <text x="700" y="428" font-size="12.5" font-weight="600" fill="#b71c1c">0,001</text>
+  <text x="860" y="428" font-size="12.5" fill="#4e342e">0,909</text>
+  <text x="1000" y="428" font-size="12.5" font-weight="700" fill="#c62828">−99,9 %</text>
+
+  <text x="76" y="462" font-size="12.5" font-style="italic" fill="#b71c1c">Une demande aval non bornée est la norme dans le modèle H2 : le sentinelle flow_in_max = −1 d'un réservoir signifie exactement cela.</text>
+
+  <!-- ===== CE QUE FAIT MA CORRECTION ===== -->
+  <rect x="40" y="500" width="536" height="290" rx="8" fill="#e8f5e9" stroke="#2e7d32" stroke-width="1.8"/>
+  <text x="62" y="528" font-size="15" font-weight="700" fill="#1b5e20">CE QUE MA CORRECTION RÈGLE</text>
+  <text x="62" y="554" font-size="12.5" fill="#33691e">Le prélèvement de U1 est plafonné à 0,1 au lieu de 0,5.</text>
+
+  <rect x="62" y="568" width="492" height="76" rx="5" fill="#ffffff" stroke="#66bb6a" stroke-width="1.2"/>
+  <text x="76" y="590" font-size="13" font-weight="600" fill="#1b5e20">La conservation, entièrement</text>
+  <text x="76" y="610" font-size="12" fill="#33691e">Les 0,4 ne quittent plus le fournisseur. Derrière une batterie,</text>
+  <text x="76" y="627" font-size="12" fill="#33691e">ils restent dans la batterie au lieu d'être détruits.</text>
+
+  <rect x="62" y="654" width="492" height="118" rx="5" fill="#ffffff" stroke="#66bb6a" stroke-width="1.2"/>
+  <text x="76" y="676" font-size="13" font-weight="600" fill="#1b5e20">Et une conséquence qui compte dans le temps</text>
+  <text x="76" y="696" font-size="12" fill="#33691e">Le surplus non prélevé reste disponible au pas suivant. La</text>
+  <text x="76" y="713" font-size="12" fill="#33691e">privation cesse d'être définitive : elle devient une mauvaise</text>
+  <text x="76" y="730" font-size="12" fill="#33691e">répartition par pas, avec la ressource préservée.</text>
+  <text x="76" y="754" font-size="12" font-style="italic" fill="#1b5e20">Aujourd'hui, ce qui est mal réparti est perdu pour toujours.</text>
+
+  <!-- ===== CE QU'ELLE NE REGLE PAS ===== -->
+  <rect x="594" y="500" width="536" height="290" rx="8" fill="#fff8e1" stroke="#f57f17" stroke-width="1.8"/>
+  <text x="616" y="528" font-size="15" font-weight="700" fill="#e65100">CE QU'ELLE NE RÈGLE PAS</text>
+  <text x="616" y="554" font-size="12.5" fill="#5d4037">U2 reçoit toujours 0,500 au lieu de 0,909.</text>
+
+  <rect x="616" y="568" width="492" height="96" rx="5" fill="#ffffff" stroke="#ffb300" stroke-width="1.2"/>
+  <text x="630" y="590" font-size="13" font-weight="600" fill="#e65100">Pourquoi : l'ordre des passes</text>
+  <text x="630" y="610" font-size="12" fill="#5d4037">Le fournisseur répartit AVANT que U1 ne calcule son échelle.</text>
+  <text x="630" y="627" font-size="12" fill="#5d4037">Quand le plafond s'applique, le partage est déjà décidé. Le</text>
+  <text x="630" y="644" font-size="12" fill="#5d4037">surplus est alloué-mais-non-pris, pas rendu à U2.</text>
+
+  <rect x="616" y="674" width="492" height="98" rx="5" fill="#f3e5f5" stroke="#6a1b9a" stroke-width="1.3"/>
+  <text x="630" y="696" font-size="13" font-weight="600" fill="#4a148c">Piste pour la suite — à éprouver, pas acquise</text>
+  <text x="630" y="716" font-size="12" fill="#4527a0">Borner la demande publiée par ce que les autres entrées ont</text>
+  <text x="630" y="733" font-size="12" fill="#4527a0">permis à l'évaluation précédente. Le décalage d'une passe existe</text>
+  <text x="630" y="750" font-size="12" fill="#4527a0">déjà dans la conception (accept_limit) et converge par répétition.</text>
+  <text x="630" y="766" font-size="12" fill="#4527a0">Risque : oscillation. À mesurer avant de s'y engager.</text>
+
+  <!-- ===== CONCLUSION ===== -->
+  <rect x="40" y="810" width="1090" height="118" rx="8" fill="#eceff1" stroke="#37474f" stroke-width="1.6"/>
+  <text x="62" y="838" font-size="15" font-weight="700" fill="#263238">Ce que j'en conclus, et qui corrige ce que je vous disais hier</text>
+  <text x="62" y="864" font-size="12.5" fill="#37474f">Je présentais la sur-demande comme une distorsion d'allocation. C'est trop doux : avec une demande aval non bornée — le cas normal de</text>
+  <text x="62" y="883" font-size="12.5" fill="#37474f">votre modèle — c'est une privation quasi totale du rival. Elle est probablement plus conséquente que le sur-tirage.</text>
+  <text x="62" y="908" font-size="12.5" font-weight="600" fill="#263238">Le sur-tirage reste à faire d'abord : il est borné, il rétablit la conservation, et il rend le surplus récupérable au pas suivant — donc il</text>
+  <text x="62" y="924" font-size="12.5" font-weight="600" fill="#263238">réduit déjà la sur-demande d'une perte définitive à un retard. Mais il ne la referme pas.</text>
+
+  <text x="40" y="962" font-size="12.5" fill="#607d8b">Modèle de mesure : deux réacteurs sur une source E de 1,0 ; U1 bridé à l'échelle 0,1 par une source A rare, U2 non bridé.</text>
+  <text x="40" y="980" font-size="12.5" fill="#607d8b">Mesuré sur muscadet à b785b3d, allocation proportionnelle par défaut.</text>
+
+</svg>
