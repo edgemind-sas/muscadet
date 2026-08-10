@@ -461,8 +461,33 @@ def test_a_profile_scales_rule_driven_production(the_run):
     for date, factor in RAMP_AT.items():
         entry = at(trace, date)
 
-        assert entry["conv_q"] == pytest.approx(SUPPLY_RATE)
         assert entry["X"]["CONV"] == pytest.approx(SUPPLY_RATE * factor)
+
+
+def test_a_profiled_rule_draws_what_the_curve_lets_it_produce(the_run):
+    """The curve scales the DRAW as well, not only the delivery (R-13).
+
+    The supply offers 7 throughout and the converter turns one unit of ``q``
+    into one of ``X``, so a converter at 0.3 of its curve makes 2.1 of ``X`` --
+    and consumes 2.1 of ``q``, not 7.
+
+    This test used to assert ``conv_q == SUPPLY_RATE`` at every stop, which was
+    the defect written down: the draw is sized by ``rule_scale`` from what the
+    inputs allow, before the profile is read, so the whole 7 was fetched and
+    4.9 of it entered no reaction, no stock and no output. On an unstocked
+    source that is invisible; behind a stock it is destroyed matter. What the
+    surplus costs now is an over-DEMAND for one evaluation, released
+    immediately (R-12), which is the boundary
+    ``test_over_draw_conservation_001`` measures.
+    """
+    trace = the_run["trace"]
+
+    for date, factor in RAMP_AT.items():
+        entry = at(trace, date)
+
+        assert entry["conv_q"] == pytest.approx(SUPPLY_RATE * factor)
+        # ... which is exactly what it produced: 1 of q per 1 of X.
+        assert entry["conv_q"] == pytest.approx(entry["X"]["CONV"])
 
 
 def test_the_shipped_sinusoidal_source_follows_its_curve(the_run):

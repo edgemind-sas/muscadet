@@ -376,19 +376,31 @@ def test_the_native_mode_returns_the_output_to_nominal_on_repair(the_run):
 
 
 def test_a_shared_rate_of_zero_stops_production_whatever_the_inputs(the_run):
-    """R19: the rate is driven to 0 and ``X`` produces nothing.
+    """R19: the rate is driven to 0, ``X`` produces nothing -- and draws nothing.
 
-    ZEROED converts one unit of ``q`` into one of ``X`` and keeps being fed 7
-    of ``q`` throughout: the output stops because the rate is 0, not because
-    the input dried up. A continuous flow carries no separate boolean
+    ZEROED converts one unit of ``q`` into one of ``X``. Its SUPPLY goes on
+    offering 7 throughout: the output stops because the rate is 0, not because
+    the supply dried up. A continuous flow carries no separate boolean
     availability gate -- the one number expresses both the cut and the
     degradation.
+
+    What the converter DRAWS follows the cut (R-13). This test used to assert
+    the opposite -- ``zeroed_in`` staying at 7 while the output produced
+    nothing, under the heading "the input never stopped" -- which was the
+    defect rather than the property: the draw was sized on the scale
+    ``rule_scale`` computes from the inputs, before the shared rate was read at
+    all, so a dead converter kept consuming its supply at the nominal rate for
+    ever. The supply being an unstocked source, nothing was depleted and the
+    loss was invisible; behind a stock it is matter. See
+    ``test_derating_001.py::test_a_dead_output_stops_draining_the_stock_behind_it``
+    for the same cut measured against a reservoir.
     """
     trace = the_run["trace"]
 
     before = at(trace, 0.5)
     assert before["zeroed_rate"] == pytest.approx(NOMINAL_RATE)
     assert before["zeroed_out"] == pytest.approx(SUPPLY_RATE)
+    assert before["zeroed_in"] == pytest.approx(SUPPLY_RATE)
 
     cut = at(trace, 1.0)
     assert cut["zeroed_rate"] == pytest.approx(0.0)
@@ -398,13 +410,21 @@ def test_a_shared_rate_of_zero_stops_production_whatever_the_inputs(the_run):
 
     stopped = after(trace, 1.0)
     assert stopped["zeroed_out"] == pytest.approx(0.0)
-    assert stopped["zeroed_in"] == pytest.approx(SUPPLY_RATE), "the input never stopped"
+    assert stopped["zeroed_in"] == pytest.approx(
+        0.0
+    ), "a converter producing nothing draws nothing"
 
-    # ... and it stays at zero for the rest of the run.
+    # ... and both stay at zero for the rest of the run.
     for entry in trace:
         if entry["time"] > 1.0:
             assert entry["zeroed_out"] == pytest.approx(0.0)
-            assert entry["zeroed_in"] == pytest.approx(SUPPLY_RATE)
+            assert entry["zeroed_in"] == pytest.approx(0.0)
+
+    # The supply itself is untouched: what it can produce is still 7, and it is
+    # the CONVERTER that stopped asking for it.
+    assert (
+        the_run["system"].comp["SUPPLY"].flows_out["q"].var_fed_default == SUPPLY_RATE
+    )
 
 
 # ----------------------------------------------------------------------

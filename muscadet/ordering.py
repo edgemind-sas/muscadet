@@ -8,11 +8,66 @@ sequence from the connection graph instead.
 Why a plain topological sort is enough (KTD1)
 ---------------------------------------------
 Two independent sweeps -- demand in reverse-topological order, production in
-topological order -- are sufficient **provided** the graph is acyclic and every
-remaining loop is broken by an integrated state. Both hold here: :data:`R30`
-refuses cycles at the first run, and capacities and mode automata are the state
-breaks. So no matching, no block-triangular decomposition, no tearing and no
-iterative solve -- a topological sort is the whole mechanism.
+topological order -- are sufficient **provided** every remaining loop is broken
+by an integrated state. Capacities and mode automata are the state breaks, and
+:data:`R30` refuses what is left. So no matching, no block-triangular
+decomposition and no iterative solve -- a topological sort of the *algebraic*
+dependencies is the whole mechanism.
+
+Which loops a capacity breaks, and which it does not (R-14)
+-----------------------------------------------------------
+The module used to refuse **every** cycle, which contradicted the paragraph
+above: a tank wired to a recirculation pump and back is a loop whose closing
+dependency crosses an ODE level, and that is precisely the shape of the
+heated-tank dynamic-reliability benchmark. Such a model was refused at its first
+``simulate()``.
+
+An edge ``A --q--> B`` exists because B reads what A exports. Dropping it lets B
+run first, which is sound exactly when **B's own exports do not algebraically
+depend on what arrived on q** -- and a capacity of B's is what can make that
+true, because the volume, not the connection, is then the counterparty of the
+rules (KTD13):
+
+* a capacity of B holding ``q`` on its **input** side. What arrives is written
+  into the volume by ``fill_input_capacities`` and integrated there; the rules
+  face ``Capacity.serve_limit`` instead of the flow. Every path out of q crosses
+  the level, whatever else B produces;
+* a capacity of B holding **every one of its continuous outputs** on the
+  ``out`` side. What the rules produce enters the volume and what leaves is
+  served from it, so no output carries the arriving quantity onward
+  algebraically. This is the two-sided tank of
+  ``CapacityContinuous(ports="both")``, whose capacity ``side`` is ``"out"``,
+  and it is the case the recirculation loop needs. Requiring *every* output is
+  what keeps the break honest: a transformer buffering one output and exporting
+  another straight through still passes its input on algebraically.
+
+The break is a property of the **receiving** component, never of the sending
+one: a capacity on A's output side does not license B to run first, since B
+would still use the stale value algebraically.
+
+The break is **structural** -- declared, not conditioned on the level -- like
+every other capacity test in this release. Its residual is honest and worth
+recording: a volume standing at zero degrades to a pass-through (``serve_limit``
+falls back to what transits, ``draw_from_capacity`` serves the transit), so the
+torn dependency is then read one evaluation late rather than not at all. The
+solver evaluates the equation set several times per integration step at an
+advancing time, so that is a within-step lag absorbed by the level, which is the
+same residual any state-variable tearing carries.
+
+**Nothing acyclic changes, and the tear is minimal.** The full edge set is
+sorted first, so a model that builds today derives exactly the order it derived
+before; a cycle is then torn one reported loop at a time, dropping only the
+state-broken connections **on that loop**, so a buffered edge elsewhere in the
+model keeps constraining the order it always did. A loop carrying no such
+connection is a genuinely algebraic one and is still refused, with the same
+:class:`ContinuousFlowCycleError`.
+
+The **demand** sweep is torn at the same edge, and a capacity does NOT break it:
+``Capacity.demand_claim`` passes a demand straight through a volume by design
+(R7, R36). A recirculation loop's demand is therefore a unit-gain fixpoint read
+one evaluation late -- neutrally stable, and drifting by the claim per
+evaluation if a ``fill_rate`` or a rival consumer injects one inside the loop.
+Declare the fill claim outside the loop.
 
 Where the graph comes from (KTD15)
 ----------------------------------
@@ -164,6 +219,58 @@ def discrete_data_channel(comp, mb_name, port):
     return flow_name
 
 
+def capacity_breaks_inbound(comp, flow_name):
+    """True when a volume of ``comp`` stands between what arrives and what leaves.
+
+    The predicate of R-14: whether an edge delivering ``flow_name`` to ``comp``
+    still constrains the evaluation order, or whether an integrated level
+    already breaks it. See the module docstring for the argument; in short, the
+    two ways every algebraic path out of that input crosses a level are
+
+    * a capacity holding ``flow_name`` on the **input** side -- what arrives is
+      integrated before any rule reads it (KTD13, hop 1);
+    * a capacity holding **every** continuous output of ``comp`` on the
+      ``out`` side -- what the rules produce enters a volume and what leaves is
+      served from it, so nothing carries the arriving quantity onward. This is
+      ``CapacityContinuous(ports="both")``, whose ``side`` is ``"out"``.
+
+    False for a component exporting no continuous flow at all -- a pure
+    consumer. Nothing algebraic leaves it either, so tearing its inbound edge
+    would be sound; it is left alone because it can take part in no loop, and a
+    tear that breaks nothing would only make the reported one harder to read.
+
+    Purely structural. It asks whether a capacity is DECLARED, never what it
+    currently holds -- an equation order is derived once, at the pre-run step,
+    and a level moves. The residual is recorded in the module docstring.
+
+    Parameters
+    ----------
+    comp : muscadet.ObjFlow
+        The component RECEIVING the flow. The break is never a property of the
+        sender: a capacity behind a producer's output does not let its consumer
+        run first, since the consumer would use the stale value algebraically.
+    flow_name : str
+        Name of the continuous flow arriving on ``comp``.
+
+    Returns
+    -------
+    bool
+    """
+    get_capacity = getattr(comp, "get_capacity_of_flow", None)
+
+    if not callable(get_capacity):
+        return False
+
+    if get_capacity(flow_name, "in") is not None:
+        return True
+
+    outputs = getattr(comp, "flows_continuous_out", None) or {}
+
+    return bool(outputs) and all(
+        get_capacity(name, "out") is not None for name in outputs
+    )
+
+
 def component_is_continuous(comp):
     """True when ``comp`` carries at least one continuous flow.
 
@@ -213,6 +320,12 @@ class ContinuousConnection(typing.NamedTuple):
     source: str
     target: str
     flow: str
+
+    #: True when a capacity of the TARGET already breaks this dependency, so it
+    #: need not constrain the evaluation order (R-14,
+    #: :func:`capacity_breaks_inbound`). Defaulted so a connection built by hand
+    #: -- in a test, in an inspection -- stays the plain algebraic edge it was.
+    state_broken: bool = False
 
     def __str__(self) -> str:
         return f"{self.source}.{self.flow}_out -> {self.target}.{self.flow}_in"
@@ -340,36 +453,62 @@ class ContinuousFlowGraph:
             self.nodes.append(name)
         return name
 
-    def add_connection(self, source, target, flow):
+    def add_connection(self, source, target, flow, state_broken=False):
         """Record one continuous data connection."""
-        cnct = ContinuousConnection(source=source, target=target, flow=flow)
+        cnct = ContinuousConnection(
+            source=source, target=target, flow=flow, state_broken=state_broken
+        )
         self.connections.append(cnct)
         return cnct
 
     # -- reading -------------------------------------------------------
 
-    @property
-    def edges(self):
-        """``(source, target)`` pairs, deduplicated, in declaration order.
+    @staticmethod
+    def edges_of(connections):
+        """``(source, target)`` pairs of ``connections``, deduplicated, in order.
 
         Two components joined by several continuous flows are one edge of the
         dependency graph but several connections of the model.
         """
         seen = set()
         edges = []
-        for cnct in self.connections:
+        for cnct in connections:
             pair = (cnct.source, cnct.target)
             if pair not in seen:
                 seen.add(pair)
                 edges.append(pair)
         return edges
 
-    def connections_between(self, source, target):
-        """Every connection wiring ``source`` to ``target``."""
+    @property
+    def edges(self):
+        """Every ``(source, target)`` pair, deduplicated, in declaration order."""
+        return self.edges_of(self.connections)
+
+    @property
+    def state_broken_connections(self):
+        """The connections an integrated level already breaks (R-14).
+
+        Empty for a model holding no capacity, which is what makes the fallback
+        of :func:`compute_equation_order` a no-op there.
+        """
+        return [cnct for cnct in self.connections if cnct.state_broken]
+
+    @property
+    def algebraic_connections(self):
+        """The connections NO integrated level breaks.
+
+        The complement of :attr:`state_broken_connections`, and what a cyclic
+        model is left constrained by once every loop has been torn: a cycle
+        surviving among these is an algebraic loop and is refused.
+        """
+        return [cnct for cnct in self.connections if not cnct.state_broken]
+
+    def connections_between(self, source, target, connections=None):
+        """Every connection of ``connections`` wiring ``source`` to ``target``."""
+        pool = self.connections if connections is None else connections
+
         return [
-            cnct
-            for cnct in self.connections
-            if cnct.source == source and cnct.target == target
+            cnct for cnct in pool if cnct.source == source and cnct.target == target
         ]
 
     def ancestors(self, node):
@@ -397,7 +536,7 @@ class ContinuousFlowGraph:
 
     # -- sorting -------------------------------------------------------
 
-    def _build_sorter(self, reverse):
+    def _build_sorter(self, reverse, connections):
         sorter = graphlib.TopologicalSorter()
 
         # Nodes first, in declaration order: an isolated continuous component
@@ -405,7 +544,7 @@ class ContinuousFlowGraph:
         for node in self.nodes:
             sorter.add(node)
 
-        for source, target in self.edges:
+        for source, target in self.edges_of(connections):
             if reverse:
                 sorter.add(source, target)
             else:
@@ -413,7 +552,7 @@ class ContinuousFlowGraph:
 
         return sorter
 
-    def static_order(self, reverse=False):
+    def static_order(self, reverse=False, connections=None):
         """A topological order of the graph, ties broken by declaration order.
 
         Parameters
@@ -421,18 +560,25 @@ class ContinuousFlowGraph:
         reverse : bool
             False for the production sweep (a producer before its consumers),
             True for the demand sweep (a consumer before its producers).
+        connections : list, optional
+            The connections to constrain the order by. Defaults to all of them;
+            :func:`compute_equation_order` passes the set minus the ones it has
+            torn, so a loop an integrated level breaks stops constraining
+            anything (R-14).
 
         Raises
         ------
         ContinuousFlowCycleError
             When the graph is cyclic, naming the connections that close it.
         """
-        sorter = self._build_sorter(reverse=reverse)
+        connections = self.connections if connections is None else connections
+
+        sorter = self._build_sorter(reverse=reverse, connections=connections)
 
         try:
             sorter.prepare()
         except graphlib.CycleError as err:
-            raise self._cycle_error(err, reverse=reverse) from err
+            raise self._cycle_error(err, reverse, connections) from err
 
         order = []
         while sorter.is_active():
@@ -442,12 +588,17 @@ class ContinuousFlowGraph:
 
         return order
 
-    def _cycle_error(self, err, reverse):
+    def _cycle_error(self, err, reverse, connections):
         """Turn ``graphlib``'s cycle path into an error naming the connections.
 
         ``CycleError.args[1]`` is the offending path, read along the sorter's
         successor direction -- which is the flow direction for the production
         sweep and its opposite for the demand sweep.
+
+        Only the connections the sort was actually constrained by are named: a
+        loop reported over :attr:`algebraic_connections` must point at the
+        dependencies nothing integrates, not at the buffered ones that were
+        deliberately dropped.
         """
         cycle = list(err.args[1]) if len(err.args) > 1 else []
         pairs = list(zip(cycle, cycle[1:]))
@@ -455,11 +606,11 @@ class ContinuousFlowGraph:
             cycle = list(reversed(cycle))
             pairs = [(target, source) for source, target in pairs]
 
-        connections = []
+        closing = []
         for source, target in pairs:
-            connections.extend(self.connections_between(source, target))
+            closing.extend(self.connections_between(source, target, connections))
 
-        return ContinuousFlowCycleError(cycle, connections)
+        return ContinuousFlowCycleError(cycle, closing)
 
     def __repr__(self) -> str:
         return (
@@ -516,7 +667,12 @@ def build_continuous_flow_graph(system):
                     continue
 
                 graph.add_node(target_key)
-                graph.add_connection(key, target_key, flow_name)
+                graph.add_connection(
+                    key,
+                    target_key,
+                    flow_name,
+                    state_broken=capacity_breaks_inbound(target_comp, flow_name),
+                )
 
     return graph
 
@@ -853,13 +1009,17 @@ class EquationOrder:
     than inferred from simulation output.
     """
 
-    def __init__(self, graph, demand_order, production_order):
+    def __init__(self, graph, demand_order, production_order, torn=()):
         #: The graph the order was derived from.
         self.graph = graph
         #: Component names in reverse-topological order (demand sweep).
         self.demand_order = list(demand_order)
         #: Component names in topological order (production sweep).
         self.production_order = list(production_order)
+        #: The connections dropped to break a cycle an integrated level already
+        #: breaks (R-14). **Empty for every acyclic model**, which is what makes
+        #: the derived order of a model that builds today byte-identical.
+        self.torn = list(torn)
         #: What this order actually registered, in registration order.
         self.registrations = []
 
@@ -891,28 +1051,67 @@ class EquationOrder:
 def compute_equation_order(system):
     """Derive the evaluation order of ``system``, registering nothing.
 
+    The **whole** edge set is sorted first, so a model that builds today derives
+    exactly the order it derived before: the state-broken edges take part in the
+    sort like any other, and no acyclic model's sequence moves.
+
+    A cycle is then torn, one loop at a time (R-14). Each pass drops the
+    connections of the *reported* loop that an integrated level already breaks
+    (:func:`capacity_breaks_inbound`) and sorts again, so the tear stays minimal
+    -- a buffered edge elsewhere in the model keeps constraining the order it
+    always did. A tank wired to a recirculation pump and back sorts here.
+
+    A loop with **no** such connection on it is an algebraic loop -- two rates
+    depending on each other with nothing integrated between them -- and is
+    refused exactly as before, with the connections closing it named.
+
     Raises
     ------
     ContinuousFlowCycleError
-        When the continuous-flow graph is cyclic (R30), or when a comparison on
-        a continuous rate closes an instantaneous loop the graph does not carry
+        When the continuous-flow graph carries a loop no integrated state
+        breaks (R30), or when a comparison on a continuous rate closes an
+        instantaneous loop the graph does not carry
         (:class:`RateComparisonLoopError`).
     """
     graph = build_continuous_flow_graph(system)
 
-    # The forward sweep is what carries the acyclicity check: both sweeps read
-    # the same graph, so one check covers both.
-    production_order = graph.static_order(reverse=False)
-    demand_order = graph.static_order(reverse=True)
+    connections = list(graph.connections)
+    torn = []
 
-    # Only once the graph is known acyclic: the walk below reads it, and a
+    # Bounded by the connection count: every pass that does not return drops at
+    # least one connection, and a pass with nothing to drop raises.
+    for _ in range(len(graph.connections) + 1):
+        try:
+            # The forward sweep is what carries the acyclicity check: both
+            # sweeps read the same graph, so one check covers both -- but a
+            # tear must satisfy them together, hence both inside the try.
+            production_order = graph.static_order(
+                reverse=False, connections=connections
+            )
+            demand_order = graph.static_order(reverse=True, connections=connections)
+            break
+        except ContinuousFlowCycleError as err:
+            breaking = [cnct for cnct in err.connections if cnct.state_broken]
+
+            # Nothing integrates anywhere on this loop: the refusal stands, and
+            # the error already names the connections closing it.
+            if not breaking:
+                raise
+
+            dropped = {id(cnct) for cnct in breaking}
+            torn.extend(breaking)
+            connections = [cnct for cnct in connections if id(cnct) not in dropped]
+    else:  # pragma: no cover - unreachable: each pass drops or raises
+        raise ContinuousFlowCycleError([], graph.connections)
+
+    # Only once the graph is known sortable: the walk below reads it, and a
     # cycle in the continuous connections is the error to report first.
     loops = find_rate_comparison_loops(system, graph)
 
     if loops:
         raise loops[0]
 
-    return EquationOrder(graph, demand_order, production_order)
+    return EquationOrder(graph, demand_order, production_order, torn=torn)
 
 
 def register_equation_order(system):

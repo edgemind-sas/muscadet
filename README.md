@@ -898,7 +898,7 @@ Three quantities travel through a continuous component:
 |---|---|
 | **demand** | what it publishes upstream — the downstream demand mapped back through the rule's declared coefficients |
 | **delivery** | what its suppliers actually give it — the lesser of production, demand and its allocated share |
-| **consumption** | what its rule actually uses — `scale × coefficient`, the scale set by the scarcest input |
+| **consumption** | what its rule actually uses — `scale × uptake × coefficient`: the scale set by the scarcest input, and the `uptake` its outputs were actually produced at |
 
 **Delivery equals consumption.** A rule limited by one reagent is fetched more of the others than it can use, because the demand was sized before the scale was known. What it does not use is **released back to the supplier** at the end of the production sweep, so nothing is destroyed:
 
@@ -911,6 +911,19 @@ electro.flows_in["Elec"].get_delivered() # 0.5  -- and it draws 0.5, not 1.0
 ```
 
 Behind a stock, this is the difference between a battery falling from 100 to 97.5 over five time units and one falling to 0.67. What a component draws equals what it consumes plus what it stores, for every component and at every stop.
+
+**A derated or profiled output draws less too.** `rule_scale` computes what the *inputs* allow, and the derating rate and the time profile scale what the outputs *deliver* — so the draw has to follow the second, not the first. An electrolyser whose `H2` output a failure mode cuts to zero produces nothing and therefore consumes nothing; it does not go on emptying its battery and its water tank at the nominal rate for the rest of the mission, nor starve a rival sharing them as if it were still running:
+
+```python
+electro.flows_out["H2"].get_effective_rate()  # 0.0  -- the mode cut it
+electro.flows_out["H2"].var_fed.value()       # 0.0  -- so it produces nothing
+electro.flows_in["Elec"].get_delivered()      # 0.0  -- and it draws nothing
+battery.capacities["battery"].get_outflow("Elec")   # 0.0 -- the stock is frozen
+```
+
+A rule producing **several** outputs is scaled by the **largest** of their factors, not the smallest. A derating is a loss on the leg it bears on, never a saving on the reagents the other legs still consume: cutting one output of a two-output reaction to zero while the other still delivers in full must not cut the draw to zero, or the surviving output would be making matter out of nothing. On a single-output rule — where a derating is almost always declared — the two coincide. A factor above 1 (an amplifying profile) leaves the draw at the scale the supply allowed: there is nothing more to draw.
+
+The demand is deliberately **not** scaled, exactly like the derating and the profile themselves: the demand sweep maps demand back through the rule's *declared* coefficients. A derated component therefore still asks for its nominal share and hands the surplus straight back.
 
 Three draws are deliberately **not** capped, and none of them destroys anything:
 
@@ -1221,6 +1234,52 @@ my_loop.connect_flow(source="SENS", target="SRC", flow_name="fill")
 
 The connection graph above carries a loop — source to capacity, capacity to sensor, sensor back to source — and the system starts all the same: neither a measurement link nor a discrete control port is a continuous flow, so neither takes part in the acyclicity check that continuous flows are subject to.
 
+### Recirculation: which continuous loops build, and which are refused
+
+A loop in the **continuous** flow graph is refused only when nothing on it is integrated. A tank wired to a recirculation pump and back builds and runs, because its own volume breaks the loop:
+
+```python
+loop = muscadet.System(name="Recirculation")
+
+loop.add_component(
+    name="TANK", cls="CapacityContinuous", ports="both", flow="q",
+    capacity=100.0, capacity_name="tank", content_init={"q": 50.0},
+)
+loop.add_component(
+    name="PUMP", cls="TransformerContinuous",
+    flows_in=["q"], flows_out=["q"],
+    rules=[dict(name="recirculate", cons={"q": 1.0}, prod={"q": 1.0})],
+)
+
+loop.connect_flow(source="TANK", target="PUMP", flow_name="q")
+loop.connect_flow(source="PUMP", target="TANK", flow_name="q")
+
+loop.simulate(...)          # builds: TANK then PUMP
+```
+
+The edge `A --q--> B` exists because B reads what A exports, so dropping it lets B run first — which is sound exactly when **B's own exports do not algebraically depend on what arrived**. A capacity of B's is what makes that true, since the volume is then the counterparty of the rules:
+
+- a capacity of B holding `q` on its **input** side: what arrives is integrated before any rule reads it;
+- a capacity of B holding **every** continuous output of B on the **output** side: what leaves is served from the volume, not from what arrived. That is `CapacityContinuous(ports="both")`, whose capacity `side` is `"out"`, and it is what the loop above rests on.
+
+The break belongs to the **receiving** component: a capacity behind a *producer's* output does not license its consumer to run first, since the consumer would still use the stale value algebraically. And one buffered output is not enough — a transformer buffering `p` while exporting `r` straight through still passes its input on, so a loop closing through `r` is refused.
+
+**A genuinely algebraic loop is still refused**, with the same `muscadet.ContinuousFlowCycleError`:
+
+```python
+# Two transformers whose rates depend on each other, nothing integrated between
+# ContinuousFlowCycleError: Continuous flow graph must be acyclic (R30):
+# ALG_A -> ALG_B -> ALG_A closes a loop. Connections closing the loop:
+# ALG_A.q_out -> ALG_B.q_in, ALG_B.q_out -> ALG_A.q_in
+```
+
+**Nothing acyclic changes.** The whole edge set is sorted first, and the state-broken edges are dropped only when that sort finds a cycle — so a model that builds today derives exactly the order it derived before. `compute_equation_order(system).torn` reports what was dropped, and is empty for every acyclic model.
+
+Two limits are worth knowing before leaning on this:
+
+- the break is **structural** — declared, not conditioned on the level. A volume standing at zero degrades to a pass-through, so the torn dependency is then read one evaluation late rather than not at all. The solver evaluates the equation set several times per integration step, so that is a within-step lag absorbed by the level;
+- a capacity does **not** break the *demand* sweep: `Capacity.demand_claim` passes a demand straight through a volume by design. The demand of a mass-conserving loop is therefore a unit-gain fixpoint read one evaluation late — it holds whatever it is seeded with (the tank's declared input `demand`), which is what sets the circulating rate, but a claim injected **inside** the loop (a `fill_rate`, or a consumer hanging off the tank) makes it drift by that claim per evaluation. Declare the claim outside the loop.
+
 ### Redundant instruments: combining several readings on one channel
 
 A measurement channel observes **one** publisher by default. Declaring a `combine` policy lifts that cap and says how the several readings arriving on the channel reduce to a single number:
@@ -1320,7 +1379,7 @@ To **vote on booleans** rather than on numbers, nothing new is needed: a discret
 
 A system carrying continuous flows must be **complete** — every component and every connection — before `simulate()` or `isimu_start()` is called the first time.
 
-That first call runs a *pre-run step*: it reads the connection graph back from the engine, checks it for cycles, derives the evaluation order of the two sweeps from it, and registers each sweep equation on the PDMP solver with its order. The step cannot run a second time. PyCATSHOO refuses to register an equation its solver already holds and offers no way to remove one, while the order is derived from the *whole* graph — so a component arriving late does not merely add equations, it renumbers ones that can no longer be renumbered.
+That first call runs a *pre-run step*: it reads the connection graph back from the engine, checks it for loops nothing integrates, derives the evaluation order of the two sweeps from it, and registers each sweep equation on the PDMP solver with its order. The step cannot run a second time. PyCATSHOO refuses to register an equation its solver already holds and offers no way to remove one, while the order is derived from the *whole* graph — so a component arriving late does not merely add equations, it renumbers ones that can no longer be renumbered.
 
 A continuous component or connection added after that first call is therefore refused at the next entry point:
 

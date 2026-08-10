@@ -11,9 +11,20 @@ depleted. Behind a STOCK it turns an accounting discrepancy into lost matter,
 and that is what this module measures -- a battery falling to 0.67 out of 100
 over five time units where the reaction justifies 2.5.
 
-The fix caps the draw at ``scale x coefficient`` in the production sweep, where
-the scale is already known, and gives the surplus back to the suppliers. Three
-draws are deliberately NOT capped, and each has a scenario here:
+The fix caps the draw at ``scale x uptake x coefficient`` in the production
+sweep, where both are already known, and gives the surplus back to the
+suppliers.
+
+``uptake`` is the second half of it (R-13). ``rule_scale`` computes what the
+INPUTS allow, which is not what the outputs delivered: a derating and a time
+profile scale production and were read only afterwards, so a component whose
+output a failure mode cut to zero went on drawing at the nominal rate for the
+whole mission -- and the cap above had nothing to give back, because it compared
+the draw against the very scale the derating had not reached. Conservation is
+therefore asserted here with each of those terms active, per component and per
+stop, exactly as it is for the limiting reagent.
+
+Three draws are deliberately NOT capped, and each has a scenario here:
 
 - an input a **capacity** buffers -- the surplus is stored, not destroyed, and
   starving the buffer would defeat what a buffer is for;
@@ -81,6 +92,33 @@ ODC_BUFFER_PROD = {"y": 1.0}
 ODC_BUFFER_DEMAND = 1.0
 ODC_BUFFER_HORIZON = 2.0
 
+# -- A derating and a time profile, with a stock behind the metered reagent.
+#    Conservation must hold with either term active: what the component draws
+#    is what it PRODUCED, not what its inputs would have allowed (R-13).
+ODC_SCALED_CONS = {"m": 2.0, "e": 1.0}
+ODC_SCALED_PROD = {"p": 1.0}
+#: Plentiful, so that neither reagent is the limiting one: the only thing that
+#: can reduce the draw here is the derating or the profile.
+ODC_SCALED_SUPPLY = 20.0
+ODC_SCALED_STOCK = 100.0
+ODC_SCALED_VOLUME = 200.0
+#: What the sink asks for, and therefore the scale the rules run at.
+ODC_SCALED_DEMAND = 4.0
+#: What the mode leaves of the output, and when it fires.
+ODC_DERATING = 0.25
+ODC_DERATING_DATE = 1.0
+ODC_SCALED_HORIZON = 2.0
+
+
+def odc_ramp(time):
+    """A deliberately trivial CONTINUOUS profile: 0.2 at t=0, +0.2 per unit.
+
+    Linear, and kept below 1 over the horizon, so the arithmetic of the
+    assertions is exact and the clamp of :func:`get_uptake_factor` -- which
+    refuses to draw MORE than the supply allowed -- never has to bite.
+    """
+    return 0.2 + 0.2 * time
+
 
 # ----------------------------------------------------------------------
 # Building blocks
@@ -88,9 +126,12 @@ ODC_BUFFER_HORIZON = 2.0
 
 
 def add_clock(comp, date):
-    """Give the interactive session a date it can always step to."""
+    """Give the interactive session a date it can always step to.
+
+    Named from the date, so one component may carry several stops.
+    """
     comp.add_atm2states(
-        name="clock",
+        name=f"clock_{str(date).replace('.', '_')}",
         st1="s0",
         st2="s1",
         occ_law_12={"cls": "delay", "time": date},
@@ -340,6 +381,112 @@ def run_rivals_scenario(obs):
     system.deleteSys()
 
 
+def add_scaled_reactor(system, prefix, flows_out):
+    """A reactor on a plentiful supply and a stock, with a metered downstream.
+
+    Both reagents are supplied well beyond what the rule can use, so the scale
+    is set by the sink's demand alone: whatever reduces the draw below the
+    nominal has to be the derating or the profile, and nothing else.
+    """
+    system.add_component(
+        name=f"{prefix}_M", cls="SourceContinuous", flow="m", rate=ODC_SCALED_SUPPLY
+    )
+    system.add_component(
+        name=f"{prefix}_E",
+        cls="CapacityContinuous",
+        ports="out",
+        flow="e",
+        capacity=ODC_SCALED_VOLUME,
+        capacity_name="stock",
+        content_init={"e": ODC_SCALED_STOCK},
+    )
+    system.add_component(
+        name=prefix,
+        cls="TransformerContinuous",
+        flows_in=list(ODC_SCALED_CONS),
+        flows_out=flows_out,
+        rules=[dict(name="react", cons=ODC_SCALED_CONS, prod=ODC_SCALED_PROD)],
+    )
+    system.add_component(
+        name=f"{prefix}_C",
+        cls="ConsumerContinuous",
+        flow="p",
+        demand=ODC_SCALED_DEMAND,
+    )
+
+    for source, target, flow in (
+        (f"{prefix}_M", prefix, "m"),
+        (f"{prefix}_E", prefix, "e"),
+        (prefix, f"{prefix}_C", "p"),
+    ):
+        system.connect_flow(source=source, target=target, flow_name=flow)
+
+
+def scaled_snapshot(system, prefix):
+    """What one scaled reactor reads right now."""
+    stock = system.comp[f"{prefix}_E"].capacities["stock"]
+
+    return {
+        "time": system.currentTime(),
+        "produced": system.comp[prefix].flows_out["p"].var_fed.value(),
+        "draws_m": drawn(system, prefix, "m"),
+        "draws_e": drawn(system, prefix, "e"),
+        "stock": stock.get_quantity("e"),
+        "stock_outflow": stock.get_outflow("e"),
+        "balance": reaction_balance(
+            system, prefix, ODC_SCALED_CONS, ODC_SCALED_PROD, "p"
+        ),
+    }
+
+
+def run_scaled_scenario(obs):
+    """Conservation with a DERATING and with a TIME PROFILE active (R-13).
+
+    Two reactors on the same shape: ``DERATED`` has its output cut to a quarter
+    by a failure mode at t=1, ``PROFILED`` carries a ramp of simulation time.
+    Neither is limited by a reagent, so the whole of the reduction is the term
+    under test -- and the draw must follow it.
+    """
+    system = muscadet.System(name="OverDrawScaled")
+
+    add_scaled_reactor(system, "DERATED", flows_out=["p"])
+    system.comp["DERATED"].add_delay_failure_mode(
+        name="cut",
+        failure_time=ODC_DERATING_DATE,
+        failure_effects=[("p", ODC_DERATING)],
+        repair_time=1e6,
+    )
+
+    add_scaled_reactor(
+        system,
+        "PROFILED",
+        flows_out=[
+            {"name": "p", "profile": muscadet.Profile(odc_ramp, continuous=True)}
+        ],
+    )
+
+    for date in (0.5, 1.5, ODC_SCALED_HORIZON):
+        add_clock(system.comp["DERATED_C"], date)
+
+    system.isimu_start()
+
+    trace = walk(
+        system,
+        lambda s: {
+            "time": s.currentTime(),
+            "DERATED": scaled_snapshot(s, "DERATED"),
+            "PROFILED": scaled_snapshot(s, "PROFILED"),
+        },
+        ODC_SCALED_HORIZON,
+    )
+
+    obs["derated"] = [entry["DERATED"] for entry in trace]
+    obs["profiled"] = [entry["PROFILED"] for entry in trace]
+
+    system.isimu_stop()
+    system.deleteSys()
+
+
 def run_buffer_scenario(obs):
     """A buffered input, a rule-less sink, and a rule set that selects nothing.
 
@@ -437,6 +584,7 @@ def the_run():
 
     run_plant_scenario(obs)
     run_rivals_scenario(obs)
+    run_scaled_scenario(obs)
     run_buffer_scenario(obs)
 
     return obs
@@ -572,6 +720,107 @@ def test_the_over_demand_boundary_is_unchanged_and_measured(the_run):
     unbounded = settled(the_run["rivals_unbounded"])[-1]
     assert unbounded["U1_demand_E"] == pytest.approx(ODC_UNBOUNDED_DOWNSTREAM)
     assert unbounded["U2_draws_E"] < 0.01
+
+
+# ----------------------------------------------------------------------
+# Conservation with a derating and with a time profile (R-13)
+# ----------------------------------------------------------------------
+
+
+def test_a_derated_reactor_draws_what_it_produced(the_run):
+    """The mode leaves a quarter of the output, so a quarter is drawn.
+
+    Neither reagent limits the rule -- both are supplied at 20 against
+    coefficients of 2 and 1 at a scale of 4 -- so the whole of the reduction is
+    the derating. Against ``9c5e647`` the draw stayed at the nominal 8 and 4
+    while the output delivered 1, and conservation failed by three quarters of
+    it.
+    """
+    trace = settled(the_run["derated"])
+    assert trace, "the derated reactor never ran"
+
+    for entry in trace:
+        assert_conserved(entry["balance"], f"DERATED at t={entry['time']:g}")
+
+    nominal = [e for e in trace if e["time"] < ODC_DERATING_DATE]
+    cut = [e for e in trace if e["time"] > ODC_DERATING_DATE]
+    assert nominal and cut, "the mode must fire inside the traced window"
+
+    for entry in nominal:
+        assert entry["produced"] == pytest.approx(ODC_SCALED_DEMAND)
+        assert entry["draws_m"] == pytest.approx(
+            ODC_SCALED_CONS["m"] * ODC_SCALED_DEMAND
+        )
+        assert entry["draws_e"] == pytest.approx(
+            ODC_SCALED_CONS["e"] * ODC_SCALED_DEMAND
+        )
+
+    for entry in cut:
+        produced = ODC_SCALED_DEMAND * ODC_DERATING
+        assert entry["produced"] == pytest.approx(produced)
+        assert entry["draws_m"] == pytest.approx(ODC_SCALED_CONS["m"] * produced)
+        assert entry["draws_e"] == pytest.approx(ODC_SCALED_CONS["e"] * produced)
+
+
+def test_a_derated_reactor_stops_draining_its_stock_at_the_nominal_rate(the_run):
+    """The measured symptom: a stock is what makes an over-draw matter.
+
+    The stock behind ``e`` falls at 4 per unit time while the reactor is whole
+    and at 1 once it is cut. Against ``9c5e647`` it went on falling at 4, and
+    the difference was destroyed.
+    """
+    trace = settled(the_run["derated"])
+
+    for entry in trace:
+        expected = ODC_SCALED_CONS["e"] * ODC_SCALED_DEMAND
+        if entry["time"] > ODC_DERATING_DATE:
+            expected *= ODC_DERATING
+        assert entry["stock_outflow"] == pytest.approx(expected, rel=1e-4)
+
+    final = trace[-1]
+    consumed_whole = ODC_SCALED_CONS["e"] * ODC_SCALED_DEMAND * ODC_DERATING_DATE
+    consumed_cut = (
+        ODC_SCALED_CONS["e"]
+        * ODC_SCALED_DEMAND
+        * ODC_DERATING
+        * (final["time"] - ODC_DERATING_DATE)
+    )
+
+    assert final["stock"] == pytest.approx(
+        ODC_SCALED_STOCK - consumed_whole - consumed_cut, rel=ODC_TOL
+    )
+    # ... and strictly more is left than the nominal draw would have spared.
+    assert final["stock"] > ODC_SCALED_STOCK - ODC_SCALED_CONS["e"] * (
+        ODC_SCALED_DEMAND * final["time"]
+    )
+
+
+def test_a_profiled_reactor_draws_what_the_curve_let_it_produce(the_run):
+    """The same statement for a time profile, which multiplies rather than folds.
+
+    A profile scales how large the output is at this instant, so the reagents
+    follow the curve: at 0.3 of it the reactor makes 1.2 of ``p`` and consumes
+    2.4 of ``m`` and 1.2 of ``e``, not 8 and 4.
+    """
+    trace = settled(the_run["profiled"])
+    assert trace, "the profiled reactor never ran"
+
+    for entry in trace:
+        assert_conserved(entry["balance"], f"PROFILED at t={entry['time']:g}")
+
+        factor = odc_ramp(entry["time"])
+        produced = ODC_SCALED_DEMAND * factor
+
+        assert entry["produced"] == pytest.approx(produced, rel=1e-4)
+        assert entry["draws_m"] == pytest.approx(
+            ODC_SCALED_CONS["m"] * produced, rel=1e-4
+        )
+        assert entry["draws_e"] == pytest.approx(
+            ODC_SCALED_CONS["e"] * produced, rel=1e-4
+        )
+        # The curve stays below 1 over the horizon, so the draw is strictly
+        # below the nominal one at every stop.
+        assert entry["draws_e"] < ODC_SCALED_CONS["e"] * ODC_SCALED_DEMAND
 
 
 # ----------------------------------------------------------------------

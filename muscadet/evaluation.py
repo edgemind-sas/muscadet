@@ -16,10 +16,12 @@ Two sweeps, in this order (R8, KD4):
 - **production**, downstream: :func:`compute_production` runs the active rule
   of each rule set at the scale its scarcest input allows (R15) -- or transfers
   each input to the output of the same name when the component declares no rule
-  at all (R31) -- caps the draw on the suppliers at that same scale and hands
-  back what it did not take (:func:`release_unused_supply`, R-12), then delivers
-  the lesser of what was produced and what was asked for, split among the
-  consumers by the output's allocation policy (R16).
+  at all (R31) -- caps the draw on the suppliers at the scale the outputs were
+  actually PRODUCED at, deratings and time profiles included
+  (:func:`get_uptake_factor`), hands back what it did not take
+  (:func:`release_unused_supply`, R-12), then delivers the lesser of what was
+  produced and what was asked for, split among the consumers by the output's
+  allocation policy (R16).
 
 Three quantities are meant to agree, and two of them now do::
 
@@ -29,7 +31,12 @@ Three quantities are meant to agree, and two of them now do::
 
 ``delivery == consumption`` is enforced by :func:`release_unused_supply`: what
 a supplier gives up is what a reaction, a stock or an output receives, so
-nothing is destroyed. ``demand == consumption`` does **not** hold: the demand is
+nothing is destroyed. That holds for what a failure mode or a time profile
+leaves of the outputs as well as for the limiting reagent
+(:func:`get_uptake_factor`): a component whose output is derated to zero
+produces nothing and therefore draws nothing, instead of draining its suppliers
+at the nominal rate for the rest of the mission. ``demand == consumption`` does
+**not** hold: the demand is
 sized on the declared coefficients before the scale is known, so a rule limited
 by one reagent still ASKS for its nominal share of the others. It no longer
 takes it, but it still competes for it, which distorts the split of a supply two
@@ -585,6 +592,16 @@ def compute_production(comp):
     must stay a pure function of the current variable values and must not
     create or register anything.
     """
+    # This evaluation's production factors, discarded from the previous one:
+    # what each continuous output's production is scaled by, and the instant
+    # the profiles among them are functions of. Both are read at most once per
+    # evaluation and only when something reads them -- see
+    # get_production_factor. A per-evaluation hand-off between the two halves
+    # of the sweep (the draw sizes itself on them, the delivery applies them),
+    # never a memo across evaluations.
+    comp._production_factor.clear()
+    comp._evaluation_time = None
+
     comp.refresh_continuous_inputs()
     comp.fill_input_capacities()
 
@@ -593,6 +610,145 @@ def compute_production(comp):
     comp.apply_consumption(consumption)
     comp.release_unused_supply(consumption)
     comp.apply_production(production)
+
+
+def evaluation_time(comp):
+    """The instant this evaluation reads its time profiles at.
+
+    :func:`current_time`, memoised for the duration of one production sweep:
+    the profiles of one component are functions of the SAME instant, and a
+    model declaring none never reaches here at all.
+    """
+    if comp._evaluation_time is None:
+        comp._evaluation_time = comp.current_time()
+
+    return comp._evaluation_time
+
+
+def output_production_factor(comp, flow_name):
+    """What one continuous output's production is multiplied by, right now.
+
+    The two independent terms of R18/R20, composed by **product**::
+
+        profile(t)  x  min(out_rate, per-mode deratings)
+
+    - the **time profile** of the output, if it declares one: a continuous
+      function of simulation time saying how large the output is at this
+      instant -- a solar curve, a daily cycle. Reading it here is also what
+      publishes it on ``{flow}_out_profile``;
+    - the **effective rate** (R18): what the failure modes bearing on the
+      output leave of it, the minimum over their derating variables and the
+      shared ``{flow}_out_rate`` (R20). A rate of 0 is a total loss of
+      production -- a continuous output carries no separate boolean
+      availability gate (R19, KD10).
+
+    The two must not be collapsed into one another. Deratings compose by
+    MINIMUM among themselves, because that is what makes them
+    order-independent and safe on repair; a profile MULTIPLIES whatever the
+    deratings left, because it is the size of the thing being degraded and not
+    a competing degradation. A panel at 0.3 of its curve that is also derated
+    to 0.5 produces 0.15, where a minimum would give 0.3.
+
+    :data:`~muscadet.profile.NOMINAL_FACTOR` for anything that is not a
+    continuous output: a discrete output named in a ``prod`` map keeps its
+    boolean production condition and carries no rate.
+    """
+    flow = comp.flows_out.get(flow_name)
+
+    if not isinstance(flow, FlowContinuousOut):
+        return NOMINAL_FACTOR
+
+    factor = NOMINAL_FACTOR
+
+    if flow.profile is not None:
+        factor = flow.get_profile_factor(comp.evaluation_time())
+        flow.publish_profile_factor(factor)
+
+    return factor * flow.get_effective_rate()
+
+
+def get_production_factor(comp, flow_name):
+    """The factor one output's production carries for THIS evaluation.
+
+    :func:`output_production_factor`, read at most once per output per
+    evaluation. Memoising it is what makes the two halves of the sweep agree:
+    the draw is sized on it in :func:`evaluate_production` and the delivery
+    applies it in :func:`apply_production`, and a profile re-read in between --
+    at an instant the solver may already have advanced -- would let a component
+    consume against one factor and produce against another.
+    """
+    factor = comp._production_factor.get(flow_name)
+
+    if factor is None:
+        factor = comp.output_production_factor(flow_name)
+        comp._production_factor[flow_name] = factor
+
+    return factor
+
+
+def get_uptake_factor(comp, flow_names):
+    """How much of its nominal draw a rule actually needs (R-13).
+
+    **The derated-draw fix.** A derating and a time profile scale what an
+    output PRODUCES, and the draw on the suppliers was sized -- by
+    :func:`evaluate_production`, through :func:`~muscadet.rules.rule_scale` --
+    before either was read. So a component whose output a failure mode cut to
+    zero went on consuming its inputs at the nominal rate while delivering
+    nothing: a dead electrolyser drained its battery and its water tank for the
+    whole mission, and starved every rival sharing them as if it were still
+    running. :func:`release_unused_supply` did not catch it either, since it
+    caps the draw at the PRE-derating scale and therefore had nothing to give
+    back.
+
+    The factor is the **maximum** over the outputs the rule actually produces
+    into, and the choice is forced rather than aesthetic. A rule's outputs are
+    correlated but their deratings are not: one output of a two-output reaction
+    may be cut while the other still delivers in full. Taking the minimum would
+    then cut the draw to zero while the output nothing derated went on
+    producing -- matter created out of nothing. The maximum is the smallest draw that covers
+    everything the rule demonstrably put out, which is exactly what a derating
+    is: a LOSS on the leg it bears on, never a saving on the reagents the other
+    legs still consume. On a single-output rule -- the shape a derating is
+    almost always declared on -- the two coincide.
+
+    Clamped at :data:`~muscadet.profile.NOMINAL_FACTOR` from above. A factor
+    above 1 is an amplifying profile, and the scale it would amplify was
+    already the most the inputs allowed (:func:`~muscadet.rules.rule_scale`):
+    there is nothing more to draw, so an amplification stays what it was, a
+    statement about production alone.
+
+    Deliberately not applied in the demand sweep -- exactly like the derating
+    and the profile themselves, and for the same reason: :func:`evaluate_demand`
+    maps demand back through the rule's DECLARED coefficients, an existing scope
+    boundary. A derated component therefore still ASKS for its nominal share and
+    hands the surplus straight back (R-12).
+
+    Parameters
+    ----------
+    flow_names : iterable of str
+        The output flows the step produces into. Names that are not continuous
+        outputs are ignored: they carry no rate.
+
+    Returns
+    -------
+    float
+        In ``[0, 1]``. :data:`~muscadet.profile.NOMINAL_FACTOR` when the step
+        produces into no continuous output at all -- a rule feeding only
+        discrete outputs throttles nothing, and neither does one producing
+        nothing.
+    """
+    outputs = comp.flows_continuous_out
+
+    factors = [
+        comp.get_production_factor(flow_name)
+        for flow_name in flow_names
+        if flow_name in outputs
+    ]
+
+    if not factors:
+        return NOMINAL_FACTOR
+
+    return min(max(factors), NOMINAL_FACTOR)
 
 
 def fill_input_capacities(comp):
@@ -637,6 +793,13 @@ def evaluate_production(comp):
     """
     Computes what the component draws from its inputs and what it produces.
 
+    The two are **not** returned at the same scale, and that is the whole of
+    R-13. ``production`` carries the rule's own coefficients, for
+    :meth:`apply_production` to scale by each output's derating and time
+    profile; ``consumption`` is already scaled by what those left
+    (:meth:`get_uptake_factor`), because it is the draw the suppliers are about
+    to be told about and nothing downstream of here would apply it.
+
     Returns
     -------
     tuple of dict
@@ -653,6 +816,13 @@ def evaluate_production(comp):
         match name for name (R31), or when two guards of one rule set hold
         at once (R13).
     """
+    # Same reasoning as the clear at the end of :meth:`apply_production`: this
+    # half FILLS the per-evaluation factors, so it must not inherit the
+    # previous evaluation's when it is driven directly rather than by
+    # :meth:`compute_production`.
+    comp._production_factor.clear()
+    comp._evaluation_time = None
+
     consumption = {}
     production = {}
 
@@ -680,12 +850,24 @@ def evaluate_production(comp):
             }
             scale = rule_scale(rule, available)
 
-            accumulate(consumption, rule_consumption(rule, scale))
+            # The scale the outputs are actually PRODUCED at: a rule whose
+            # outputs a failure mode or a time profile scaled down draws less
+            # of its reagents, and one whose only output is dead draws nothing
+            # (R-13). A coefficient of 0 produces nothing of that output and
+            # must not vote -- the catalyst idiom, mirrored from rule_scale.
+            uptake = comp.get_uptake_factor(
+                flow_name
+                for flow_name, coefficient in rule.prod.items()
+                if coefficient > 0
+            )
+
+            accumulate(consumption, rule_consumption(rule, scale * uptake))
             accumulate(production, rule_production(rule, scale))
     else:
         for flow_name in comp.get_identity_transfer_flows():
             transferred = comp.get_input_transferred(flow_name)
-            accumulate(consumption, {flow_name: transferred})
+            uptake = comp.get_uptake_factor((flow_name,))
+            accumulate(consumption, {flow_name: transferred * uptake})
             accumulate(production, {flow_name: transferred})
 
     # A continuous output no rule and no transfer names is a SOURCE: the
@@ -981,10 +1163,18 @@ def release_unused_supply(comp, consumption):
     justifies 2.5.
 
     The scale is already known here: the production sweep computed it a few
-    lines above. So the draw is capped at ``scale x coefficient``, which is
-    exactly what :meth:`evaluate_production` returned, and every supplier is
-    told what was actually taken of what it allocated
+    lines above. So the draw is capped at ``scale x uptake x coefficient``,
+    which is exactly what :meth:`evaluate_production` returned, and every
+    supplier is told what was actually taken of what it allocated
     (:meth:`~muscadet.flow_continuous.FlowContinuousOut.restrict_allocation`).
+
+    ``uptake`` is the second half of the cap (R-13,
+    :meth:`get_uptake_factor`): the scale ``rule_scale`` computes is what the
+    inputs allow, not what the outputs delivered, so a rule whose outputs a
+    failure mode or a time profile scaled down is capped at what it actually
+    produced. Without it a component derated to zero went on drawing at the
+    nominal rate for ever, and this pass had nothing to give back because it
+    was comparing the draw against the very scale the derating had not reached.
 
     Three inputs are deliberately left uncapped, and none of the three is an
     oversight:
@@ -1160,6 +1350,11 @@ def apply_production(comp, production):
     not a competing degradation. A panel at 0.3 of its curve that is also
     derated to 0.5 produces 0.15, where a minimum would give 0.3.
 
+    Both terms are read through :meth:`get_production_factor`, which is the
+    same reading :meth:`evaluate_production` already sized the draw on: what
+    the component takes and what it delivers are then two views of one factor
+    rather than two readings of a clock the solver may have advanced between.
+
     Parameters
     ----------
     production : dict
@@ -1169,12 +1364,6 @@ def apply_production(comp, production):
     # it together, so their requests must all be known before any of them is
     # served (R35).
     buffered = {}
-
-    # Read at most once per evaluation, and only when something reads it: the
-    # profiles of one component are functions of the SAME instant, and a model
-    # declaring none must not start consulting the clock at every step of
-    # every run for a factor that is always 1.
-    time = None
 
     for flow_name, rate in production.items():
         flow = comp.flows_out.get(flow_name)
@@ -1187,15 +1376,7 @@ def apply_production(comp, production):
         # Profile then derating, by product. Applied HERE, before the demand
         # is reconciled and before a capacity is filled, so a scaled-down
         # output fills its buffer more slowly rather than draining it faster.
-        factor = NOMINAL_FACTOR
-
-        if flow.profile is not None:
-            if time is None:
-                time = comp.current_time()
-            factor = flow.get_profile_factor(time)
-            flow.publish_profile_factor(factor)
-
-        rate = float(rate) * factor * flow.get_effective_rate()
+        rate = float(rate) * comp.get_production_factor(flow_name)
 
         request = comp.get_output_request(flow, rate)
         capacity = comp.get_capacity_of_flow(flow_name, "out")
@@ -1216,6 +1397,15 @@ def apply_production(comp, production):
         for flow_name, served in comp.draw_from_capacity(capacity, requests).items():
             delivered = comp.deliver_output(comp.flows_out[flow_name], served)
             capacity.set_outflow(flow_name, delivered)
+
+    # The last reader of the per-evaluation factors, so it is also what ends
+    # their life. :meth:`compute_production` empties them at its head too, but
+    # a component calling this one directly -- outside the sweep, or from an
+    # equation of its own -- must not be served a memo from a previous
+    # evaluation: a frozen factor would pin a derating at the value it had when
+    # the mode first fired and never follow a repair.
+    comp._production_factor.clear()
+    comp._evaluation_time = None
 
 
 def get_output_request(comp, flow, rate):

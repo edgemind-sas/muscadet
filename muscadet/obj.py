@@ -327,6 +327,15 @@ class ObjFlow(cod3s.PycComponent):
         # see get_output_request for why the two sweeps may share a reading.
         self._demand_bound = {}
 
+        # What each continuous output's production is scaled by -- its time
+        # profile times what its failure modes left of it -- and the instant
+        # the profiles are functions of. Both emptied at the head of
+        # compute_production and filled on first read, so the draw and the
+        # delivery of one evaluation are sized on ONE reading (R-13); see
+        # muscadet.evaluation.get_production_factor.
+        self._production_factor = {}
+        self._evaluation_time = None
+
         self.params = {}
         self.has_default_out_automata = create_default_out_automata
 
@@ -1768,6 +1777,10 @@ class ObjFlow(cod3s.PycComponent):
 
     # -- Production, the forward sweep
     current_time = evaluation.current_time
+    evaluation_time = evaluation.evaluation_time
+    output_production_factor = evaluation.output_production_factor
+    get_production_factor = evaluation.get_production_factor
+    get_uptake_factor = evaluation.get_uptake_factor
     compute_production = evaluation.compute_production
     fill_input_capacities = evaluation.fill_input_capacities
     refresh_continuous_inputs = evaluation.refresh_continuous_inputs

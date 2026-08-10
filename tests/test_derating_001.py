@@ -33,6 +33,9 @@ import muscadet
 import cod3s
 import pytest
 
+# Imported for its side effect: a component class resolves by name.
+from muscadet.kb.continuous import CapacityContinuous  # noqa: F401
+
 #: Horizon the interactive session runs to.
 HORIZON = 4.5
 
@@ -43,7 +46,18 @@ CLOCK_DATES = (1.5, 2.5, 3.5, 4.5)
 NEVER = 1e6
 
 #: Components whose output rate and quantity are traced through the run.
-DERATED = ["PLANT", "PLANT_REV", "ZEROED", "AUTO", "EXPLICIT"]
+DERATED = ["PLANT", "PLANT_REV", "ZEROED", "AUTO", "EXPLICIT", "DRAINED"]
+
+# -- The stock behind a derated converter (R-13). A rate of 0 stops the
+# -- production, and it must stop the DRAW that fed it: with an unstocked
+# -- source upstream nothing is depleted and an over-draw leaves no trace at
+# -- all, which is why the cut is also measured against a reservoir here.
+DRAIN_VOLUME = 200.0
+DRAIN_STOCK = 100.0
+#: What the sink asks for, and therefore what the converter draws while alive.
+DRAIN_RATE = 2.0
+#: The date the converter's output is cut, shared with ``ZEROED``.
+DRAIN_CUT = 1.0
 
 
 # ----------------------------------------------------------------------
@@ -185,6 +199,32 @@ def build_system():
         repair_time=NEVER,
     )
 
+    # -- The same cut as ZEROED, with a STOCK behind the input instead of a
+    #    source (R-13). The reservoir is what makes an over-draw visible: an
+    #    unstocked source is never depleted, so a component consuming at the
+    #    nominal rate while producing nothing leaves no trace on it.
+    system.add_component(
+        name="DRAIN_STOCK",
+        cls="CapacityContinuous",
+        ports="out",
+        flow="q",
+        capacity=DRAIN_VOLUME,
+        capacity_name="reservoir",
+        content_init={"q": DRAIN_STOCK},
+    )
+    system.add_component(name="DRAINED", cls="DeratingConverter")
+    system.add_component(
+        name="DRAINED_SINK", cls="DeratingSink", flow="X", demand=DRAIN_RATE
+    )
+    system.connect_flow(source="DRAIN_STOCK", target="DRAINED", flow_name="q")
+    system.connect_flow(source="DRAINED", target="DRAINED_SINK", flow_name="X")
+    system.comp["DRAINED"].add_delay_failure_mode(
+        name="cut",
+        failure_time=DRAIN_CUT,
+        failure_effects=[("X", 0)],
+        repair_time=NEVER,
+    )
+
     # -- The library's return to nominal, against the same thing declared by
     #    hand: both cycle at 1 / 2 / 3 / 4 and must trace identically.
     system.add_component(name="AUTO", cls="DeratingPlant", rate=10.0)
@@ -247,6 +287,13 @@ def snapshot(system):
         },
         "plant_sink": system.comp["PLANT_SINK"].flows_in["X"].var_fed.value(),
         "zeroed_q": system.comp["ZEROED"].flows_in["q"].var_fed.value(),
+        "drained_q": system.comp["DRAINED"].flows_in["q"].get_delivered(),
+        "reservoir": system.comp["DRAIN_STOCK"]
+        .capacities["reservoir"]
+        .get_quantity("q"),
+        "reservoir_outflow": system.comp["DRAIN_STOCK"]
+        .capacities["reservoir"]
+        .get_outflow("q"),
         "signal_b": system.comp["SIGNAL"].flows_out["b"].var_fed.value(),
         "lamp_lit": system.comp["LAMP"].flows_out["lit"].var_fed.value(),
     }
@@ -338,9 +385,20 @@ def test_repairing_one_derating_restores_the_other_one_not_the_nominal(the_run):
 def test_a_rate_of_zero_stops_production_whatever_the_inputs(the_run):
     """AE15: a mode setting the rate of X to 0, and X produces 0.
 
-    ZEROED converts one unit of q into one of X and keeps being fed 7 of q
-    throughout: the output stops because the rate is 0, not because the input
-    dried up. A continuous flow carries no separate availability gate (R19).
+    ZEROED converts one unit of q into one of X, and its SUPPLY goes on
+    offering 7 of q throughout: the output stops because the rate is 0, not
+    because the supply dried up. A continuous flow carries no separate
+    availability gate (R19).
+
+    The DRAW stops with it (R-13). This test used to assert the opposite --
+    ``zeroed_q`` holding at 7 under the heading "the input never stopped" --
+    which recorded the defect rather than the property: the draw is sized by
+    ``rule_scale`` from what the inputs allow, before ``get_effective_rate`` is
+    read, so a dead converter went on consuming at the nominal rate for the
+    whole mission. SUPPLY is an unstocked source, so nothing was depleted and
+    the over-draw left no trace here at all -- which is exactly why
+    :func:`test_a_dead_output_stops_draining_the_stock_behind_it` measures the
+    same cut against a reservoir.
     """
     trace = the_run["trace"]
 
@@ -350,12 +408,65 @@ def test_a_rate_of_zero_stops_production_whatever_the_inputs(the_run):
 
     stopped = after(trace, 1.0)
     assert stopped["X"]["ZEROED"] == pytest.approx(0.0)
-    assert stopped["zeroed_q"] == pytest.approx(7.0), "the input never stopped"
+    assert stopped["zeroed_q"] == pytest.approx(
+        0.0
+    ), "a converter producing nothing draws nothing"
 
-    # ... and it stays at zero for the rest of the run.
+    # ... and both stay at zero for the rest of the run.
     for entry in trace:
         if entry["time"] > 1.0:
             assert entry["X"]["ZEROED"] == pytest.approx(0.0)
+            assert entry["zeroed_q"] == pytest.approx(0.0)
+
+    # The supply is untouched: it can still produce 7, and it is the converter
+    # that stopped asking.
+    supply = the_run["system"].comp["SUPPLY"].flows_out["q"]
+    assert supply.var_fed_default == pytest.approx(7.0)
+    assert supply.get_effective_rate() == pytest.approx(1.0)
+
+
+def test_a_dead_output_stops_draining_the_stock_behind_it(the_run):
+    """R-13: the depletion an unstocked source cannot show.
+
+    DRAINED converts one unit of ``q`` into one of ``X`` for a sink asking for
+    2, so it draws 2 per unit time from a 100-unit reservoir. Its output is cut
+    to 0 at t=1.
+
+    Against ``9c5e647`` the reservoir went on being drawn at 2 per unit time
+    for the whole horizon -- 100 down to 91 by t=4.5 -- while the converter
+    delivered nothing: the draw was capped at ``scale x coefficient`` by the
+    over-draw fix, but that scale is computed before the derating is read, so
+    the cap had nothing to hand back. The stock now stops falling AT the cut
+    and holds what the reaction justifies.
+    """
+    trace = the_run["trace"]
+
+    alive = at(trace, DRAIN_CUT)
+    assert alive["X"]["DRAINED"] == pytest.approx(
+        DRAIN_RATE
+    ), "it produced 2 up to the cut"
+    assert alive["drained_q"] == pytest.approx(DRAIN_RATE)
+    assert alive["reservoir"] == pytest.approx(
+        DRAIN_STOCK - DRAIN_RATE * DRAIN_CUT, rel=0.05
+    )
+
+    for entry in trace:
+        if entry["time"] <= DRAIN_CUT:
+            continue
+
+        assert entry["X"]["DRAINED"] == pytest.approx(0.0)
+        assert entry["drained_q"] == pytest.approx(0.0, abs=1e-9)
+        assert entry["reservoir_outflow"] == pytest.approx(0.0, abs=1e-9)
+
+    # The stock is frozen at what the reaction consumed, whatever the horizon.
+    final = trace[-1]
+    assert final["time"] > DRAIN_CUT
+    assert final["reservoir"] == pytest.approx(
+        DRAIN_STOCK - DRAIN_RATE * DRAIN_CUT, rel=0.05
+    )
+    assert (
+        final["reservoir"] > DRAIN_STOCK - DRAIN_RATE * final["time"]
+    ), "the stock kept draining after the output died"
 
 
 # ----------------------------------------------------------------------
