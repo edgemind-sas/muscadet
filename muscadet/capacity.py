@@ -432,7 +432,55 @@ class Capacity(cod3s.ObjCOD3S):
         for name in names:
             self.content_init.setdefault(name, 0.0)
 
+        self.check_content_init()
+
         return self
+
+    def check_content_init(self):
+        """Refuse a starting content the capacity could never reach (R-5).
+
+        ``capacity`` is checked strictly positive and ``fill_rate`` non-negative
+        at declaration; the content they bound was not, and both ways out of
+        the interval produce plausible-but-wrong numbers with no diagnostic:
+
+        * **over the volume** -- ``capacity=100, content_init={"q": 500}``
+          builds a tank at five times its own volume. The empty/full automaton
+          initialises ``full``, the producer upstream is throttled from t=0,
+          and the bound violation is the one thing that automaton cannot
+          report, since the level is already past it when the run starts.
+        * **negative** -- a negative level propagates into
+          :meth:`split_draw`, whose share clamp exists precisely "so a negative
+          content cannot invert the split". The clamp works around a state that
+          is refused here instead.
+
+        The bound is on the **weighted** total, not per flow: several
+        constituents share one volume, and ``weight`` is how much of it a unit
+        of each occupies. Two flows at 60 each, weighted 1 and 1, overfill a
+        volume of 100 that neither of them exceeds on its own.
+        """
+        for name, quantity in self.content_init.items():
+            if quantity < 0 or quantity != quantity:  # negative or NaN
+                raise ValueError(
+                    f"Capacity {self.name}: initial content of {name!r} must "
+                    f"be positive or zero, got {quantity}"
+                )
+
+        weights = {entry.name: entry.weight for entry in self.flows}
+        occupied = sum(
+            quantity * weights[name] for name, quantity in self.content_init.items()
+        )
+
+        if occupied > self.capacity:
+            held = ", ".join(
+                f"{name}={self.content_init[name]:g}x{weights[name]:g}"
+                for name in weights
+                if self.content_init.get(name)
+            )
+            raise ValueError(
+                f"Capacity {self.name}: initial content occupies {occupied:g} "
+                f"of a volume of {self.capacity:g} ({held}); a capacity cannot "
+                "start beyond the bound its own empty/full automaton watches"
+            )
 
     # ------------------------------------------------------------------
     # Declaration accessors

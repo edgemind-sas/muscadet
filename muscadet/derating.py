@@ -18,13 +18,30 @@ variables (:func:`release_deratings`), a derating having no per-step reset.
 
 import re
 
-import cod3s
-
 from .flow_continuous import (
     NOMINAL_RATE,
     FlowContinuous,
     FlowContinuousOut,
 )
+
+
+def match_flow_name(pattern, flow_name):
+    """
+    Whether an effect pattern names ``flow_name``, ANCHORED.
+
+    The one spelling of the rule, shared by the two paths a mode reaches a
+    flow through: the modes muscadet declares on a component (here) and the
+    standalone ``ObjFailureMode*`` family, which anchors the very same way
+    (``ObjFailureMode.resolve_effects_on``). Unanchored, ``"H2"`` would name
+    ``H2O`` as well and a declaration meant for one output would silently
+    derate its neighbour -- two spellings of one declaration producing
+    different physics.
+
+    ``^...$`` rather than :func:`re.fullmatch`, deliberately: it is the exact
+    expression the standalone path uses, so an alternation is anchored the
+    same way on both sides.
+    """
+    return re.search(f"^{pattern}$", flow_name) is not None
 
 
 def match_continuous_outputs(comp, pattern):
@@ -33,7 +50,8 @@ def match_continuous_outputs(comp, pattern):
 
     Matched on the flow NAME and on the name of the variable it exports, so
     ``"X"`` and ``"X_fed_out"`` designate the same output -- the two
-    spellings a 1.x effect string uses for a discrete flow.
+    spellings a 1.x effect string uses for a discrete flow. Both matches are
+    ANCHORED: see :func:`match_flow_name`.
 
     Parameters
     ----------
@@ -50,7 +68,8 @@ def match_continuous_outputs(comp, pattern):
     return [
         flow_name
         for flow_name in comp.flows_continuous_out
-        if re.search(pattern, flow_name) or re.search(pattern, f"{flow_name}_fed_out")
+        if match_flow_name(pattern, flow_name)
+        or match_flow_name(pattern, f"{flow_name}_fed_out")
     ]
 
 
@@ -113,26 +132,239 @@ def derating_vars_of(comp, mode_name):
     }
 
 
-def continuous_endpoint_names(comp):
-    """
-    Returns the basenames of the continuous variables the sweeps own.
+def derate_the_output(flow_name):
+    """The advice a refusal ends on: name the output, not one of its variables."""
+    return (
+        f"derate the output itself -- ({flow_name!r}, rate) -- which muscadet "
+        "routes onto the derating variable the declaring mode owns"
+    )
 
-    What a continuous flow carries, and what an input demands: written by
-    the production and demand equations at every integration step. A mode
-    clamping one of them would be overwritten within the step, so a mode
-    reaches a continuous output through its derating variable and nowhere
-    else (R19).
+
+def solver_owned_endpoints(comp):
     """
-    names = set()
+    Returns ``{variable basename: what to clamp instead}`` for every variable
+    the solver or the sweeps rewrite at every integration step.
+
+    A clamp on one of them is erased inside the step, so an effect naming one
+    is a **silent no-op** -- the model builds, runs to completion and reports
+    the availability figures of a plant whose modelled failure never happened.
+    That is why the set is exhaustive rather than confined to the flow
+    endpoints it started as, and why each entry carries the endpoint that
+    *would* work: the whole point of listing a variable here is to be able to
+    refuse it by name and say what to write instead.
+
+    What is in it, and why each one cannot be clamped:
+
+    * ``{flow}_fed_{in,out}`` / ``{flow}_demand_{in,out}`` -- what a
+      continuous flow carries and what it asks for, rewritten by the two
+      sweeps (R19);
+    * ``{flow}_out_profile`` -- a read-only PUBLICATION of the factor the
+      production sweep applied, not an input;
+    * a capacity's ``{c}_qty*`` / ``{c}_fill*`` (integrated or derived from
+      the levels) and ``{c}_inflow_{f}`` / ``{c}_outflow_{f}`` (written by
+      the sweeps at every hop);
+    * a published measurement's ``{m}_level`` / ``{m}_fill`` **when it
+      declares a source**, since ``compute_measurements`` republishes them.
+      Without a source they are plain writable variables a mode may drive,
+      which is exactly what they are for, so they stay out.
+
+    ``{flow}_out_rate`` and ``{m}_level_gain`` are deliberately NOT here:
+    they are the public endpoints a mode declared outside muscadet clamps
+    (KD10, R37), and muscadet never writes either.
+    """
+    endpoints = {}
 
     for flow in list(comp.flows_in.values()) + list(comp.flows_out.values()):
         if not isinstance(flow, FlowContinuous):
             continue
+
+        if isinstance(flow, FlowContinuousOut):
+            advice = derate_the_output(flow.name)
+        else:
+            advice = (
+                "a continuous INPUT carries no clampable endpoint: derate the "
+                f"output feeding {flow.name!r} on the producing component"
+            )
+
         for var in (flow.var_fed, flow.var_demand):
             if var is not None:
-                names.add(var.basename())
+                endpoints[var.basename()] = advice
 
-    return names
+        var_profile = getattr(flow, "var_profile", None)
+        if var_profile is not None:
+            endpoints[var_profile.basename()] = (
+                "a time profile is PUBLISHED, never driven: declare a different "
+                f"profile on {flow.name!r}, or {derate_the_output(flow.name)}"
+            )
+
+    for capacity in comp.capacities.values():
+        held = ", ".join(repr(name) for name in capacity.flow_names)
+        advice = (
+            f"a capacity's levels and transit rates are integrated by the "
+            f"solver: derate the output it buffers ({held}), or gate what "
+            "crosses it with a rule guard"
+        )
+        variables = (
+            list(capacity.var_qty.values())
+            + list(capacity.var_fill.values())
+            + list(capacity.var_inflow.values())
+            + list(capacity.var_outflow.values())
+            + [capacity.var_qty_total, capacity.var_fill_total]
+        )
+        for var in variables:
+            if var is not None:
+                endpoints[var.basename()] = advice
+
+    for measurement in comp.measurements_out.values():
+        # A publication with no source is a plain writable variable: driving it
+        # from a mode is its documented use, so it is left clampable.
+        if measurement.source is None:
+            continue
+        advice = (
+            f"a published reading is rewritten from {measurement.source!r} at "
+            f"every integration step: clamp {measurement.name}_level_gain, the "
+            "public gain everything this channel publishes is multiplied by"
+        )
+        for var in (measurement.var_level, measurement.var_fill):
+            if var is not None:
+                endpoints[var.basename()] = advice
+
+    return endpoints
+
+
+def continuous_endpoint_names(comp):
+    """
+    Returns the basenames of the variables the solver and the sweeps own.
+
+    The names of :func:`solver_owned_endpoints`, which is where what belongs
+    in the set -- and what to clamp instead of each -- is written down.
+    """
+    return set(solver_owned_endpoints(comp))
+
+
+def resolve_effect_patterns(comp, pat_value_list, continuous_endpoint):
+    """
+    Resolves effect patterns onto variables, BOTH flow families per pattern.
+
+    The single resolution both muscadet-side entry points go through --
+    :func:`resolve_mode_effects` for a mode declared on the component,
+    :func:`pat_to_var_value_list` for a caller holding only a pattern -- and
+    the same shape as ``ObjFailureMode.resolve_effects_on``, which is what
+    resolves a standalone mode. All three now answer alike.
+
+    Two levels, in this order:
+
+    1. **the output flows**, matched by name and ANCHORED
+       (:func:`match_flow_name`). A continuous output goes to
+       ``continuous_endpoint(flow_name)``; a discrete one to its availability
+       gate. Both families are scanned for EVERY pattern, which is the whole
+       correction: a pattern was previously diverted to the continuous branch
+       as soon as it matched one continuous output, so ``(".*", False)`` on a
+       plant declaring an ``H2`` rate beside an ``H2_status`` signal derated
+       the rate and left the signal announcing that the plant was alive.
+    2. **the component's variable basenames**, the unanchored 1.x resolution,
+       reached only when the pattern names no output flow at all. This is what
+       keeps ``("is_ok_fed_available_out", False)`` -- the dominant 1.x
+       spelling -- and every effect on a variable that is not a flow
+       (``{m}_level_gain``, ``{flow}_out_rate``) resolving exactly as before.
+
+    A pattern whose ONLY matches are variables the solver rewrites is
+    **refused** rather than silently dropped: see
+    :func:`solver_owned_endpoints`. A pattern that also matches something
+    clampable keeps the silent drop, which is what lets a wildcard sweep a
+    component without tripping over its buffers.
+
+    Parameters
+    ----------
+    pat_value_list : iterable of tuples
+        ``(pattern, value)`` pairs, patterns being regular expressions.
+    continuous_endpoint : callable
+        ``f(flow_name) -> variable``: what a continuous output's effect is
+        written to. The per-mode derating variable when the declaring mode is
+        known, the shared ``{flow}_out_rate`` when it is not.
+
+    Returns
+    -------
+    list of tuples
+        ``(variable, value)`` pairs.
+    """
+    pat_value_list = list(pat_value_list)
+    resolved = []
+    fallback = []
+
+    for pattern, value in pat_value_list:
+        matched = []
+
+        for flow_name, flow in comp.flows_out.items():
+            continuous = isinstance(flow, FlowContinuousOut)
+            spellings = [flow_name]
+            if continuous:
+                # The 1.x spelling of an effect on an output, kept working.
+                spellings.append(f"{flow_name}_fed_out")
+
+            if not any(match_flow_name(pattern, name) for name in spellings):
+                continue
+
+            if continuous:
+                matched.append((continuous_endpoint(flow_name), float(value)))
+            elif flow.var_fed_available is not None:
+                matched.append((flow.var_fed_available, value))
+
+        if matched:
+            resolved += matched
+        else:
+            fallback.append((pattern, value))
+
+    if not fallback:
+        return resolved
+
+    # No output flow named: the 1.x resolution over variable basenames. Taken
+    # over ONE snapshot of the component's variables, and only when a fallback
+    # is actually needed -- ``comp.variables()`` builds a fresh proxy per call,
+    # so resolving pattern by pattern through the cod3s helper would multiply
+    # the engine objects a declaration allocates.
+    variables = [(var, var.basename()) for var in comp.variables()]
+    solver_owned = solver_owned_endpoints(comp)
+
+    for pattern, value in fallback:
+        by_name = [
+            (var, basename, value)
+            for var, basename in variables
+            if re.search(pattern, basename)
+        ]
+        keep = [
+            (var, val) for var, basename, val in by_name if basename not in solver_owned
+        ]
+
+        if keep or not by_name:
+            resolved += keep
+            continue
+
+        raise ValueError(
+            unclampable_message(
+                comp, pattern, [basename for _, basename, _ in by_name], solver_owned
+            )
+        )
+
+    return resolved
+
+
+def unclampable_message(comp, pattern, names, solver_owned):
+    """Says which variables a refused effect reached, and what to write instead."""
+    advices = []
+    for name in names:
+        advice = solver_owned[name]
+        if advice not in advices:
+            advices.append(advice)
+
+    plural = "s" if len(names) > 1 else ""
+
+    return (
+        f"Object {comp.name()}: effect pattern {pattern!r} matches only "
+        f"variable{plural} the solver rewrites at every integration step "
+        f"({', '.join(names)}), so the clamp would be erased inside the step "
+        f"and the mode would be a silent no-op. Instead, {'; '.join(advices)}"
+    )
 
 
 def pat_to_var_value_list(comp, *pat_value_list):
@@ -147,16 +379,20 @@ def pat_to_var_value_list(comp, *pat_value_list):
     ``{flow}_out_rate`` -- it would ALSO return that one, so a single pattern
     would resolve to a variable that works and one that silently does not.
 
-    Here a pattern naming a continuous output resolves to its rate variable
-    and to nothing else, and the solver-owned endpoints are dropped whatever
-    the pattern (R19).
+    Here a pattern naming a continuous output resolves to that output's rate
+    variable and to none of its other variables, a pattern naming a discrete
+    output to that output's availability gate -- both families in the same
+    pass -- and the solver-owned endpoints are unreachable whatever the
+    pattern (R19). See :func:`resolve_effect_patterns` for the two levels and
+    for what a pattern reaching nothing BUT a solver-owned variable is
+    refused with.
 
     Note that this is NOT the path muscadet's OWN modes take on a continuous
     output: :func:`resolve_mode_effects` routes those to the per-mode derating
-    variable before ever getting here, because muscadet knows the declaring
-    mode's identity and can therefore keep concurrent deratings apart (R18,
-    R20). This function is what is left for everything else -- a caller holding
-    only a pattern and a value, with no mode to attribute them to.
+    variable, because muscadet knows the declaring mode's identity and can
+    therefore keep concurrent deratings apart (R18, R20). This function is
+    what is left for everything else -- a caller holding only a pattern and a
+    value, with no mode to attribute them to.
 
     Parameters
     ----------
@@ -168,28 +404,11 @@ def pat_to_var_value_list(comp, *pat_value_list):
     list of tuples
         ``(variable, value)`` pairs.
     """
-    rates = []
-    patterns = []
-
-    for pattern, value in pat_value_list:
-        flow_names = comp.match_continuous_outputs(pattern)
-
-        if not flow_names:
-            patterns.append((pattern, value))
-            continue
-
-        rates += [
-            (comp.flows_out[flow_name].var_out_rate, float(value))
-            for flow_name in flow_names
-        ]
-
-    solver_owned = comp.continuous_endpoint_names()
-
-    return [
-        (var, value)
-        for var, value in cod3s.PycComponent.pat_to_var_value_list(comp, *patterns)
-        if var.basename() not in solver_owned
-    ] + rates
+    return resolve_effect_patterns(
+        comp,
+        pat_value_list,
+        lambda flow_name: comp.flows_out[flow_name].var_out_rate,
+    )
 
 
 def resolve_mode_effects(comp, mode_name, effects):
@@ -204,8 +423,12 @@ def resolve_mode_effects(comp, mode_name, effects):
     shared variable would be last-writer-wins and the first mode to repair
     would restore the rate while the other degradation still stood.
 
-    Everything else keeps the 1.x resolution: a regex over the component's
-    variable basenames, through ``pat_to_var_value_list``.
+    A pattern naming a DISCRETE output is resolved beside it, in the same
+    pass, onto that output's availability gate: one pattern reaches every
+    output it names, whichever family each one belongs to.
+
+    Everything else keeps the 1.x resolution: an unanchored regex over the
+    component's variable basenames -- see :func:`resolve_effect_patterns`.
 
     Parameters
     ----------
@@ -219,28 +442,11 @@ def resolve_mode_effects(comp, mode_name, effects):
     list of tuples
         ``(variable, value)`` pairs to clamp while the state holds.
     """
-    patterns = []
-    derated = []
-
-    for pattern, value in effects:
-        flow_names = comp.match_continuous_outputs(pattern)
-
-        if not flow_names:
-            patterns.append((pattern, value))
-            continue
-
-        derated += [
-            (comp.add_derating(mode_name, flow_name), float(value))
-            for flow_name in flow_names
-        ]
-
-    solver_owned = comp.continuous_endpoint_names()
-
-    return [
-        (var, value)
-        for var, value in comp.pat_to_var_value_list(*patterns)
-        if var.basename() not in solver_owned
-    ] + derated
+    return resolve_effect_patterns(
+        comp,
+        effects,
+        lambda flow_name: comp.add_derating(mode_name, flow_name),
+    )
 
 
 def release_deratings(comp, mode_name, *var_value_lists):

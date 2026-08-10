@@ -422,6 +422,55 @@ class FlowContinuous(FlowModel):
         ),
     )
 
+    @pydantic.model_validator(mode="before")
+    @classmethod
+    def check_declaration_keys(cls, data):
+        """Refuse a declaration key this flow does not read, BY NAME.
+
+        Pydantic's default is ``extra="ignore"``, so every key a continuous
+        flow does not declare was accepted, dropped, and the parameter the
+        modeller believed they had set took its default -- indistinguishable,
+        for a numeric one, from a legitimate zero. The two spellings that make
+        it worth closing generally:
+
+        * ``FlowContinuousOut(var_prod_cond=["ctrl"], var_prod_default=True)``
+          -- the DISCRETE production gate, written on a continuous output. The
+          source is believed to be gated by a control port and produces
+          unconditionally for the whole run;
+        * ``FlowContinuousIn(demand=5.0)`` -- ``demand`` is the KB's own
+          spelling (``ConsumerContinuous(demand=...)``), and the flow-level
+          field is ``var_demand_default``. The consumer publishes a demand of
+          zero and its whole chain reports zero.
+
+        This is what ``FlowModel.combine`` / ``combine_fun`` were
+        declared-and-refused to close for one key (R37), generalised: those two
+        stay declared fields, so they reach their own validator and keep their
+        own message about conserved quantities.
+
+        The accepted set is the model's own fields, which is exactly what the
+        flow reads -- the empirical basis of ``ContinuousComponent`` (R-3),
+        where the set has to be declared because the component reads its
+        parameters out of ``kwargs``. Scoped to the CONTINUOUS family: the
+        discrete classes are 1.x surface and are left as they were.
+        """
+        if not isinstance(data, dict):
+            return data
+
+        accepted = set(cls.model_fields)
+        unknown = sorted(set(data) - accepted)
+
+        if unknown:
+            plural = "s" if len(unknown) > 1 else ""
+            unknown_str = ", ".join(repr(key) for key in unknown)
+            accepted_str = ", ".join(sorted(accepted))
+            raise ValueError(
+                f"Flow {data.get('name')!r}: {cls.__name__} does not accept "
+                f"declaration key{plural} {unknown_str}; it accepts "
+                f"{accepted_str}"
+            )
+
+        return data
+
     @property
     def is_continuous(self) -> bool:
         """True: this flow's value moves between integration steps.

@@ -669,6 +669,15 @@ class Boiler(muscadet.ObjFlow):
         )
 ```
 
+A continuous flow **refuses a declaration key it does not read**, by name and at declaration time:
+
+```python
+muscadet.FlowContinuousOut(name="q", var_prod_cond=["ctrl"])   # ValueError
+muscadet.FlowContinuousIn(name="q", demand=5.0)                # ValueError
+```
+
+Pydantic ignores unknown keys, so both used to construct and drop the parameter: the first is the *discrete* production gate written on a continuous output — the source the modeller believes is gated produces unconditionally for the whole run — and the second is the KB's own spelling (`ConsumerContinuous(demand=...)`) against a flow-level field named `var_demand_default`, so the consumer published a demand of zero and its whole chain reported zero. The refusal names the flow, its class, the offending keys and the accepted set; it generalises what `combine` / `combine_fun` were declared-and-refused to close for one key, and those two keep their own message. The discrete family is 1.x surface and is left as it was.
+
 Connections are declared exactly as for a discrete flow:
 
 ```python
@@ -808,7 +817,7 @@ The parameters are:
 - `capacity` — the volume the held flows **share**, a single strictly positive scalar.
 - `side` — `"in"` places the whole capacity upstream of the component's rules, `"out"` downstream. Left out, it is resolved from the held flows and defaults to `"in"` for a flow carried by both sides. Every held flow must resolve to the same side.
 - `fill_rate` — what the volume claims **for itself** while it has room, on top of the demand crossing it. The default `0` is a pure pass-through buffer: it asks for exactly what passes through it, and therefore never stocks up. `math.inf` means "whatever the producer can deliver" — a tank connected to a pump fills at the pump's rate. The claim is the volume's own, so it does **not** depend on anything being connected downstream: a tank at the end of a chain, its own output wired to nothing, fills at its producer's rate exactly as one in the middle of it does.
-- `content_init` — the initial raw quantity per held flow; an omitted flow starts empty.
+- `content_init` — the initial raw quantity per held flow; an omitted flow starts empty. Validated at declaration: each quantity must be positive or zero, and the **weighted** total must fit in the volume. A tank declared at five times its own capacity used to build, start `full`, throttle its producer from t=0, and report a bound violation its own empty/full automaton could not raise — being already past it. The bound is on the weighted sum because several constituents share one volume: `{"a": 40, "b": 40}` at weights 1 and 2 occupies 120 of a volume of 100, though neither exceeds it alone.
 
 The bounds are what a capacity is for, and they are watched by the solver so they are reached exactly:
 
@@ -963,6 +972,9 @@ my_plant.comp["P"].add_exp_failure_mode(
 ```
 
 - The effect pattern is matched on the flow name **and** on the name of the variable it exports, so `"water"` and `"water_fed_out"` designate the same output.
+- The flow-name match is **anchored** (`^...$`), on this path and on the standalone `ObjFailureMode*` one alike: `("H2", 0.5)` names `H2` and never `H2O`. An unanchored match let a declaration meant for one output silently halve its neighbour, and made the two spellings of one declaration produce different physics.
+- One pattern reaches **every output it names, in both families**. `failure_effects=[(".*", False)]` on a plant declaring an `H2` rate beside an `H2_status` signal derates the rate *and* clears the signal's availability; a continuous match no longer diverts the pattern away from the discrete outputs it also names.
+- A pattern naming no output flow at all keeps the 1.x resolution: an unanchored regex over the component's variable basenames, which is what `("is_ok_fed_available_out", False)` relies on.
 - A rate of `0` expresses a **total loss of production**. Continuous flows carry no separate boolean availability gate: the one number expresses both the cut and the degradation.
 - A mode that derates on one state returns the output to its nominal rate on the other, unless it declares a value there itself (a mode repairing to a degraded rather than an as-new state is a legitimate model).
 - The same declaration works with `add_atm2states`, and the effect-string form carries numeric values: `comp.compute_effects_tuples("water=0.25")` yields `[("water", 0.25)]`.
@@ -1003,6 +1015,19 @@ my_plant.add_component(
 ```
 
 The output's two other variables, `water_fed_out` and `water_demand_in`, belong to the PDMP solver and are rewritten at every integration step: a clamp on either is erased inside the step. `water_out_rate` is the endpoint to clamp.
+
+#### Effects the solver would overwrite are refused, not ignored
+
+The same is true of every other variable the sweeps write, and naming one is now a **refused declaration** rather than a mode that builds, runs and does nothing:
+
+| Named in an effect | Why it cannot work | What to write instead |
+| --- | --- | --- |
+| `{flow}_fed_{in,out}`, `{flow}_demand_{in,out}` | rewritten by the two sweeps | `("{flow}", rate)` on an output; on an input, derate the producer |
+| `{flow}_out_profile` | a read-only publication of the applied factor | declare a different `profile`, or derate the output |
+| `{c}_qty*`, `{c}_fill*`, `{c}_inflow_{f}`, `{c}_outflow_{f}` | integrated by the solver, or written at every hop | derate the output the capacity buffers, or gate it with a rule guard |
+| `{m}_level`, `{m}_fill` of a **sourced** publication | republished at every integration step | clamp `{m}_level_gain` |
+
+The refusal names the variables the pattern reached and the endpoint that works. It fires only when a pattern matches **nothing else**: a wildcard that also names something clampable keeps sweeping the component as before, and a publication declaring no `source` stays a plain writable variable a model may drive.
 
 **The two mechanisms compose, they do not compete.** `get_effective_rate()` is the minimum over the shared variable *and* every per-mode derating, so a mode declared outside MUSCADET and a mode declared on the component can degrade one output at once and neither hides the other. MUSCADET itself never writes `{flow}_out_rate`: it keeps the per-mode variables for the modes whose identity it knows, precisely so that two of them stay independent on repair.
 
