@@ -177,42 +177,48 @@ def evaluate_demand(comp):
     def accumulate(flow_name, quantity):
         demands[flow_name] = demands.get(flow_name, 0.0) + quantity
 
-    if comp.rule_sets:
-        for rule_set in comp.rule_sets.values():
-            # Every flow the SET consumes starts at zero, whichever of its
-            # rules is active: a rule set selecting nothing demands nothing,
-            # exactly as it produces nothing (R14).
-            for flow_name in rule_set.consumed_flows:
-                accumulate(flow_name, 0.0)
+    for rule_set in comp.rule_sets.values():
+        # Every flow the SET consumes starts at zero, whichever of its
+        # rules is active: a rule set selecting nothing demands nothing,
+        # exactly as it produces nothing (R14).
+        for flow_name in rule_set.consumed_flows:
+            accumulate(flow_name, 0.0)
 
-            rule = comp.get_active_rule(rule_set)
-            if rule is None:
-                continue
+        rule = comp.get_active_rule(rule_set)
+        if rule is None:
+            continue
 
-            scale = comp.get_demand_scale(rule)
-            for flow_name, coefficient in rule.cons.items():
-                if coefficient <= 0:
-                    # A rule consuming nothing of a flow demands nothing of
-                    # it -- the catalyst idiom, named by the rule so it can
-                    # be guarded on, drawn on at coefficient 0. The guard
-                    # mirrors muscadet.rules.rule_scale, which skips the
-                    # same coefficients: without it the scale of a rule
-                    # whose output nobody is connected to is unbounded, and
-                    # 0 * inf would publish NaN upstream.
-                    accumulate(flow_name, 0.0)
-                    continue
-                accumulate(flow_name, coefficient * scale)
-    else:
-        for flow_name in comp.get_transferable_flows():
-            if not comp.output_carries_demand(flow_name):
-                # Accumulated as an explicit zero rather than skipped: a name
-                # left out of ``demands`` falls through to the
-                # ``var_demand_default`` of a pure consumer's input below,
-                # which would turn "asks for nothing" into "asks for its
-                # declared default" -- the opposite of the intent.
+        scale = comp.get_demand_scale(rule)
+        for flow_name, coefficient in rule.cons.items():
+            if coefficient <= 0:
+                # A rule consuming nothing of a flow demands nothing of
+                # it -- the catalyst idiom, named by the rule so it can
+                # be guarded on, drawn on at coefficient 0. The guard
+                # mirrors muscadet.rules.rule_scale, which skips the
+                # same coefficients: without it the scale of a rule
+                # whose output nobody is connected to is unbounded, and
+                # 0 * inf would publish NaN upstream.
                 accumulate(flow_name, 0.0)
                 continue
-            accumulate(flow_name, comp.get_output_demand(flow_name))
+            accumulate(flow_name, coefficient * scale)
+
+    # The identity transfer, over what the rules leave untouched (R31, R-16).
+    # Unconditional rather than an ``else`` of the branch above: the two are
+    # not alternatives but two halves of one component. A rule set names the
+    # flows it transforms, and a continuous flow carried on both sides that NO
+    # rule set names is still a pass-through -- declaring a rule on a splitter
+    # must not silently stop the flows beside it. The list is empty when the
+    # rules name everything, so a pure transformer is unaffected.
+    for flow_name in comp.get_transferable_flows():
+        if not comp.output_carries_demand(flow_name):
+            # Accumulated as an explicit zero rather than skipped: a name
+            # left out of ``demands`` falls through to the
+            # ``var_demand_default`` of a pure consumer's input below,
+            # which would turn "asks for nothing" into "asks for its
+            # declared default" -- the opposite of the intent.
+            accumulate(flow_name, 0.0)
+            continue
+        accumulate(flow_name, comp.get_output_demand(flow_name))
 
     # A continuous input no rule and no transfer covers claims what it was
     # declared with: a pure consumer has no output to map a demand back from.
@@ -830,45 +836,82 @@ def evaluate_production(comp):
         for flow_name, quantity in quantities.items():
             target[flow_name] = target.get(flow_name, 0.0) + quantity
 
-    if comp.rule_sets:
-        for rule_set in comp.rule_sets.values():
-            # Every flow the SET names starts at zero, whichever of its
-            # rules is active. Written rather than left out: a flow the
-            # previously active mode produced -- or drew from a capacity --
-            # would otherwise keep the rate that mode left on it, and a rule
-            # set selecting nothing must produce zero (R14).
-            accumulate(consumption, dict.fromkeys(rule_set.consumed_flows, 0.0))
-            accumulate(production, dict.fromkeys(rule_set.produced_flows, 0.0))
+    # What each input has LEFT to give, shared across the rule sets (R-17).
+    # ``get_input_available`` reports what one input can serve, and asking it
+    # once per rule set handed each of them the whole of it: two sets both
+    # consuming ``a`` at an inflow of 1.0 each ran at scale 1 and produced 2.0
+    # out of 1.0 received -- matter created, and invisible to
+    # ``release_unused_supply``, which sees a consumption ABOVE the delivery
+    # and has nothing to release. Behind an input capacity the same path wrote
+    # an outflow of 2.0 against an inflow of 1.0 and drained the volume of a
+    # quantity nobody delivered.
+    budget = {}
 
-            rule = comp.get_active_rule(rule_set)
-            if rule is None:
+    def take(flow_name):
+        """What the next rule set may draw from ``flow_name``."""
+        if flow_name not in budget:
+            budget[flow_name] = comp.get_input_available(flow_name)
+        return budget[flow_name]
+
+    def spend(drawn):
+        """Record a draw against the shared budget."""
+        for flow_name, quantity in drawn.items():
+            remaining = budget.get(flow_name)
+            # An unbounded supply -- a stocked capacity nothing bounds -- is
+            # not consumed away, and inf - inf is not a quantity.
+            if remaining is None or math.isinf(remaining):
                 continue
+            budget[flow_name] = max(remaining - quantity, 0.0)
 
-            available = {
-                flow_name: comp.get_input_available(flow_name)
-                for flow_name in rule.cons
-            }
-            scale = rule_scale(rule, available)
+    # Declaration order is the priority order: the sets are evaluated in the
+    # order they were declared, and the first one served is the first one
+    # declared. Deterministic and inspectable, which no proportional split of a
+    # contested reagent would be without a declared policy of its own.
+    for rule_set in comp.rule_sets.values():
+        # Every flow the SET names starts at zero, whichever of its
+        # rules is active. Written rather than left out: a flow the
+        # previously active mode produced -- or drew from a capacity --
+        # would otherwise keep the rate that mode left on it, and a rule
+        # set selecting nothing must produce zero (R14).
+        accumulate(consumption, dict.fromkeys(rule_set.consumed_flows, 0.0))
+        accumulate(production, dict.fromkeys(rule_set.produced_flows, 0.0))
 
-            # The scale the outputs are actually PRODUCED at: a rule whose
-            # outputs a failure mode or a time profile scaled down draws less
-            # of its reagents, and one whose only output is dead draws nothing
-            # (R-13). A coefficient of 0 produces nothing of that output and
-            # must not vote -- the catalyst idiom, mirrored from rule_scale.
-            uptake = comp.get_uptake_factor(
-                flow_name
-                for flow_name, coefficient in rule.prod.items()
-                if coefficient > 0
-            )
+        rule = comp.get_active_rule(rule_set)
+        if rule is None:
+            continue
 
-            accumulate(consumption, rule_consumption(rule, scale * uptake))
-            accumulate(production, rule_production(rule, scale))
-    else:
-        for flow_name in comp.get_identity_transfer_flows():
-            transferred = comp.get_input_transferred(flow_name)
-            uptake = comp.get_uptake_factor((flow_name,))
-            accumulate(consumption, {flow_name: transferred * uptake})
-            accumulate(production, {flow_name: transferred})
+        available = {flow_name: take(flow_name) for flow_name in rule.cons}
+        scale = rule_scale(rule, available)
+
+        # The scale the outputs are actually PRODUCED at: a rule whose
+        # outputs a failure mode or a time profile scaled down draws less
+        # of its reagents, and one whose only output is dead draws nothing
+        # (R-13). A coefficient of 0 produces nothing of that output and
+        # must not vote -- the catalyst idiom, mirrored from rule_scale.
+        uptake = comp.get_uptake_factor(
+            flow_name for flow_name, coefficient in rule.prod.items() if coefficient > 0
+        )
+
+        drawn = rule_consumption(rule, scale * uptake)
+
+        # Spent BEFORE the next set is sized, and on what was actually drawn:
+        # a derated set hands the difference to the next one rather than
+        # reserving it.
+        spend(drawn)
+
+        accumulate(consumption, drawn)
+        accumulate(production, rule_production(rule, scale))
+
+    # The identity transfer, over the flows no rule set names (R31, R-16).
+    # Unconditional for the reason given in :meth:`evaluate_demand`: a rule set
+    # says what its component transforms, not what its component carries, so a
+    # continuous flow present on both sides and named by no rule is a
+    # pass-through whether or not the component also transforms something else.
+    for flow_name in comp.get_identity_transfer_flows():
+        transferred = comp.get_input_transferred(flow_name)
+        uptake = comp.get_uptake_factor((flow_name,))
+        accumulate(consumption, {flow_name: transferred * uptake})
+        accumulate(production, {flow_name: transferred})
 
     # A continuous output no rule and no transfer names is a SOURCE: the
     # value it was declared with is what it can produce. It appears here so
@@ -1016,14 +1059,47 @@ def get_input_transferred(comp, flow_name):
     return max(available, 0.0)
 
 
+def rule_named_flows(comp):
+    """
+    Returns every flow name the component's rule sets consume or produce.
+
+    What the rules ACCOUNT FOR, and therefore what the identity transfer must
+    stand aside from: a flow a rule consumes is drawn by that rule, and a flow
+    a rule produces is written by it. Everything else a component carries is
+    the rules' business no more than if they had not been declared.
+
+    Returns
+    -------
+    set of str
+        Empty when the component declares no rule set.
+    """
+    named = set()
+
+    for rule_set in (comp.rule_sets or {}).values():
+        named.update(rule_set.consumed_flows)
+        named.update(rule_set.produced_flows)
+
+    return named
+
+
 def get_identity_transfer_flows(comp):
     """
-    Returns the flow names a rule-less component transfers, input to output.
+    Returns the flow names a component transfers unchanged, input to output.
 
-    A component that declares continuous flows and no transformation rule
-    performs an identity transfer, matching each input to the output of the
-    same name (R31, KD18): without it every plain tank would need a
-    ceremonial same-in-same-out rule.
+    A component performs an identity transfer on every continuous flow it
+    carries on both sides and **no rule set names**, matching each input to the
+    output of the same name (R31, KD18): without it every plain tank would need
+    a ceremonial same-in-same-out rule.
+
+    The rule sets are subtracted rather than switched on (R-16). Both sweeps
+    used to test ``if comp.rule_sets`` and skip the transfer entirely, so
+    declaring one rule disabled the pass-through for every flow that rule did
+    not mention: a component with ``flows_in=[a, b]``, ``flows_out=[x, b]`` and
+    ``cons={a} -> prod={x}`` asked for no ``b`` and emitted none, and everything
+    downstream of ``b`` read zero. The mismatch check below lived in the same
+    dead branch, so nothing was reported either -- and the very same component
+    WITHOUT the rule would either transfer ``b`` or raise. Adding a rule to an
+    existing buffer or splitter therefore killed its untouched flows.
 
     A flow declared on one side only is not part of any transfer, and what
     it means depends on whether the component transforms at all:
@@ -1043,6 +1119,13 @@ def get_identity_transfer_flows(comp):
     invent a quantity, and refusing it would reject models still being
     assembled.
 
+    It is also scoped to the RESIDUE the rules leave, both for the two-sided
+    precondition and for the mismatch itself: a component whose residue lies on
+    one side only transfers nothing and raises nothing -- an input a rule set
+    would consume under a mode it has not reached is a sink, an output nothing
+    produces is a source -- exactly as a component carrying flows on one side
+    only always did.
+
     Returns
     -------
     list of str
@@ -1052,12 +1135,22 @@ def get_identity_transfer_flows(comp):
     Raises
     ------
     ValueError
-        When a wired continuous flow of a two-sided rule-less component has
-        no counterpart of the same name. The message names the component
-        and every unmatched flow.
+        When a wired continuous flow no rule set names, on a component whose
+        unnamed flows straddle both sides, has no counterpart of the same
+        name. The message names the component and every unmatched flow.
     """
-    flows_in = comp.flows_continuous_in
-    flows_out = comp.flows_continuous_out
+    named = rule_named_flows(comp)
+
+    flows_in = {
+        name: flow
+        for name, flow in comp.flows_continuous_in.items()
+        if name not in named
+    }
+    flows_out = {
+        name: flow
+        for name, flow in comp.flows_continuous_out.items()
+        if name not in named
+    }
 
     if not flows_in or not flows_out:
         return []
@@ -1075,11 +1168,11 @@ def get_identity_transfer_flows(comp):
 
     if unmatched:
         raise ValueError(
-            f"Object {comp.name()}: declares continuous flows and no "
-            f"transformation rule, so it transfers each input to the output "
-            f"of the same name, but {', '.join(unmatched)} has no flow of "
-            f"the same name on the other side. Declare the missing flow, or "
-            f"declare what this component transforms with add_rules"
+            f"Object {comp.name()}: no transformation rule names "
+            f"{', '.join(unmatched)}, so it is transferred to the flow of the "
+            f"same name on the other side -- and the other side declares none. "
+            f"Declare the missing flow, or say what this component does with "
+            f"that one in a rule's 'cons' / 'prod' map (add_rules)"
         )
 
     return [name for name in flows_in if name in flows_out]
@@ -1087,23 +1180,29 @@ def get_identity_transfer_flows(comp):
 
 def get_transferable_flows(comp):
     """
-    Returns the continuous flow names carried on BOTH sides, judging nothing.
+    Returns the transferable continuous flow names, judging nothing.
 
-    The same list :meth:`get_identity_transfer_flows` returns, without the
-    R31 model check: the check belongs to the production sweep, which is
-    where a lost quantity actually happens and where it is already reported.
-    The demand sweep uses this one, so that a component replacing production
-    with an equation of its own -- and therefore never transferring anything
-    -- is not refused for a mismatch that has no consequence.
+    The same list :meth:`get_identity_transfer_flows` returns -- carried on
+    both sides, named by no rule set -- without the R31 model check: the check
+    belongs to the production sweep, which is where a lost quantity actually
+    happens and where it is already reported. The demand sweep uses this one,
+    so that a component replacing production with an equation of its own -- and
+    therefore never transferring anything -- is not refused for a mismatch that
+    has no consequence.
 
     Returns
     -------
     list of str
         The matched flow names, in input declaration order.
     """
+    named = rule_named_flows(comp)
     flows_out = comp.flows_continuous_out
 
-    return [name for name in comp.flows_continuous_in if name in flows_out]
+    return [
+        name
+        for name in comp.flows_continuous_in
+        if name in flows_out and name not in named
+    ]
 
 
 def continuous_flow_is_connected(flow, port):

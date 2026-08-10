@@ -376,25 +376,51 @@ class ObjFailureMode(cod3s.ObjFM):
         mode_key = f"{self.basename()}__{aut_name}"
         target_comps = self._combination_targets(aut_name)
 
-        failure_effects_cur = []
+        # Kept per target rather than flattened straight away: what a mode
+        # clamps ON ONE TARGET is what that target has to publish as this
+        # mode's effects (see ``register_mode_signals_on``), and the flat list
+        # the engine wants cannot be taken apart again.
+        failure_by_target = {}
+        repair_by_target = {}
+
         for comp_target_cur in target_comps:
-            failure_effects_cur += self.resolve_effects_on(
+            failure_by_target[id(comp_target_cur)] = self.resolve_effects_on(
                 comp_target_cur, self._flow_effects["occ"], mode_key, "Failure"
             )
 
-        repair_effects_cur = []
         for comp_target_cur in target_comps:
-            repair_effects_cur += self.resolve_effects_on(
+            repair_by_target[id(comp_target_cur)] = self.resolve_effects_on(
                 comp_target_cur, self._flow_effects["not_occ"], mode_key, "Repair"
             )
 
         for comp_target_cur in target_comps:
+            key = id(comp_target_cur)
             self.release_deratings_on(
                 comp_target_cur,
                 mode_key,
-                failure_effects_cur,
-                repair_effects_cur,
+                failure_by_target[key],
+                repair_by_target[key],
             )
+            # After the releases, so the published effects are every variable
+            # this automaton writes on that target and not only the ones the
+            # declaration named.
+            self.register_mode_signals_on(
+                comp_target_cur,
+                mode_key,
+                failure_by_target[key],
+                repair_by_target[key],
+            )
+
+        failure_effects_cur = [
+            record
+            for comp_target_cur in target_comps
+            for record in failure_by_target[id(comp_target_cur)]
+        ]
+        repair_effects_cur = [
+            record
+            for comp_target_cur in target_comps
+            for record in repair_by_target[id(comp_target_cur)]
+        ]
 
         return super()._build_fm_automaton(
             aut_name=aut_name,
@@ -523,6 +549,124 @@ class ObjFailureMode(cod3s.ObjFM):
                 for basename, var in derating_vars.items()
                 if basename not in clamped
             ]
+
+    # ------------------------------------------------------------------
+    # What the mode reads and writes, published on the TARGET (R-19).
+    # ------------------------------------------------------------------
+
+    def register_mode_signals_on(self, comp_target, mode_key, *effect_lists):
+        """
+        Publish this automaton's reads and writes on ``comp_target``.
+
+        ``ObjFlow.mode_signals`` is what :mod:`muscadet.ordering` consults to
+        answer "can this component's production depend on that discrete input?"
+        (``gates_production_on``) and "does a signal arriving here leave again?"
+        (``signal_driven_outputs``). It was written by ``ObjFlow.add_atm2states``
+        and by nothing else, so a mode declared OUTSIDE the component -- every
+        standalone failure mode -- was invisible to both, and an instantaneous
+        loop closed through one escaped the first-run check entirely: the model
+        built, the gated production settled on whatever the topological order
+        happened to evaluate first, and no diagnostic was ever produced.
+
+        Registered per (automaton, target) under the same ``mode_key`` the
+        deratings use, so the two automata a second-order mode builds over one
+        target stay distinct here as they do there.
+
+        **What a condition is read through.** Only the forms whose reads are
+        statically knowable are published: the muscadet dict shorthand
+        (``{input flow name: value}``, which reads ``{flow}_fed_in`` on every
+        target) and the cod3s structured tree (whose operands name an ``attr``
+        on an ``obj``). A **callable** condition reads whatever its body reads
+        and nothing can be derived from it; a constant reads nothing. So the
+        residual is a mode conditioned by a Python function, which stays
+        invisible to the loop analysis -- narrower than the previous residual,
+        which was every standalone mode.
+
+        Parameters
+        ----------
+        comp_target : ObjFlow
+            The component the automaton bears on.
+        mode_key : str
+            The declaring automaton, as ``resolve_effects_on`` allocated it.
+        *effect_lists : list
+            Effect records ``{"var", "value"}`` clamped ON THIS TARGET, in
+            both directions, releases included.
+        """
+        signals = getattr(comp_target, "mode_signals", None)
+
+        if signals is None:
+            return None
+
+        effects = []
+        for effects_cur in effect_lists:
+            for record in effects_cur:
+                basename = record["var"].basename()
+                if basename not in effects:
+                    effects.append(basename)
+
+        entry = {
+            "conditions": sorted(self.condition_signals_on(comp_target)),
+            "effects": effects,
+        }
+        signals[mode_key] = entry
+
+        return entry
+
+    def condition_signals_on(self, comp_target):
+        """Variable basenames this mode's two conditions READ on one target."""
+        reads = set()
+
+        for attr_name in ("occ_cond", "not_occ_cond"):
+            reads |= self._condition_reads(getattr(self, attr_name, None), comp_target)
+
+        return reads
+
+    @staticmethod
+    def _condition_reads(cond, comp_target):
+        """Variable basenames one condition specification reads on a target."""
+        if isinstance(cond, dict):
+            # The muscadet shorthand: every named INPUT flow of the target.
+            flows_in = getattr(comp_target, "flows_in", None) or {}
+            names = set()
+
+            for flow_name in cond:
+                flow = flows_in.get(flow_name)
+                var = None if flow is None else getattr(flow, "var_fed", None)
+                if var is not None:
+                    names.add(var.basename())
+
+            return names
+
+        if isinstance(cond, list):
+            # The cod3s structured tree: nested lists whose leaves carry an
+            # ``attr`` and, optionally, the ``obj`` it belongs to. A leaf naming
+            # another component says nothing about this target.
+            names = set()
+            stack = [cond]
+
+            while stack:
+                node = stack.pop()
+
+                if isinstance(node, (list, tuple)):
+                    stack.extend(node)
+                    continue
+
+                if not isinstance(node, dict):
+                    continue
+
+                attr = node.get("attr")
+                obj = node.get("obj")
+
+                if not isinstance(attr, str):
+                    continue
+
+                if obj is None or obj is comp_target or obj == comp_target.name():
+                    names.add(attr)
+
+            return names
+
+        # A constant reads nothing; a callable reads what nothing can derive.
+        return set()
 
     # ------------------------------------------------------------------
     # Conditions: the muscadet dict shorthand over the target's INPUT flows.

@@ -19,6 +19,17 @@ import copy
 #: (verified: flipping the order integers flips the observed call sequence).
 PDMP_MANAGER_NAME = "muscadet_pdmp"
 
+#: Message-box suffixes an OUTPUT flow exports, longest first so that
+#: ``{f}_available_out`` resolves to ``f`` rather than to ``f_available``. A
+#: name matching none of them belongs to no flow -- a measurement link
+#: (``{c}_level_out``), a logic gate's export -- and is left alone.
+FLOW_OUT_SUFFIXES = ("_available_out", "_out")
+
+#: Same for the boxes an INPUT side offers. ``_trigger_in`` is the third
+#: channel of a discrete trigger flow, whose flow object lives in ``flows_out``
+#: on the receiving component -- see :meth:`System.flow_behind_message_box`.
+FLOW_IN_SUFFIXES = ("_available_in", "_trigger_in", "_in")
+
 
 class ModelChangedAfterPrerunError(ValueError):
     """The continuous model grew after the pre-run step registered its equations.
@@ -412,6 +423,20 @@ class System(cod3s.PycSystem):
         since is refused by :meth:`check_model_unchanged_since_prerun` rather
         than run with the late part inert.
 
+        A pre-run that RAISED did not run: the flag is set once
+        :meth:`prerun_step` has returned, never before it is called. A model
+        error is raised by :func:`muscadet.ordering.compute_equation_order`,
+        which derives the whole order before a single equation is registered,
+        so a refused step leaves the manager exactly as it found it and the
+        next entry point re-derives from scratch and reports the same error
+        again.
+
+        Setting the flag first made the failure **one-shot instead of the step**:
+        a script catching the model error and running again -- which is what a
+        notebook, a study driver and an interactive session all do -- got a run
+        that completed with no diagnostic at all and zero sweep equations
+        registered, presenting the declared defaults as results.
+
         Returns
         -------
         bool
@@ -427,15 +452,17 @@ class System(cod3s.PycSystem):
             self.check_model_unchanged_since_prerun()
             return False
 
-        self._prerun_done = True
+        # Counted per ATTEMPT, which is what it says: a step that raised was
+        # invoked, and a model refused twice is honestly reported as two.
         self._prerun_count = self.prerun_count + 1
+
         self.prerun_step()
 
-        # Recorded AFTER the step, and only once it has not raised: a system
-        # whose first pre-run raised -- on a cycle (R30), or on a rate
-        # comparison loop -- registered nothing, so there is no baseline for a
-        # later run to be compared against. The check below then stands aside
-        # rather than reporting a spurious change on top of the real defect.
+        # Both recorded AFTER the step, and only once it has not raised: a
+        # system whose pre-run raised -- on a cycle (R30), or on a rate
+        # comparison loop -- registered nothing, so it has not run and there is
+        # no baseline for a later run to be compared against either.
+        self._prerun_done = True
         self._prerun_signature = self.model_signature()
 
         return True
@@ -491,6 +518,28 @@ class System(cod3s.PycSystem):
         self.prerun()
         return super().isimu_start(*args, **kwargs)
 
+    def startInteractive(self, *args, **kwargs):
+        """Enter interactive mode, preceded by the pre-run step.
+
+        The engine primitive, and the real entry point of the interactive
+        path: ``cod3s.pycatshoo.isimu.engine.ISimuEngine.start`` -- which is
+        what ``isimu_start_cli`` and the TUI drive -- calls
+        ``system.startInteractive()`` directly and never goes through
+        :meth:`isimu_start`. Hooked only onto the two wrappers, the pre-run
+        step silently did not run there: no equation was registered, every
+        sweep was inert, and a Src -> Tank chain reported a level of 0 while
+        its source advertised its full rate, with no exception and no
+        diagnostic.
+
+        Overriding the primitive rather than adding a third wrapper is what
+        makes the hook independent of which of the two an entry point happens
+        to call: :meth:`isimu_start` reaches it through
+        ``PycSystem.isimu_start``, and :meth:`prerun` is idempotent, so the
+        second call is a no-op.
+        """
+        self.prerun()
+        return super().startInteractive(*args, **kwargs)
+
     def deleteSys(self, *args, **kwargs):
         """Delete the engine system and release everything bound to it.
 
@@ -504,6 +553,157 @@ class System(cod3s.PycSystem):
         self._equation_order = None
         self._equation_registrations = []
         return super().deleteSys(*args, **kwargs)
+
+    # ------------------------------------------------------------------
+    # Connection type checking (AE19)
+    # ------------------------------------------------------------------
+
+    def flow_behind_message_box(self, comp_name, mb_name, port):
+        """Return the flow object a message-box name designates, or None.
+
+        The resolution the type check of AE19 rests on when it is applied to a
+        RAW connection -- :meth:`connect`, which takes message-box names and
+        knows nothing about flows. It is deliberately conservative: a box that
+        does not resolve to a declared flow of the right direction answers
+        None, and a check between two Nones refuses nothing.
+
+        That is what keeps the three legitimate raw connections working:
+
+        * a **measurement link** (``{c}_level_out`` / ``{c}_level_in``, the
+          wiring the README prescribes) resolves to no flow at all -- the
+          stripped name is ``{c}_level``, which is not a flow key -- so it is
+          never judged. A measurement carries a reading, not a quantity, and
+          it belongs to neither family;
+        * a **logic gate**'s export, which no flow object stands behind;
+        * a **trigger** (``{f}_trigger_in``), whose flow object lives in the
+          receiving component's ``flows_out`` -- it is an output activated by
+          the incoming signal, not an input flow -- and is looked up there.
+
+        Parameters
+        ----------
+        comp_name : str
+            Key of the component in ``self.comp``.
+        mb_name : str
+            Message-box name, e.g. ``"q_out"`` or ``"q_trigger_in"``.
+        port : str
+            ``"out"`` for the sending side, ``"in"`` for the receiving one.
+
+        Returns
+        -------
+        muscadet.flow.FlowModel or None
+        """
+        comp = self.comp.get(comp_name)
+
+        if comp is None or not mb_name:
+            return None
+
+        outgoing = port == "out"
+        suffixes = FLOW_OUT_SUFFIXES if outgoing else FLOW_IN_SUFFIXES
+        flows = getattr(comp, "flows_out" if outgoing else "flows_in", None) or {}
+
+        for suffix in suffixes:
+            if not mb_name.endswith(suffix):
+                continue
+
+            flow_name = mb_name[: -len(suffix)]
+            flow = flows.get(flow_name)
+
+            if flow is None and suffix == "_trigger_in":
+                # The trigger channel of a FlowDiscreteOutOnTrigger: the flow
+                # it belongs to is an OUTPUT of the receiving component.
+                flow = (getattr(comp, "flows_out", None) or {}).get(flow_name)
+
+            return flow
+
+        return None
+
+    def check_flow_families(
+        self,
+        source,
+        source_flow_name,
+        source_flow,
+        target,
+        target_flow_name,
+        target_flow,
+    ):
+        """Refuse a connection joining a continuous flow to a discrete one (AE19).
+
+        The single implementation of the rule, so that every route into a
+        connection reports it identically: the flow layer
+        (:meth:`connect_flow`, :meth:`auto_connect`, :meth:`connect_trigger`)
+        and the raw :meth:`connect` the README prescribes for measurement links
+        and that four shipped examples use for everything else.
+
+        Checked only when BOTH sides resolve to a declared flow. A name
+        designating nothing on one side is not a mismatch -- it is a
+        measurement link, a logic gate's export, or a connection a model
+        author is free to make outside the flow vocabulary.
+
+        Raises
+        ------
+        ValueError
+            Naming both components, both flows and both runtime classes.
+        """
+        if source_flow is None or target_flow is None:
+            return
+
+        source_is_continuous = isinstance(source_flow, FlowContinuous)
+        target_is_continuous = isinstance(target_flow, FlowContinuous)
+
+        if source_is_continuous == target_is_continuous:
+            return
+
+        source_kind = "continuous" if source_is_continuous else "discrete"
+        target_kind = "continuous" if target_is_continuous else "discrete"
+
+        raise ValueError(
+            f"Cannot connect {source}.{source_flow_name} "
+            f"({source_kind} {type(source_flow).__name__}) to "
+            f"{target}.{target_flow_name} "
+            f"({target_kind} {type(target_flow).__name__}): "
+            "continuous and discrete flows cannot be connected"
+        )
+
+    def connect(
+        self,
+        component_source,
+        interface_source,
+        component_target,
+        interface_target,
+        *args,
+        **kwargs,
+    ):
+        """Wire two message boxes, refusing a continuous/discrete mismatch.
+
+        The base-class connection, and the one the README, the shipped examples
+        and the measurement-link wiring all use. The type check of AE19 lived
+        only inside :meth:`connect_flow`, so this route accepted a discrete
+        output feeding a continuous input **silently** -- and a boolean signal
+        then reads as a mass flow of one unit per unit time, feeding every
+        downstream balance, capacity level and indicator with a quantity
+        nothing produced.
+
+        Everything that is not a flow-to-flow connection is untouched: see
+        :meth:`flow_behind_message_box` for how a measurement link, a logic
+        gate's export and a trigger stay outside the judgement.
+        """
+        self.check_flow_families(
+            component_source,
+            interface_source,
+            self.flow_behind_message_box(component_source, interface_source, "out"),
+            component_target,
+            interface_target,
+            self.flow_behind_message_box(component_target, interface_target, "in"),
+        )
+
+        return super().connect(
+            component_source,
+            interface_source,
+            component_target,
+            interface_target,
+            *args,
+            **kwargs,
+        )
 
     def auto_connect(
         self,
@@ -662,19 +862,9 @@ class System(cod3s.PycSystem):
             source_flow = self.comp[source].flows_out.get(flow_key)
             target_flow = self.comp[target].flows_in.get(flow_key)
 
-            if source_flow is not None and target_flow is not None:
-                source_is_continuous = isinstance(source_flow, FlowContinuous)
-                target_is_continuous = isinstance(target_flow, FlowContinuous)
-                if source_is_continuous != target_is_continuous:
-                    source_kind = "continuous" if source_is_continuous else "discrete"
-                    target_kind = "continuous" if target_is_continuous else "discrete"
-                    raise ValueError(
-                        f"Cannot connect {source}.{flow_key} "
-                        f"({source_kind} {type(source_flow).__name__}) to "
-                        f"{target}.{flow_key} "
-                        f"({target_kind} {type(target_flow).__name__}): "
-                        "continuous and discrete flows cannot be connected"
-                    )
+            self.check_flow_families(
+                source, flow_key, source_flow, target, flow_key, target_flow
+            )
 
             if check_authorization:
                 # Indexed, not .get(): a missing source flow raised here in 1.x

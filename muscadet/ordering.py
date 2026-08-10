@@ -831,8 +831,64 @@ def signal_driven_outputs(comp, seeds):
     ]
 
 
+def rule_guard_comparison_seeds(comp, flow_in):
+    """Variables a RULE GUARD's comparison on ``flow_in`` decides (R-18).
+
+    The missing half of the seeding. :func:`compared_continuous_inputs`
+    deliberately reads both vocabularies -- a rule guard (R21) and a discrete
+    production condition (R22) share one operand shape and one meaning -- but
+    the walk was seeded from production conditions alone, so a comparison
+    written as a guard produced no seed, no walk and therefore no loop report,
+    however plainly the loop closed.
+
+    What a guard decides is which rule of its set runs, so what carries the
+    comparison onward is everything that SET produces: its continuous outputs
+    as much as any discrete output named in a ``prod`` map. Those states are
+    the seeds; :func:`signal_driven_outputs` then follows them through the
+    production conditions and the mode automata that read them, which is how a
+    guard on a rate reaches the discrete port actually wired out.
+
+    Returns
+    -------
+    set of str
+        Variable basenames, empty when no guard of the component compares
+        ``flow_in``.
+    """
+    seeds = set()
+
+    if flow_in is None:
+        return seeds
+
+    flows_out = getattr(comp, "flows_out", None) or {}
+
+    for rule_set in (getattr(comp, "rule_sets", None) or {}).values():
+        compares = any(
+            operand.is_comparison and operand.flow is flow_in
+            for rule in rule_set.rules
+            for operand in rule.cond
+        )
+
+        if not compares:
+            continue
+
+        for name in rule_set.produced_flows:
+            flow = flows_out.get(name)
+
+            if flow is None:
+                continue
+
+            seeds.add(state_var_name(flow) or f"{name}_fed_out")
+
+    return seeds
+
+
 def comparison_driven_outputs(comp, flow_name):
-    """Discrete outputs of ``comp`` carrying the comparison on ``flow_name``."""
+    """Discrete outputs of ``comp`` carrying the comparison on ``flow_name``.
+
+    Both ways a component can compare a continuous input against a threshold
+    seed the walk: a discrete output's production condition (R22) and a rule
+    set's guard (R21, :func:`rule_guard_comparison_seeds`).
+    """
     flow_in = (getattr(comp, "flows_in", None) or {}).get(flow_name)
     seeds = set()
 
@@ -845,6 +901,8 @@ def comparison_driven_outputs(comp, flow_name):
             for source, compare in prod_cond_operands(flow)
         ):
             seeds.add(state_var_name(flow) or f"{name}_fed_out")
+
+    seeds |= rule_guard_comparison_seeds(comp, flow_in)
 
     return signal_driven_outputs(comp, seeds) if seeds else []
 
