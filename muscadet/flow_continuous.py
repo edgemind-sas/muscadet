@@ -15,32 +15,48 @@ working unchanged, and therefore ``auto_connect`` too.
 
 Variables (per flow named ``f``):
 
-===============================  ===========  =======================================
-Variable                         Owner        Meaning
-===============================  ===========  =======================================
-``f_fed_out``  (``t_double``)    out flow     value produced / delivered downstream
-``f_demand_in`` (reference)      out flow     demands published by the consumers
-``f_fed_in``   (``t_double``)    in flow      value received, sum of the connections
-``f_in``       (reference)       in flow      upstream produced values
-``f_demand_out`` (``t_double``)  in flow      demand published upstream
-``f_out_rate`` (``t_double``)    out flow     shared derating rate, 1 by default
-``f_out_profile`` (``t_double``) out flow     applied time-profile factor, if any
-===============================  ===========  =======================================
+===================================  ===========  ===================================
+Variable                             Owner        Meaning
+===================================  ===========  ===================================
+``f_fed_out``  (``t_double``)        out flow     value produced / delivered downstream
+``f_demand_in`` (reference)          out flow     demands published by the consumers
+``f_capability_out`` (``t_double``)  out flow     what it could deliver if asked
+                                                  without bound (R-20)
+``f_fed_in``   (``t_double``)        in flow      value received, sum of the connections
+``f_in``       (reference)           in flow      upstream produced values
+``f_demand_out`` (``t_double``)      in flow      demand published upstream
+``f_capability_in`` (reference)      in flow      capabilities published by the producers
+``f_out_rate`` (``t_double``)        out flow     shared derating rate, 1 by default
+``f_out_profile`` (``t_double``)     out flow     applied time-profile factor, if any
+===================================  ===========  ===================================
 
 The ``_in`` / ``_out`` suffix denotes the **direction of travel** of the quantity,
 exactly like the discrete ``{name}_trigger_in`` channel carried by an *output*
-flow: an input flow receives ``fed`` and emits ``demand``; an output flow emits
-``fed`` and receives ``demand``.
+flow: an input flow receives ``fed`` and ``capability`` and emits ``demand``; an
+output flow emits ``fed`` and ``capability`` and receives ``demand``.
 
 Message boxes: a continuous flow uses a **single bidirectional** message box per
-port — ``f_out`` on the producer, ``f_in`` on the consumer — carrying two aliases:
+port — ``f_out`` on the producer, ``f_in`` on the consumer — carrying three
+aliases:
 
-- alias ``f``          — data channel, exported by the out flow, imported by the in flow
-- alias ``f_demand``   — demand channel, exported by the in flow, imported by the out flow
+- alias ``f``            — data channel, exported by the out flow, imported by the in flow
+- alias ``f_demand``     — demand channel, exported by the in flow, imported by the out flow
+- alias ``f_capability`` — capability channel, exported by the out flow, imported by the in flow
 
-One ``connect(src, "f_out", tgt, "f_in")`` therefore wires *both* directions, and
-the demand alias can collide neither with the data channel nor with the discrete
+One ``connect(src, "f_out", tgt, "f_in")`` therefore wires *all three*, and none
+of the aliases can collide with the data channel or with the discrete
 ``{name}_available_in`` / ``{name}_available_out`` / ``{name}_trigger_in`` boxes.
+
+Capability: what a delivery destroys (R-20)
+-------------------------------------------
+The demand channel above carries what a component *asks* for, and a delivery is
+``min(capability, demand)`` — which destroys the capability, so no amount of
+looking at what ARRIVED can recover it. The capability channel publishes it
+directly, on a third sweep running downstream ahead of the demand sweep
+(:mod:`muscadet.capability`), so that a component sizing its demand on one input
+can bound it by what its OTHER inputs can actually supply. Without it a reaction
+limited by a scarce reagent still claimed its nominal share of an abundant one
+and out-competed a rival that could have used it.
 
 Demand and allocation (R5, R6, R16, R17)
 ----------------------------------------
@@ -411,6 +427,18 @@ class FlowContinuous(FlowModel):
         ),
     )
 
+    var_capability: typing.Any = pydantic.Field(
+        None,
+        description=(
+            "Capability channel endpoint (R-20): a variable on an output flow "
+            "(what it could deliver if asked without bound), a reference on an "
+            "input flow (the capabilities published by its producers). The "
+            "mirror of the demand channel, travelling the other way -- it is "
+            "what a delivery's min(capability, demand) destroys, so it is "
+            "published rather than inferred."
+        ),
+    )
+
     comp_name: typing.Optional[str] = pydantic.Field(
         None,
         exclude=True,
@@ -599,12 +627,20 @@ class FlowContinuousIn(FlowContinuous):
             float(self.var_demand_default),
         )
 
+        # Capability channel: what the producers say they could deliver if
+        # asked without bound (R-20). A reference, like the data channel and
+        # for the same reason -- several producers feed one input.
+        self.var_capability = comp.addReference(f"{self.name}_capability_in")
+
     def add_mb(self, comp, **kwargs):
 
         comp.addMessageBox(f"{self.name}_in")
         comp.addMessageBoxImport(f"{self.name}_in", self.var_in, self.name)
         comp.addMessageBoxExport(
             f"{self.name}_in", self.var_demand, f"{self.name}_demand"
+        )
+        comp.addMessageBoxImport(
+            f"{self.name}_in", self.var_capability, f"{self.name}_capability"
         )
 
     def live_value(self):
@@ -710,6 +746,44 @@ class FlowContinuousIn(FlowContinuous):
             return float(self.var_in_default)
 
         return sum(quantity for _, _, quantity in self.incoming_shares())
+
+    def incoming_capability(self):
+        """What this input's producers could deliver if asked without bound (R-20).
+
+        The **sum** over the connections, exactly as :meth:`get_delivered`
+        aggregates the quantities themselves -- and deliberately NOT the share
+        an allocation would give this consumer. A capability is what a producer
+        could serve if asked without bound; it is not apportioned, because the
+        question it answers is asked before any demand exists to apportion it
+        against.
+
+        That is the acknowledged **over-count** of R-20, and it is worth naming:
+        two rivals reading one supplier both read the whole of it, so each sizes
+        its demand as if the other were absent. The bound is still a strict
+        improvement -- it is the difference between claiming a nominal share of
+        an abundant reagent and claiming what a scarce one permits -- and what
+        it leaves over is exactly what
+        :meth:`muscadet.evaluation.release_unused_supply` goes on catching.
+
+        An input with no connection reads ``var_in_default``, the same answer
+        :meth:`get_delivered` gives it: an unwired input supplies its declared
+        constant and nothing else.
+
+        Returns
+        -------
+        float
+            Possibly ``math.inf`` -- a producer buffered by a stocked capacity
+            publishes an unbounded capability, which is what makes it bound
+            nothing.
+        """
+        count = self.var_capability.cnctCount()
+
+        if count == 0:
+            return float(self.var_in_default)
+
+        return sum(
+            float(self.var_capability.variable(index).value()) for index in range(count)
+        )
 
     def create_sensitive_set_flow_fed_in(self):
         """Build the closure mirroring what the incoming connections deliver.
@@ -961,6 +1035,16 @@ class FlowContinuousOut(FlowContinuous):
         # Demand channel: the demands published by the downstream consumers.
         self.var_demand = comp.addReference(f"{self.name}_demand_in")
 
+        # Capability channel: what this output could deliver if asked without
+        # bound (R-20). Created holding the declared rate, which is the answer
+        # for a pure source and therefore the right value to be read at t = 0,
+        # before the first capability sweep has run.
+        self.var_capability = comp.addVariable(
+            f"{self.name}_capability_out",
+            pyc.TVarType.t_double,
+            float(self.var_fed_default),
+        )
+
         # The shared rate of KD10, declared HERE rather than allocated on
         # demand: a mode that knows nothing of muscadet cannot ask for a
         # variable to be created, it can only name one that already exists.
@@ -987,10 +1071,36 @@ class FlowContinuousOut(FlowContinuous):
         comp.addMessageBoxImport(
             f"{self.name}_out", self.var_demand, f"{self.name}_demand"
         )
+        comp.addMessageBoxExport(
+            f"{self.name}_out", self.var_capability, f"{self.name}_capability"
+        )
 
     def get_var_demand_value(self):
         """Return the total demand published by the downstream consumers."""
         return self.var_demand.sumValue(self.var_demand_in_default)
+
+    # -- what this output could deliver if asked without bound (R-20) ---
+
+    def publish_capability(self, capability):
+        """Publish downstream what this output could deliver if asked freely.
+
+        Written by the capability sweep and by nothing else, so the variable is
+        solver-owned in exactly the sense
+        :func:`muscadet.derating.solver_owned_endpoints` means: a failure mode
+        clamping it would be erased within the step. The endpoint a mode wants
+        is ``{flow}_out_rate``.
+
+        Negative is clamped away, as everywhere else a quantity is published: a
+        capability is what could be served, and nothing can serve less than
+        nothing.
+        """
+        self.var_capability.setValue(max(float(capability), 0.0))
+
+        return self.var_capability.value()
+
+    def get_capability(self):
+        """What this output last published as its capability (R-20)."""
+        return float(self.var_capability.value())
 
     # -- what the consumers ask for ------------------------------------
 

@@ -111,9 +111,16 @@ ties would make the evaluation sequence a function of equation *names* rather
 than of the graph. The integer space is banded, and the bands reproduce the
 evaluation sequence of one integration step:
 
-1. demand sweep, reverse-topological  -- allocated here, from 0 upwards
-2. production sweep, topological      -- allocated here, straight after
-3. capacity levels integrate          -- :data:`CAPACITY_ORDER_BASE` upwards
+1. capability sweep, topological      -- allocated here, from 0 upwards (R-20)
+2. demand sweep, reverse-topological  -- allocated here, straight after
+3. production sweep, topological      -- allocated here, straight after that
+4. capacity levels integrate          -- :data:`CAPACITY_ORDER_BASE` upwards
+
+The capability band is **first**, and it has to be: a demand is bounded by what
+the rule's other inputs could supply, so every capability in the system must be
+settled before the first demand equation runs. It carries no base constant of
+its own because it is graph-derived like the two sweeps below it -- the three
+share one allocator, which is also what keeps their integers distinct.
 
 A capacity equation only reads its own transit variables and writes its own
 levels, so it carries no cross-component constraint -- but it must still take a
@@ -130,8 +137,15 @@ import typing
 # Reused rather than reimplemented: reading a production condition's aligned
 # comparison matrix has exactly one correct handling of a missing entry, and two
 # copies of it would be two chances to disagree about what an empty matrix means.
+from .capability import register_capability_variables
 from .flow import _prod_cond_matrix_entry
 from .flow_continuous import FlowContinuous
+
+#: Equation method looked up on each component for the capability sweep (R-20).
+#: Registered FIRST, on the same topological order the production sweep uses: a
+#: producer must publish what it could deliver before the component it feeds
+#: sizes a demand against it.
+CAPABILITY_EQUATION_METHOD = "compute_capability"
 
 #: Equation method looked up on each component for the demand sweep. The sweep
 #: itself lands in a later unit; a component that does not define this method is
@@ -1082,6 +1096,18 @@ class EquationOrder:
         self.registrations = []
 
     @property
+    def capability_order(self):
+        """Component names in topological order (capability sweep, R-20).
+
+        The production order, and the same list object's content by
+        construction: a capability travels with the flow, exactly like a
+        production, so a producer publishes before its consumers read. Exposed
+        under its own name because the three sweeps are three bands and reading
+        ``production_order`` for the first of them would hide that.
+        """
+        return self.production_order
+
+    @property
     def orders(self):
         """``{(component, method): order}`` for what this order registered."""
         return {(reg.comp, reg.method): reg.order for reg in self.registrations}
@@ -1189,9 +1215,17 @@ def register_equation_order(system):
     if not order.graph.nodes:
         return order
 
+    # Before any equation: the capability channel is written from inside one,
+    # and PyCATSHOO refuses that on a variable its solver does not know about
+    # (R-20). Here rather than at declaration time, so a system that never runs
+    # still never gains a PDMP manager.
+    for comp_name in order.graph.nodes:
+        register_capability_variables(system, system.comp[comp_name])
+
     allocate = _order_allocator(system)
 
     for method, sequence in (
+        (CAPABILITY_EQUATION_METHOD, order.capability_order),
         (DEMAND_EQUATION_METHOD, order.demand_order),
         (PRODUCTION_EQUATION_METHOD, order.production_order),
     ):

@@ -7,12 +7,17 @@ sibling units of this release already use (``muscadet.ordering``,
 name, so ``comp.compute_demand()`` and every override point it carries are
 exactly what they were.
 
-Two sweeps, in this order (R8, KD4):
+Two sweeps live here; a third, :mod:`muscadet.capability`, runs ahead of both
+and is what lets the first of them size a claim it can honour. In evaluation
+order (R8, KD4, R-20):
 
+- **capability**, downstream, in :mod:`muscadet.capability`: each continuous
+  output publishes what it could deliver if asked without bound;
 - **demand**, upstream: :func:`compute_demand` publishes on each continuous
   input what the component needs from it, mapped back from the demand its
-  outputs carry through the active rule's declared coefficients (R34), then
-  claimed by an interposed input capacity (R7, R36);
+  outputs carry through the active rule's declared coefficients (R34), bounded
+  by the scale the rule's OTHER inputs can sustain (R-20), then claimed by an
+  interposed input capacity (R7, R36);
 - **production**, downstream: :func:`compute_production` runs the active rule
   of each rule set at the scale its scarcest input allows (R15) -- or transfers
   each input to the output of the same name when the component declares no rule
@@ -35,13 +40,21 @@ nothing is destroyed. That holds for what a failure mode or a time profile
 leaves of the outputs as well as for the limiting reagent
 (:func:`get_uptake_factor`): a component whose output is derated to zero
 produces nothing and therefore draws nothing, instead of draining its suppliers
-at the nominal rate for the rest of the mission. ``demand == consumption`` does
-**not** hold: the demand is
-sized on the declared coefficients before the scale is known, so a rule limited
-by one reagent still ASKS for its nominal share of the others. It no longer
-takes it, but it still competes for it, which distorts the split of a supply two
-components share. Closing that is a design decision, not a missing pass -- see
-Scope Boundaries.
+at the nominal rate for the rest of the mission.
+
+``demand == consumption`` now holds on the common path too, and R-20 is how: the
+demand is still sized on the declared coefficients -- production has not run, so
+there is no scale to size it on -- but it is bounded by the scale the rule's
+other inputs can sustain, read from the capability those suppliers publish
+(:mod:`muscadet.capability`). A rule limited by one reagent therefore no longer
+asks for its nominal share of the others.
+
+Two residues remain, both knowingly optimistic rather than overlooked. A
+capability read by two rivals is counted twice, since it is published before any
+demand exists to apportion it against; and a derating or a time profile scales
+what an output DELIVERS without being applied to what it claims.
+:func:`release_unused_supply` is what catches both, at the point where the scale
+is finally known -- see Scope Boundaries.
 
 ``muscadet.ordering`` looks the two equation methods up BY NAME and registers
 them with an order derived from the connection graph, so nothing here and
@@ -114,25 +127,28 @@ def evaluate_demand(comp):
 
     The mapping of R34: the demand aggregated on an output is carried back
     onto the inputs through the active rule's ``prod`` and ``cons``
-    coefficients. It uses the **declared** coefficients, never the
-    quantities actually available -- a component capped by a scarce input
-    therefore still claims its nominal demand on the others, and over-claims
-    a shared upstream supply.
+    coefficients, and then **bounded by what the rule's other inputs can
+    actually supply** (R-20).
 
-    What it no longer does is TAKE the over-claim: the production sweep caps
-    the draw at the scale it computes and releases the rest (R-12). So the
-    over-claim costs an allocation distortion between rivals and no longer
-    costs conservation.
+    That bound is the whole of R-20. The R34 mapping uses the DECLARED
+    coefficients, and it has to: production has not run, so the scale is not
+    known yet. Left at that, a component capped by a scarce reagent went on
+    claiming its nominal share of the abundant ones and over-claimed a shared
+    upstream supply -- taking 0.999 of a supply of 1.0 it could use 0.1 of, and
+    leaving a rival 0.001 of the 0.909 available to it. What was missing is the
+    suppliers' CAPABILITY, which ``min(capability, demand)`` destroys and which
+    no lag can recover; :mod:`muscadet.capability` publishes it on a sweep of
+    its own, ahead of this one, and :func:`~muscadet.capability.get_supply_scale`
+    is what is read here::
 
-    The distortion itself cannot be closed by looking at what arrived. A
-    delivery is ``min(capability, demand)``, so a demand computed from
-    deliveries is self-referential: bounding it by what the inputs allowed at
-    the previous evaluation has ZERO as its only fixed point -- measured, a
-    reactor starved from 0.1 to 5e-4 over 4000 evaluations -- and the variant
-    that only counts a saturated input oscillates with period 2 between the
-    nominal claim and the achievable one. What is missing is the suppliers'
-    CAPABILITY, which ``min(capability, demand)`` destroys and which no lag can
-    recover. Scope Boundaries records the decision.
+        demand_i = coefficient_i x min( downstream scale,
+                                        min over j != i of ( capability_j / coefficient_j ) )
+
+    What this does NOT close is a capability two rivals read at once: each sums
+    what its producers publish and apportions nothing, so each sizes itself as
+    if the other were absent. The production sweep still caps the draw at the
+    scale it computes and releases the rest (R-12), which is what catches that
+    residue -- and the two derated cases the bound deliberately ignores.
 
     A component declaring no rule transfers each input to the output of the
     same name (R31), so its demand crosses it unchanged -- but only from an
@@ -200,7 +216,16 @@ def evaluate_demand(comp):
                 # 0 * inf would publish NaN upstream.
                 accumulate(flow_name, 0.0)
                 continue
-            accumulate(flow_name, coefficient * scale)
+
+            # The supply bound of R-20: what this input is asked for is
+            # capped by the scale the rule's OTHER inputs can sustain, read
+            # from the capability they publish. Without it the demand was
+            # the downstream scale alone, so a reaction limited by a scarce
+            # reagent claimed its nominal share of an abundant one and
+            # out-competed a rival that could have used it.
+            supply = comp.get_supply_scale(rule, exclude=flow_name)
+
+            accumulate(flow_name, coefficient * min(scale, supply))
 
     # The identity transfer, over what the rules leave untouched (R31, R-16).
     # Unconditional rather than an ``else`` of the branch above: the two are

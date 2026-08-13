@@ -872,7 +872,12 @@ def test_every_equation_receives_a_distinct_order_integer(the_run):
     assert len(orders) == len(set(orders))
 
     methods = sorted({reg.method for reg in registrations})
-    assert methods == ["compute_capacities", "compute_demand", "compute_production"]
+    assert methods == [
+        "compute_capability",
+        "compute_capacities",
+        "compute_demand",
+        "compute_production",
+    ]
 
 
 def test_the_sweeps_are_ordered_before_the_capacity_equations(the_run):

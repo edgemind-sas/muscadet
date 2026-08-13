@@ -167,7 +167,7 @@ from .capacity import (
 # The two standalone algorithms over a component, bound as methods of ObjFlow
 # further down: the two-sweep evaluation and the derating engine. Imported as
 # modules rather than by name so the binding block reads as what it is.
-from . import derating, evaluation
+from . import capability, derating, evaluation
 
 # Standalone failure modes: components of their own, re-exported here because
 # ``muscadet.obj.ObjFailureMode*`` is where every 1.x model imports them from,
@@ -1760,8 +1760,17 @@ class ObjFlow(cod3s.PycComponent):
     # ``super().evaluate_production()`` and every other override point behave
     # exactly as they did when the bodies sat in this file.
     #
-    # ``muscadet.ordering`` looks ``compute_demand`` and ``compute_production``
-    # up BY NAME, which is the reason the bindings must keep those names.
+    # ``muscadet.ordering`` looks ``compute_capability``, ``compute_demand`` and
+    # ``compute_production`` up BY NAME, which is the reason the bindings must
+    # keep those names.
+
+    # -- Capability, the forward sweep that runs first (R-20)
+    compute_capability = capability.compute_capability
+    evaluate_capability = capability.evaluate_capability
+    apply_capability = capability.apply_capability
+    output_capability = capability.output_capability
+    get_input_capability = capability.get_input_capability
+    get_supply_scale = capability.get_supply_scale
 
     # -- Demand, the reverse sweep
     compute_demand = evaluation.compute_demand

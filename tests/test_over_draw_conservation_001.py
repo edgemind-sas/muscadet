@@ -31,11 +31,18 @@ Three draws are deliberately NOT capped, and each has a scenario here:
 - an input **no rule accounts for** -- a pure consumer IS the sink;
 - a connection whose producer allocated nothing, which has no split to correct.
 
-What this does NOT close is the **over-demand**: the demand a component
-publishes is still sized on the declared coefficients, so two rivals on one
-supply are still split in proportion to demands one of them cannot honour. That
-boundary is asserted here as it stands rather than left unmeasured -- see
-``test_the_over_demand_boundary_is_unchanged_and_measured``.
+The **over-demand** half was open when this module was written and is now closed
+by R-20: the demand is bounded by the scale the rule's other inputs can sustain,
+read from the capability those suppliers publish
+(:mod:`muscadet.capability`). The two rivals are split 0.0909 / 0.909 instead of
+0.5 / 0.5, at the first evaluation, under a modest downstream demand and under
+an unbounded one alike.
+
+What R-20 does not close is the **shared capability**: a supplier read by two
+rivals is counted whole by each, so their claims still sum above what exists.
+That residue is measured here rather than left implicit -- see
+``test_the_fair_split_is_reached_and_the_shared_capability_residue_measured`` --
+and it is one of the three cases where ``release_unused_supply`` still fires.
 
 PyCATSHOO forbids more than one live system per process and ``simulate`` cannot
 be called twice on one system, so each scenario is built, driven and deleted
@@ -83,6 +90,12 @@ ODC_RIVAL_SCALE = ODC_SHARED / ODC_RIVAL_CONS["A"]
 ODC_RIVAL_HORIZON = 1.0
 #: An unbounded downstream demand is the normal case in the model being ported.
 ODC_UNBOUNDED_DOWNSTREAM = 1000.0
+#: The fair split of the contested 1.0 once each rival asks for what it can
+#: ACHIEVE (R-20): U1 claims 0.1, U2 claims the 1.0 its own downstream wants,
+#: and the shortage is shared in proportion. Reached at the first evaluation,
+#: and under a modest downstream demand as well as an unbounded one.
+ODC_FAIR_U1 = ODC_RIVAL_SCALE / (ODC_RIVAL_SCALE + 1.0)
+ODC_FAIR_U2 = 1.0 / (ODC_RIVAL_SCALE + 1.0)
 
 # -- A buffered input, which must go on absorbing the surplus
 ODC_BUFFER_SUPPLY = 4.0
@@ -286,6 +299,7 @@ def run_plant_scenario(obs):
             "tank": tank.get_quantity("H2"),
             "H2": system.comp["ELECTRO"].flows_out["H2"].var_fed.value(),
             "Elec_demand": published(system, "ELECTRO", "Elec"),
+            "H2O_demand": published(system, "ELECTRO", "H2O"),
             "balance": reaction_balance(system, "ELECTRO", ODC_CONS, ODC_PROD, "H2"),
         }
 
@@ -647,16 +661,30 @@ def test_nothing_the_battery_gives_up_is_destroyed(the_run):
     assert lost_by_the_battery == pytest.approx(held_as_hydrogen, rel=ODC_TOL)
 
 
-def test_the_unbounded_demand_still_travels(the_run):
-    """R-11 unchanged: an ``inf`` a real consumer published still propagates.
+def test_the_unbounded_demand_travels_where_nothing_bounds_it(the_run):
+    """R-11 unchanged, and R-20 applied on top of it, on the two inputs at once.
 
-    The cap is on the DRAW, never on the demand. The terminal tank claims
-    without bound, that claim crosses the electrolyser's rule, and the
-    electrolyser goes on publishing an unbounded demand on its power input --
-    what changed is only that an unbounded demand no longer empties the battery.
+    The terminal tank claims without bound and that claim crosses the
+    electrolyser's rule, exactly as R-11 says. What each input then publishes is
+    that claim bounded by what the rule's OTHER input can sustain (R-20), and
+    the two inputs answer differently precisely because their suppliers do:
+
+    * ``H2O`` is bounded by the battery's capability, and a stocked capacity is
+      unbounded, so the claim crosses untouched. This is R-11's ``inf``, still
+      travelling;
+    * ``Elec`` is bounded by the water: 2 of ``H2O`` per unit time against a
+      coefficient of 4 is a scale of 0.5, and 1 of ``Elec`` per unit of scale
+      makes 0.5. Against ``968d9b3`` this was ``inf`` too, and the electrolyser
+      competed for power at a rate it could never turn into hydrogen.
+
+    0.5 is also exactly what the reaction consumes, which is the property R-20
+    exists for: on this path demand, delivery and consumption are one quantity.
     """
     for entry in settled(the_run["plant"]):
-        assert math.isinf(entry["Elec_demand"])
+        assert math.isinf(entry["H2O_demand"])
+        assert entry["Elec_demand"] == pytest.approx(
+            ODC_SCALE * ODC_CONS["Elec"], rel=1e-6
+        )
 
 
 # ----------------------------------------------------------------------
@@ -665,17 +693,25 @@ def test_the_unbounded_demand_still_travels(the_run):
 
 
 def test_a_limited_reactor_draws_only_what_it_can_use(the_run):
-    """U1 is limited to 0.1 by its other input, so it draws 0.1 of the shared E.
+    """U1 is limited to 0.1 by its other input, so it never draws more than that.
 
     Against ``09a0b9e`` it drew its whole allocated share -- 0.5 on a modest
     downstream demand, 0.999 on an unbounded one -- and used 0.1 of it.
+
+    It now draws slightly LESS than 0.1, and that is not a regression: since
+    R-20 it asks for 0.1 rather than the nominal 1.0, so the shared supply faces
+    a total demand of 1.1 against the 1.0 it has. The shortage is real -- the
+    two rivals genuinely want more E than exists -- and the proportional policy
+    scales both claims by the same 1/1.1. What changed is that the scarcity is
+    now shared in proportion to what each rival can ACHIEVE.
     """
     for label in ("rivals_modest", "rivals_unbounded"):
         trace = settled(the_run[label])
         assert trace, f"{label} never ran"
 
         for entry in trace:
-            assert entry["U1_draws_E"] == pytest.approx(ODC_RIVAL_SCALE, rel=1e-4)
+            assert entry["U1_draws_E"] <= ODC_RIVAL_SCALE + 1e-9
+            assert entry["U1_draws_E"] == pytest.approx(ODC_FAIR_U1, rel=1e-4), label
             assert_conserved(entry["balance"], f"{label} at t={entry['time']:g}")
 
 
@@ -684,6 +720,12 @@ def test_the_supply_only_gives_up_what_is_taken(the_run):
 
     What is released is available again at the next step rather than lost:
     behind a stock, this is the whole of the conservation fix.
+
+    The shared source now gives up its WHOLE rate, where before R-20 it gave up
+    less: both rivals ask for what they can use, so everything allocated is
+    taken and there is nothing left over to release. That is the common path of
+    :func:`~muscadet.evaluation.release_unused_supply` becoming a no-op -- on
+    this contested flow. It still fires on ``A``, which the next test measures.
     """
     for label in ("rivals_modest", "rivals_unbounded"):
         for entry in settled(the_run[label]):
@@ -691,35 +733,45 @@ def test_the_supply_only_gives_up_what_is_taken(the_run):
                 entry["U1_draws_E"] + entry["U2_draws_E"], rel=1e-6
             ), label
 
-    # Under an unbounded downstream demand the shared source used to give up its
-    # whole rate, all but a thousandth of it to a reactor that could use a tenth.
-    assert settled(the_run["rivals_unbounded"])[-1]["supply"] < ODC_SHARED
+            # Nothing is left unused on the contested supply any more.
+            assert entry["supply"] == pytest.approx(ODC_SHARED, rel=1e-6), label
 
 
-def test_the_over_demand_boundary_is_unchanged_and_measured(the_run):
-    """What the over-draw fix does NOT close, asserted rather than left implicit.
+def test_the_fair_split_is_reached_and_the_shared_capability_residue_measured(the_run):
+    """R-20: the split follows what each rival can achieve, under both demands.
 
-    U1 still PUBLISHES its nominal demand on the contested supply, so the split
-    is still made in proportion to a demand it cannot honour and its rival is
-    still short. The surplus is now released instead of destroyed, so the
-    deprivation is a bad split for one step rather than a permanent loss -- but
-    the split itself has not moved.
+    U1 publishes 0.1 -- what its scarce ``A`` lets it turn into P1 -- instead of
+    the nominal 1.0, so the contested 1.0 is split 0.0909 / 0.909 rather than
+    0.5 / 0.5 under a modest downstream demand and 0.999 / 0.001 under an
+    unbounded one. It settles at the FIRST evaluation and does not move
+    afterwards: a capability is published, never inferred from what arrived, so
+    there is no fixed point to converge towards.
 
-    Fair shares of the contested 1.0, in proportion to what each rival can
-    ACHIEVE, would be 0.0909 to U1 and 0.909 to U2. These numbers are the
-    distance still to travel; closing it is a design decision recorded in Scope
-    Boundaries, and this test is what will fail when it is taken.
+    **The residue R-20 does not close is measured here too**, and it is the
+    shared-capability over-count: U1 sizes its claim on the whole of ``A``'s
+    1.0 while ``U2`` sizes its own on the whole of ``E``'s, each as if the other
+    were absent. The two claims therefore still sum above what exists, which is
+    why the supply is scarce at all and why U1 receives 0.0909 rather than the
+    0.1 it could use. What is left over is exactly what
+    :func:`~muscadet.evaluation.release_unused_supply` goes on catching: U1
+    draws only 0.909 of the 1.0 of ``A`` allocated to it.
     """
-    modest = settled(the_run["rivals_modest"])[-1]
+    for label in ("rivals_modest", "rivals_unbounded"):
+        entry = settled(the_run[label])[-1]
 
-    # The demand is the nominal one, not the achievable 0.1
-    assert modest["U1_demand_E"] == pytest.approx(1.0)
-    # ... so the split is still even, and U2 gets 0.5 where 0.909 is its due
-    assert modest["U2_draws_E"] == pytest.approx(0.5, rel=1e-3)
+        # The claim is the achievable one, on both downstream demands
+        assert entry["U1_demand_E"] == pytest.approx(ODC_RIVAL_SCALE, rel=1e-6), label
 
-    unbounded = settled(the_run["rivals_unbounded"])[-1]
-    assert unbounded["U1_demand_E"] == pytest.approx(ODC_UNBOUNDED_DOWNSTREAM)
-    assert unbounded["U2_draws_E"] < 0.01
+        # ... so the split is the fair one, on both
+        assert entry["U1_draws_E"] == pytest.approx(ODC_FAIR_U1, rel=1e-4), label
+        assert entry["U2_draws_E"] == pytest.approx(ODC_FAIR_U2, rel=1e-4), label
+
+        # The residue: A is delivered in full and only 0.909 of it is drawn,
+        # because U1's E share fell short of the 0.1 its A capability promised.
+        assert entry["U1_draws_A"] == pytest.approx(
+            ODC_FAIR_U1 * ODC_RIVAL_CONS["A"], rel=1e-4
+        ), label
+        assert entry["U1_draws_A"] < ODC_SHARED
 
 
 # ----------------------------------------------------------------------

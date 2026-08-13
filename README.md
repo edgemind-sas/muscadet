@@ -696,6 +696,8 @@ Per continuous flow named `f`, MUSCADET creates:
 
 - `f_fed_out` — on an output flow, the total value delivered downstream. Always equal to the sum of the shares its consumers receive
 - `f_demand_in` — on an output flow, the demands published by its consumers
+- `f_capability_out` — on an output flow, what it could deliver if asked without bound. Written by the capability sweep; see [capability, demand, delivery and consumption](#capability-demand-delivery-and-consumption-what-agrees)
+- `f_capability_in` — on an input flow, the capabilities published by its producers
 - `f_out_rate` — on an output flow, the rate its production is multiplied by, holding `1.0`. The one endpoint a failure mode clamps; see [deratings](#failure-modes-on-a-continuous-output-deratings)
 - `f_out_profile` — on an output flow **that declares a time profile**, the factor currently applied. A read-only publication, rewritten at every step; see [time profiles](#time-profiles-production-as-a-function-of-the-clock)
 - `f_fed_in` — on an input flow, the value received: the **sum**, over every incoming connection, of the share that producer allocated to this consumer
@@ -903,13 +905,14 @@ def split_evenly(available, demands):
 self.add_flow_continuous_out(name="q", var_fed_default=10.0, allocation_fun=split_evenly)
 ```
 
-### Demand, delivery and consumption: what agrees, and what does not
+### Capability, demand, delivery and consumption: what agrees
 
 Three quantities travel through a continuous component:
 
 | | |
 |---|---|
-| **demand** | what it publishes upstream — the downstream demand mapped back through the rule's declared coefficients |
+| **capability** | what each of its outputs could deliver if asked without bound — published downstream so its consumers can size a claim they can honour |
+| **demand** | what it publishes upstream — the downstream demand mapped back through the rule's declared coefficients, bounded by the scale its other inputs can sustain |
 | **delivery** | what its suppliers actually give it — the lesser of production, demand and its allocated share |
 | **consumption** | what its rule actually uses — `scale × uptake × coefficient`: the scale set by the scarcest input, and the `uptake` its outputs were actually produced at |
 
@@ -944,16 +947,45 @@ Three draws are deliberately **not** capped, and none of them destroys anything:
 - an input **no rule accounts for** — a pure consumer *is* the sink;
 - a connection whose producer never allocated a split, which has nothing to correct.
 
-**Demand does not equal consumption.** The demand is still the declared coefficients at the demand scale, so a component limited by a scarce reagent still *asks* for its nominal share of the abundant ones. It no longer takes it, but it still competes for it, and two consumers of one supply are therefore split in proportion to a demand one of them cannot honour:
+**Demand equals consumption too**, and the capability channel is what makes it so.
+
+The demand is mapped back through the *declared* coefficients — production has not run, so there is no scale to size it on — and left at that, a component limited by a scarce reagent asked for its nominal share of the abundant ones. It no longer took it, but it still competed for it, and two consumers of one supply were split in proportion to a demand one of them could not honour: `0.999` against `0.001` under an unbounded downstream demand, where `0.0909` and `0.909` are the shares each can actually use.
+
+No lagged scheme closes that. A delivery is `min(capability, demand)`, so a demand recomputed from what *arrived* is self-referential — the quantity being looked for has already been destroyed. Measured: bounding by the previous production scale converges on a wrong fixed point; bounding by the previous deliveries decays to **zero** (0.1 down to 5e-4 over 4000 evaluations); adding a saturation test **oscillates with period 2**. The solver also evaluates the equation set once per integration step at an advancing time, so there is no inner fixpoint to lean on.
+
+What was missing is the suppliers' **capability** — what each could deliver if asked without bound — so MUSCADET publishes it, on a channel of its own and a sweep of its own:
 
 ```python
 # SE supplies 1.0.  U1 is limited to 0.1 by another input; U2 can use 1.0.
-u1.flows_in["E"].var_demand.value()   # 1.0    -- the nominal claim
-u1.flows_in["E"].get_delivered()      # 0.1    -- what it takes (capped)
-u2.flows_in["E"].get_delivered()      # 0.5    -- 0.909 would be its fair share
+se.flows_out["E"].get_capability()    # 1.0    -- published downstream
+u1.flows_in["E"].var_demand.value()   # 0.1    -- what U1 can honour, not 1.0
+u1.flows_in["E"].get_delivered()      # 0.0909 -- the fair share
+u2.flows_in["E"].get_delivered()      # 0.909  -- its due, at last
 ```
 
-The surplus is *available-but-untaken* rather than lost, so the rival gets it back at the next step and a deprivation is a delay rather than a permanent loss — but the split itself is unchanged. Closing it is not a missing pass: a delivery is `min(capability, demand)`, so a demand recomputed from what arrived is self-referential. Bounding the demand by what the inputs allowed at the previous evaluation converges to **zero** (measured: 0.1 down to 5e-4 over 4000 evaluations), and the variant that only counts a saturated input **oscillates with period 2**. What is missing is the suppliers' *capability*, which `min(capability, demand)` destroys; recovering it needs a channel of its own, which is a design decision and not a bug fix.
+A demand is bounded by
+
+```
+demand_i = coefficient_i × min( downstream scale ,
+                                min over j ≠ i of ( capability_j / coefficient_j ) )
+```
+
+The `j ≠ i` is what makes it work at all: including the input being sized would bound it by what it is already getting, so a consumer that started small could never grow. It settles on the **first** evaluation, under a modest downstream demand and an unbounded one alike — a capability is published, never inferred, so there is nothing to converge towards.
+
+Per continuous flow `f`, the channel adds `f_capability_out` on an output (what it could deliver if asked freely) and `f_capability_in` on an input (a reference collecting what its producers publish). Both are written by the sweeps at every step, so a failure mode may not usefully clamp either; the endpoint a mode wants is `f_out_rate`. The sweep runs **downstream, ahead of the demand sweep**: capability, then demand, then production, then the capacity levels.
+
+**What this does not close: a capability two rivals read at once.** An input sums what its producers publish and apportions nothing, because the question is asked before any demand exists to apportion against. So two consumers of one source each size their claim as if the other were absent, and their claims still sum above what exists. That is why `release_unused_supply` stays exactly where it is — it is a no-op on the common path now, and still fires in three places:
+
+- two rivals over-counting one supplier's capability, as above;
+- a **derating or a time profile**, applied in the production sweep alone (the capability sweep works on the rule's declared coefficients, the same scope boundary the demand sweep observes);
+- a capacity whose level moves between the sweeps.
+
+**One consequence worth stating plainly.** A capacity on the **input** side no longer fills out of an over-demand it never used to be entitled to. A volume accumulates what its declared `fill_rate` claims for itself, and nothing else — which is exactly what `fill_rate=0` ("pure pass-through buffer") always said. A model that relied on a buffered input filling from the surplus of a claim its rule could not honour must now declare the claim:
+
+```python
+self.add_capacity(name="cuve", flow="w", capacity=10.0, side="in",
+                  fill_rate=3.0)      # what the volume claims for ITSELF
+```
 
 ### Failure modes on a continuous output: deratings
 
@@ -1026,7 +1058,7 @@ The same is true of every other variable the sweeps write, and naming one is now
 
 | Named in an effect | Why it cannot work | What to write instead |
 | --- | --- | --- |
-| `{flow}_fed_{in,out}`, `{flow}_demand_{in,out}` | rewritten by the two sweeps | `("{flow}", rate)` on an output; on an input, derate the producer |
+| `{flow}_fed_{in,out}`, `{flow}_demand_{in,out}`, `{flow}_capability_{in,out}` | rewritten by the three sweeps | `("{flow}", rate)` on an output; on an input, derate the producer |
 | `{flow}_out_profile` | a read-only publication of the applied factor | declare a different `profile`, or derate the output |
 | `{c}_qty*`, `{c}_fill*`, `{c}_inflow_{f}`, `{c}_outflow_{f}` | integrated by the solver, or written at every hop | derate the output the capacity buffers, or gate it with a rule guard |
 | `{m}_level`, `{m}_fill` of a **sourced** publication | republished at every integration step | clamp `{m}_level_gain` |
@@ -1410,7 +1442,7 @@ To **vote on booleans** rather than on numbers, nothing new is needed: a discret
 
 A system carrying continuous flows must be **complete** — every component and every connection — before `simulate()` or `isimu_start()` is called the first time.
 
-That first call runs a *pre-run step*: it reads the connection graph back from the engine, checks it for loops nothing integrates, derives the evaluation order of the two sweeps from it, and registers each sweep equation on the PDMP solver with its order. The step cannot run a second time. PyCATSHOO refuses to register an equation its solver already holds and offers no way to remove one, while the order is derived from the *whole* graph — so a component arriving late does not merely add equations, it renumbers ones that can no longer be renumbered.
+That first call runs a *pre-run step*: it reads the connection graph back from the engine, checks it for loops nothing integrates, derives the evaluation order of the three sweeps from it, and registers each sweep equation on the PDMP solver with its order. The bands reproduce one integration step: **capability** (topological), then **demand** (reverse-topological), then **production** (topological), then the capacity levels. The step cannot run a second time. PyCATSHOO refuses to register an equation its solver already holds and offers no way to remove one, while the order is derived from the *whole* graph — so a component arriving late does not merely add equations, it renumbers ones that can no longer be renumbered.
 
 A continuous component or connection added after that first call is therefore refused at the next entry point:
 

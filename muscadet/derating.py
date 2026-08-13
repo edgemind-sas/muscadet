@@ -155,9 +155,10 @@ def solver_owned_endpoints(comp):
 
     What is in it, and why each one cannot be clamped:
 
-    * ``{flow}_fed_{in,out}`` / ``{flow}_demand_{in,out}`` -- what a
-      continuous flow carries and what it asks for, rewritten by the two
-      sweeps (R19);
+    * ``{flow}_fed_{in,out}`` / ``{flow}_demand_{in,out}`` /
+      ``{flow}_capability_{in,out}`` -- what a continuous flow carries, what it
+      asks for and what it could deliver if asked without bound, rewritten by
+      the three sweeps (R19, R-20);
     * ``{flow}_out_profile`` -- a read-only PUBLICATION of the factor the
       production sweep applied, not an input;
     * a capacity's ``{c}_qty*`` / ``{c}_fill*`` (integrated or derived from
@@ -186,7 +187,7 @@ def solver_owned_endpoints(comp):
                 f"output feeding {flow.name!r} on the producing component"
             )
 
-        for var in (flow.var_fed, flow.var_demand):
+        for var in (flow.var_fed, flow.var_demand, flow.var_capability):
             if var is not None:
                 endpoints[var.basename()] = advice
 

@@ -47,6 +47,12 @@ CLOCK_DELAY = 5.0
 #: machine precision, so a date is asserted within one default PDMP step.
 CROSSING_TOL = 0.05
 
+#: What the AE11 tank claims for ITSELF while it has room (R36). Chosen so the
+#: claim of 2 the rules make plus this one is exactly the 5 its producer can
+#: supply: the tank then takes in 5, gives up 2 and fills at 3, which is what it
+#: did before R-20 bounded the demand -- by accident then, by declaration now.
+CAPACITY_FILL_RATE = 3.0
+
 #: The cluster read at instant 0, before any production sweep has run: one
 #: producer of 10, two consumers asking for 2 and 3.
 FIRST_SAMPLE_RATE = 10.0
@@ -184,6 +190,12 @@ class AllocBufferedUnit(muscadet.ObjFlow):
     The tank sits upstream of the rules, so what the rules draw from it and what
     the component asks its own producer for are two different quantities -- which
     is exactly what a capacity at its volume separates (R7, AE11).
+
+    ``fill_rate`` is what the volume claims for ITSELF (R36), and since R-20 it
+    is the only thing that fills it. The demand this unit publishes on ``w`` is
+    now bounded by what its scarce ``elec`` can sustain, so the tank no longer
+    accumulates the surplus of a claim the rule could never honour: a
+    ``fill_rate`` of 0 is the pure pass-through buffer R36 always said it was.
     """
 
     def add_flows(self, **kwargs):
@@ -200,6 +212,7 @@ class AllocBufferedUnit(muscadet.ObjFlow):
             flow="w",
             capacity=kwargs.get("volume", 10.0),
             side="in",
+            fill_rate=kwargs.get("fill_rate", 0.0),
             content_init={"w": kwargs.get("init", 0.0)},
         )
 
@@ -546,7 +559,15 @@ def run_first_sample_scenario(obs):
 
 
 def build_capacity_demand_system():
-    """AE11: the same unit, once against a full tank and once with room left."""
+    """AE11: the same unit, once against a full tank and once with room left.
+
+    The tank claims :data:`CAPACITY_FILL_RATE` for itself, which is what fills
+    it: the rules can only draw 2 of ``w`` (their ``elec`` is scarce) and since
+    R-20 the demand published upstream is bounded by that, so the surplus that
+    used to fill this tank by accident is no longer asked for. Declaring the
+    claim reproduces the same inflow of 5, the same drain of 2 and therefore the
+    same date -- with the filling stated rather than inferred.
+    """
     system = muscadet.System(name="DemandCapacityBound")
 
     for prefix, volume, init in (("FULL", 10.0, 8.0), ("ROOM", 1000.0, 8.0)):
@@ -557,7 +578,11 @@ def build_capacity_demand_system():
             name=f"{prefix}_ELEC", cls="AllocSource", flow="elec", rate=2.0
         )
         system.add_component(
-            name=prefix, cls="AllocBufferedUnit", volume=volume, init=init
+            name=prefix,
+            cls="AllocBufferedUnit",
+            volume=volume,
+            init=init,
+            fill_rate=CAPACITY_FILL_RATE,
         )
         system.add_component(
             name=f"{prefix}_C", cls="AllocConsumer", flow="x", demand=8.0
@@ -954,34 +979,41 @@ def test_the_mapping_uses_declared_coefficients_even_when_an_input_is_scarce(the
     """The recorded limitation of R34 -- and the half of it that is now closed.
 
     ``a`` can only be supplied at 3, so the rule runs at scale 1 and uses 2 of
-    ``b``. The demand published on ``b`` is nevertheless the nominal 6: the
-    mapping reads the declared coefficients, not what is available. That much is
-    unchanged, and it is the **over-demand** half -- it distorts the split of a
-    supply two components compete for, and closing it needs more than the two
-    sweeps hold.
+    ``b``. Both halves of the mismatch are now closed, by two different
+    mechanisms, and the point of this test is that they agree:
 
-    What the demand FETCHES no longer follows it. The **over-draw** half is
-    closed (R-12): the draw is capped at ``scale x coefficient`` in the
-    production sweep, where the scale is known, so the 4 units of ``b`` the
-    reaction cannot use are released back to the supplier instead of being
-    delivered and destroyed. Asserted here as the two quantities now agreeing.
+    * **over-draw** (R-12) -- the draw is capped at ``scale x coefficient`` in
+      the production sweep, where the scale is known, so nothing fetched beyond
+      what the reaction uses is delivered and destroyed;
+    * **over-demand** (R-20) -- the demand on ``b`` is bounded by the scale
+      ``a``'s capability sustains, ``3 / 3 = 1``, so ``b`` is asked for
+      ``2 x 1 = 2`` rather than the nominal 6. Against ``968d9b3`` the claim was
+      6 and it distorted the split of any supply a second component competed
+      for.
+
+    ``a`` itself is still claimed at its nominal 9: nothing else bounds it,
+    which is exactly what ``exclude`` in
+    :func:`muscadet.capability.get_supply_scale` means -- an input is never
+    bounded by its own capability, or it could never grow.
     """
     mapping = the_run["mapping"]["SC"]
 
-    # The claim is the nominal one, on both inputs: over-demand, still open
+    # ``a`` is bounded by nothing else, so it claims its nominal 9
     assert mapping["demand_a"] == pytest.approx(9.0)
-    assert mapping["demand_b"] == pytest.approx(6.0)
+
+    # ``b`` is bounded by what ``a`` can sustain: 3 supplied / 3 per unit = 1
+    assert mapping["demand_b"] == pytest.approx(2.0)
 
     # ``a`` is scarce: 3 arrive against the 9 claimed, so the rule runs at 1
     assert mapping["delivered_a"] == pytest.approx(3.0)
     assert mapping["x"] == pytest.approx(2.0)
 
-    # ... and the draw on ``b`` follows the reaction, not the claim: over-draw,
-    # closed. 2 used at scale 1, 2 delivered, the other 4 left with the supplier.
+    # ... and the draw on ``b`` follows the reaction. It now also EQUALS the
+    # claim: demand, delivery and consumption are one quantity on this path.
     consumed_b = mapping["x"] / 2.0 * 2.0
     assert consumed_b == pytest.approx(2.0)
     assert mapping["delivered_b"] == pytest.approx(consumed_b)
-    assert mapping["delivered_b"] < mapping["demand_b"]
+    assert mapping["delivered_b"] == pytest.approx(mapping["demand_b"])
 
 
 def test_a_catalyst_coefficient_demands_nothing_and_publishes_no_nan(the_run):
@@ -1096,10 +1128,15 @@ def test_a_full_capacity_reduces_the_demand_it_exports_upstream(the_run):
     """AE11: the tank reaches its volume, and its producer delivers less.
 
     Both units are identical and consume 2 of ``w`` (their ``elec`` is scarce),
-    and both ask their own producer for the nominal 8. The one whose tank is at
-    its volume publishes only what currently leaves that tank, so its producer
-    delivers 2 instead of the 5 it could supply -- while the unit with room left
-    still draws the full 5.
+    and both ask their own producer for that 2 plus the 3 their tank claims for
+    itself. The one whose tank is at its volume drops the claim and publishes
+    only what currently leaves that tank, so its producer delivers 2 instead of
+    the 5 it could supply -- while the unit with room left still draws 5.
+
+    The internal claim is 2 and not the nominal 8 since R-20: the demand is
+    bounded by the scale the rule's OTHER input can sustain, and 2 of ``elec``
+    is all there is. What the tank accumulates is therefore its declared
+    ``fill_rate`` and nothing else, which is the whole of R36's meaning.
     """
     full = the_run["bound"]["FULL"]
     room = the_run["bound"]["ROOM"]
@@ -1107,13 +1144,13 @@ def test_a_full_capacity_reduces_the_demand_it_exports_upstream(the_run):
     assert full["full"] is True
     assert room["full"] is False
 
-    # The internal claim is the same on both: 8 of x asked for, 1 of w per x
-    assert full["required"] == pytest.approx(8.0)
-    assert room["required"] == pytest.approx(8.0)
+    # The internal claim is the same on both: what the scarce elec sustains
+    assert full["required"] == pytest.approx(2.0)
+    assert room["required"] == pytest.approx(2.0)
 
-    # ... but a full tank exports only what leaves it
+    # ... but a full tank drops its fill claim and exports only what leaves it
     assert full["published"] == pytest.approx(2.0)
-    assert room["published"] == pytest.approx(8.0)
+    assert room["published"] == pytest.approx(2.0 + CAPACITY_FILL_RATE)
 
     # ... so its producer delivers less, though it could supply 5
     assert full["delivered"] == pytest.approx(2.0)
