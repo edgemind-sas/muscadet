@@ -1,0 +1,160 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1040" width="1200" height="1040" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif">
+
+  <rect x="0" y="0" width="1200" height="1040" fill="#ffffff"/>
+  <defs>
+    <marker id="w" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#1565c0"/></marker>
+    <marker id="h" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#e65100"/></marker>
+    <marker id="k" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#b71c1c"/></marker>
+    <marker id="v" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2e7d32"/></marker>
+  </defs>
+
+  <text x="40" y="42" font-size="21" font-weight="600" fill="#263238">La chaleur en sortie de vanne : pourquoi le débit d'eau se met à dépendre de la température</text>
+  <text x="40" y="66" font-size="13.5" fill="#607d8b">La cuve tient l'eau et la chaleur dans UN volume. La température est le rapport chaleur / eau, elle n'est jamais stockée comme telle.</text>
+  <text x="40" y="85" font-size="13.5" fill="#607d8b">Bleu : l'eau. Orange : la chaleur. Les deux voyagent sur deux canaux séparés, et c'est là que tout se joue.</text>
+
+  <!-- ===================== 1 ===================== -->
+  <rect x="40" y="100" width="545" height="272" rx="8" fill="#e3f2fd" stroke="#1565c0" stroke-width="1.5"/>
+  <text x="58" y="126" font-size="14" font-weight="700" fill="#0d47a1">1 · La déclaration : deux demandes indépendantes</text>
+
+  <rect x="60" y="144" width="152" height="84" rx="5" fill="#fff" stroke="#37474f" stroke-width="1.3"/>
+  <text x="72" y="164" font-size="12" font-weight="600" fill="#263238">CUVE</text>
+  <text x="72" y="184" font-size="11.5" fill="#1565c0">eau      100</text>
+  <text x="72" y="201" font-size="11.5" fill="#e65100">chaleur 3100</text>
+  <text x="72" y="220" font-size="11.5" font-weight="700" fill="#37474f">T = 3100/100 = 31</text>
+
+  <line x1="214" y1="170" x2="388" y2="170" stroke="#1565c0" stroke-width="1.6" marker-end="url(#w)"/>
+  <line x1="214" y1="206" x2="388" y2="206" stroke="#e65100" stroke-width="1.6" marker-end="url(#h)"/>
+
+  <rect x="392" y="144" width="152" height="84" rx="5" fill="#fff" stroke="#37474f" stroke-width="1.3"/>
+  <text x="404" y="164" font-size="12" font-weight="600" fill="#263238">VANNE</text>
+  <text x="404" y="184" font-size="11.5" font-weight="600" fill="#1565c0">demande eau : 1,5</text>
+  <text x="404" y="201" font-size="11.5" font-weight="600" fill="#e65100">demande chal. : 46,5</text>
+  <text x="404" y="220" font-size="10.5" fill="#90a4ae">deux nombres, deux canaux</text>
+
+  <text x="58" y="256" font-size="12" fill="#0d47a1">La vanne déclare ce qu'elle veut sur chaque canal. Le 46,5 a été calculé à la main</text>
+  <text x="58" y="274" font-size="12" fill="#0d47a1">pour cette cuve-là : 1,5 × 31. Rien dans la déclaration ne dit que les deux sont liés.</text>
+  <text x="58" y="298" font-size="12" font-weight="700" fill="#b71c1c">Aucun mécanisme ne sait que la chaleur doit suivre l'eau.</text>
+  <text x="58" y="326" font-size="12" fill="#0d47a1">Physiquement, une vanne laisse passer un débit de fluide ; la chaleur part avec,</text>
+  <text x="58" y="344" font-size="12" fill="#0d47a1">à la température du mélange. Ce lien-là n'a pas d'écriture.</text>
+
+  <!-- ===================== 2 ===================== -->
+  <rect x="615" y="100" width="545" height="272" rx="8" fill="#fff8e1" stroke="#f57f17" stroke-width="1.5"/>
+  <text x="633" y="126" font-size="14" font-weight="700" fill="#e65100">2 · La cuve répartit le TOTAL au prorata de son contenu</text>
+
+  <rect x="635" y="144" width="152" height="84" rx="5" fill="#fff" stroke="#37474f" stroke-width="1.3"/>
+  <text x="647" y="164" font-size="12" font-weight="600" fill="#263238">CUVE · T = 31</text>
+  <text x="647" y="184" font-size="11" fill="#1565c0">part eau     100/3200</text>
+  <text x="647" y="200" font-size="11" fill="#1565c0">= 3,125 %</text>
+  <text x="647" y="217" font-size="11" fill="#e65100">part chal.  96,875 %</text>
+
+  <rect x="806" y="150" width="146" height="72" rx="5" fill="#fff9c4" stroke="#f9a825" stroke-width="1.4"/>
+  <text x="816" y="170" font-size="11.5" font-weight="600" fill="#e65100">split_draw</text>
+  <text x="816" y="189" font-size="11" fill="#5d4037">total demandé</text>
+  <text x="816" y="206" font-size="12" font-weight="700" fill="#e65100">1,5 + 46,5 = 48</text>
+
+  <line x1="956" y1="172" x2="1000" y2="172" stroke="#1565c0" stroke-width="1.6" marker-end="url(#w)"/>
+  <text x="1006" y="176" font-size="11.5" font-weight="600" fill="#1565c0">48 × 3,125 % = 1,5</text>
+  <line x1="956" y1="204" x2="1000" y2="204" stroke="#e65100" stroke-width="1.6" marker-end="url(#h)"/>
+  <text x="1006" y="208" font-size="11.5" font-weight="600" fill="#e65100">48 × 96,9 % = 46,5</text>
+
+  <text x="633" y="256" font-size="12" fill="#5d4037">Le volume ne répartit pas canal par canal : il additionne les demandes et découpe</text>
+  <text x="633" y="274" font-size="12" fill="#5d4037">le total à la composition de son contenu. C'est correct — c'est ce qui fait sortir</text>
+  <text x="633" y="292" font-size="12" fill="#5d4037">le fluide à sa vraie température.</text>
+  <text x="633" y="320" font-size="12" font-weight="700" fill="#e65100">Ici les deux tombent pile sur les demandes. Ce n'est pas une réussite :</text>
+  <text x="633" y="338" font-size="12" font-weight="700" fill="#e65100">c'est parce que le 46,5 avait été calculé pour cette température.</text>
+
+  <!-- ===================== 3 ===================== -->
+  <rect x="40" y="390" width="545" height="272" rx="8" fill="#ffebee" stroke="#c62828" stroke-width="1.6"/>
+  <text x="58" y="416" font-size="14" font-weight="700" fill="#b71c1c">3 · Même déclaration, cuve à 80 — l'eau s'effondre</text>
+
+  <rect x="60" y="434" width="152" height="84" rx="5" fill="#fff" stroke="#c62828" stroke-width="1.4"/>
+  <text x="72" y="454" font-size="12" font-weight="600" fill="#263238">CUVE · T = 80</text>
+  <text x="72" y="474" font-size="11.5" fill="#1565c0">eau      100</text>
+  <text x="72" y="491" font-size="11.5" fill="#e65100">chaleur 8000</text>
+  <text x="72" y="510" font-size="11" fill="#b71c1c">part eau : 1,23 % seulement</text>
+
+  <line x1="214" y1="460" x2="388" y2="460" stroke="#b71c1c" stroke-width="1.2" marker-end="url(#k)"/>
+  <text x="222" y="452" font-size="11.5" font-weight="700" fill="#b71c1c">eau : 0,593</text>
+  <line x1="214" y1="496" x2="388" y2="496" stroke="#e65100" stroke-width="1.6" marker-end="url(#h)"/>
+  <text x="222" y="488" font-size="11.5" font-weight="600" fill="#e65100">chaleur : 46,5</text>
+
+  <rect x="392" y="434" width="152" height="84" rx="5" fill="#ffcdd2" stroke="#c62828" stroke-width="1.4"/>
+  <text x="404" y="454" font-size="12" font-weight="600" fill="#263238">VANNE</text>
+  <text x="404" y="474" font-size="11.5" fill="#546e7a">demandait 1,5 d'eau</text>
+  <text x="404" y="491" font-size="11.5" font-weight="700" fill="#b71c1c">reçoit 0,593</text>
+  <text x="404" y="510" font-size="11" fill="#b71c1c">T emportée = 78,5</text>
+
+  <text x="58" y="546" font-size="12" fill="#4e342e">Le total 48 est découpé à la nouvelle composition : eau 48 × 1,23 % = 0,593,</text>
+  <text x="58" y="564" font-size="12" fill="#4e342e">chaleur 47,4 — puis la chaleur est plafonnée à sa demande de 46,5.</text>
+  <text x="58" y="586" font-size="12" font-weight="700" fill="#b71c1c">L'eau, elle, n'est pas plafonnée : 0,593 est déjà sous les 1,5 demandés.</text>
+  <text x="58" y="614" font-size="12" fill="#4e342e">Plus la cuve est chaude, plus la chaleur pèse dans la composition, et plus la part</text>
+  <text x="58" y="632" font-size="12" fill="#4e342e">d'eau du découpage se réduit.</text>
+
+  <!-- ===================== 4 ===================== -->
+  <rect x="615" y="390" width="545" height="272" rx="8" fill="#ffebee" stroke="#c62828" stroke-width="1.6"/>
+  <text x="633" y="416" font-size="14" font-weight="700" fill="#b71c1c">4 · Ce que ça veut dire physiquement</text>
+
+  <rect x="635" y="436" width="505" height="60" rx="5" fill="#fff" stroke="#e57373" stroke-width="1.2"/>
+  <text x="648" y="458" font-size="12.5" font-weight="700" fill="#b71c1c">Le débit de la vanne est devenu une fonction de la température de la cuve.</text>
+  <text x="648" y="480" font-size="12" fill="#4e342e">1,500 à 31 °C  ·  0,593 à 80 °C  ·  avec la même vanne, la même ouverture.</text>
+
+  <text x="633" y="522" font-size="12" fill="#4e342e">Une vanne laisse passer un débit. Le fluide qui la traverse emporte sa chaleur,</text>
+  <text x="633" y="540" font-size="12" fill="#4e342e">mais la chaleur ne décide pas de l'ouverture. Ici c'est l'inverse : la composition</text>
+  <text x="633" y="558" font-size="12" fill="#4e342e">du contenu commande le débit.</text>
+
+  <text x="633" y="588" font-size="12" font-weight="600" fill="#b71c1c">Et l'erreur ne se voit pas : le modèle tourne, la cuve se vide, la température</text>
+  <text x="633" y="606" font-size="12" font-weight="600" fill="#b71c1c">emportée est presque juste — 78,5 pour 80. Seul le débit est faux.</text>
+
+  <text x="633" y="638" font-size="12" font-style="italic" fill="#b71c1c">C'est très exactement la famille de défauts que cette version passe son temps à fermer.</text>
+
+  <!-- ===================== 5 ===================== -->
+  <rect x="40" y="680" width="545" height="272" rx="8" fill="#e8f5e9" stroke="#2e7d32" stroke-width="1.6"/>
+  <text x="58" y="706" font-size="14" font-weight="700" fill="#1b5e20">5 · Ce qu'il faudrait : un constituant directeur</text>
+
+  <rect x="60" y="724" width="152" height="84" rx="5" fill="#fff" stroke="#37474f" stroke-width="1.3"/>
+  <text x="72" y="744" font-size="12" font-weight="600" fill="#263238">CUVE · T = 80</text>
+  <text x="72" y="764" font-size="11.5" fill="#1565c0">eau      100</text>
+  <text x="72" y="781" font-size="11.5" fill="#e65100">chaleur 8000</text>
+
+  <line x1="214" y1="750" x2="388" y2="750" stroke="#2e7d32" stroke-width="2.2" marker-end="url(#v)"/>
+  <text x="222" y="742" font-size="11.5" font-weight="700" fill="#1b5e20">eau : 1,5  ← mène</text>
+  <line x1="214" y1="786" x2="388" y2="786" stroke="#2e7d32" stroke-width="1.6" marker-end="url(#v)"/>
+  <text x="222" y="778" font-size="11.5" font-weight="600" fill="#1b5e20">chaleur : 1,5 × 80 = 120</text>
+
+  <rect x="392" y="724" width="152" height="84" rx="5" fill="#e8f5e9" stroke="#2e7d32" stroke-width="1.4"/>
+  <text x="404" y="744" font-size="12" font-weight="600" fill="#263238">VANNE</text>
+  <text x="404" y="764" font-size="11.5" font-weight="700" fill="#1b5e20">demande 1,5 d'eau</text>
+  <text x="404" y="781" font-size="11" fill="#33691e">et rien d'autre</text>
+  <text x="404" y="798" font-size="11" fill="#33691e">T emportée = 80,0</text>
+
+  <text x="58" y="836" font-size="12" fill="#33691e">La vanne ne déclare qu'un débit, sur le constituant qui la traverse. Le volume</text>
+  <text x="58" y="854" font-size="12" fill="#33691e">apporte les autres à leur part de CE prélèvement, pas d'un total inventé.</text>
+  <text x="58" y="878" font-size="12" font-weight="700" fill="#1b5e20">Le débit ne dépend plus du contenu, et la température emportée est exacte.</text>
+  <text x="58" y="906" font-size="12" fill="#33691e">Le calcul existe déjà : split_draw compose au prorata brut, qui EST H/V.</text>
+  <text x="58" y="924" font-size="12" fill="#33691e">Il manque seulement de désigner qui mène.</text>
+
+  <!-- ===================== 6 ===================== -->
+  <rect x="615" y="680" width="545" height="272" rx="8" fill="#ede7f6" stroke="#4527a0" stroke-width="1.6"/>
+  <text x="633" y="706" font-size="14" font-weight="700" fill="#311b92">Ce que ça change pour le heated tank</text>
+
+  <text x="633" y="734" font-size="12" fill="#4527a0">Deux tiers du montage passent déjà tels quels :</text>
+  <text x="647" y="756" font-size="12" fill="#4527a0">· le heater injecte une puissance constante — source continue ordinaire,</text>
+  <text x="647" y="774" font-size="12" fill="#4527a0">  allumée ou éteinte par une porte discrète ;</text>
+  <text x="647" y="794" font-size="12" fill="#4527a0">· l'eau entrante à température fixe porte sa chaleur dans un rapport</text>
+  <text x="647" y="812" font-size="12" fill="#4527a0">  constant, ce qu'une règle exprime directement.</text>
+
+  <text x="633" y="844" font-size="12" font-weight="700" fill="#311b92">Seule la sortie bloque. C'est le dernier morceau.</text>
+
+  <rect x="633" y="860" width="507" height="70" rx="5" fill="#fff" stroke="#7e57c2" stroke-width="1.2"/>
+  <text x="647" y="882" font-size="12" fill="#4527a0">La chaleur est une grandeur EXTENSIVE : elle s'additionne, donc elle</text>
+  <text x="647" y="900" font-size="12" fill="#4527a0">circule légitimement sur un canal. La température ne l'est pas — elle se</text>
+  <text x="647" y="918" font-size="12" font-weight="600" fill="#311b92">relit comme un rapport, elle ne se transporte pas. D'où ce montage.</text>
+
+  <text x="40" y="984" font-size="12" fill="#607d8b">Mesuré sur muscadet à fc73c6e. Les deux lignes du tableau viennent d'une exécution réelle, même déclaration, deux températures initiales.</text>
+  <text x="40" y="1004" font-size="12" fill="#607d8b">Le 78,5 emporté à 80 °C est un effet de bord du plafonnement, pas une approximation voulue.</text>
+
+</svg>
