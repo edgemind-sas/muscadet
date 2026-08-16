@@ -1,0 +1,169 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1060" width="1200" height="1060" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif">
+
+  <rect x="0" y="0" width="1200" height="1060" fill="#ffffff"/>
+  <defs>
+    <marker id="q" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#e65100"/></marker>
+    <marker id="m" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#6a1b9a"/></marker>
+    <marker id="z" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#b71c1c"/></marker>
+    <marker id="o" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2e7d32"/></marker>
+  </defs>
+
+  <text x="40" y="42" font-size="21" font-weight="600" fill="#263238">Le composant environnement : ce qui a marché, et les deux limites rencontrées</text>
+  <text x="40" y="66" font-size="13.5" fill="#607d8b">ENV produit un débit de chaleur K·(Tenv − T), en lisant T par un lien de mesure. Tenv = 100, K = 2.</text>
+  <text x="40" y="85" font-size="13.5" fill="#607d8b">Orange : le flux de chaleur. Violet pointillé : la mesure, qui ne transporte rien.</text>
+
+  <!-- ============== 1 ============== -->
+  <rect x="40" y="100" width="545" height="290" rx="8" fill="#ffebee" stroke="#c62828" stroke-width="1.5"/>
+  <text x="58" y="126" font-size="14" font-weight="700" fill="#b71c1c">Essai 1 · la cuve est un pass-through  →  débit nul</text>
+
+  <rect x="62" y="146" width="140" height="62" rx="5" fill="#fff" stroke="#37474f" stroke-width="1.3"/>
+  <text x="74" y="166" font-size="12" font-weight="600" fill="#263238">ENV</text>
+  <text x="74" y="184" font-size="11" fill="#e65100">produit K(100−T)</text>
+  <text x="74" y="200" font-size="11" fill="#546e7a">lit T</text>
+
+  <line x1="206" y1="166" x2="366" y2="166" stroke="#b71c1c" stroke-width="1.3" marker-end="url(#z)"/>
+  <text x="240" y="158" font-size="11.5" font-weight="700" fill="#b71c1c">chaleur : 0</text>
+  <line x1="366" y1="194" x2="206" y2="194" stroke="#6a1b9a" stroke-width="1.3" stroke-dasharray="4 3" marker-end="url(#m)"/>
+  <text x="248" y="210" font-size="11" fill="#6a1b9a">mesure de T</text>
+
+  <rect x="370" y="140" width="175" height="76" rx="5" fill="#fff" stroke="#37474f" stroke-width="1.3"/>
+  <text x="382" y="160" font-size="12" font-weight="600" fill="#263238">CUVE</text>
+  <text x="382" y="178" font-size="11" fill="#546e7a">chaleur entrée → sortie</text>
+  <text x="382" y="194" font-size="11" font-weight="700" fill="#b71c1c">sortie non câblée ✕</text>
+  <text x="382" y="210" font-size="11" fill="#546e7a">capacité côté sortie</text>
+
+  <text x="58" y="244" font-size="12" fill="#4e342e">La cuve déclare une entrée ET une sortie de chaleur, donc c'est un transfert</text>
+  <text x="58" y="262" font-size="12" fill="#4e342e">d'identité. Sa sortie n'est connectée à rien.</text>
+  <text x="58" y="286" font-size="12" font-weight="700" fill="#b71c1c">Or une sortie non câblée ne contraint rien (R-10) : le transfert ne demande</text>
+  <text x="58" y="304" font-size="12" font-weight="700" fill="#b71c1c">donc rien, et livré = min(produit, 0) = 0.</text>
+  <text x="58" y="330" font-size="12" fill="#4e342e">ENV calcule pourtant son débit correctement. Il n'a simplement personne</text>
+  <text x="58" y="348" font-size="12" fill="#4e342e">à qui le donner.</text>
+  <text x="58" y="374" font-size="12" font-style="italic" fill="#b71c1c">Aucune erreur, aucun avertissement : le modèle tourne et rend zéro.</text>
+
+  <!-- ============== 2 ============== -->
+  <rect x="615" y="100" width="545" height="290" rx="8" fill="#ffebee" stroke="#c62828" stroke-width="1.5"/>
+  <text x="633" y="126" font-size="14" font-weight="700" fill="#b71c1c">Essai 2 · on déclare une demande infinie  →  toujours nul</text>
+
+  <rect x="637" y="146" width="140" height="62" rx="5" fill="#fff" stroke="#37474f" stroke-width="1.3"/>
+  <text x="649" y="166" font-size="12" font-weight="600" fill="#263238">ENV</text>
+  <text x="649" y="184" font-size="11" fill="#e65100">produit K(100−T)</text>
+
+  <line x1="781" y1="166" x2="941" y2="166" stroke="#b71c1c" stroke-width="1.3" marker-end="url(#z)"/>
+  <text x="815" y="158" font-size="11.5" font-weight="700" fill="#b71c1c">chaleur : 0</text>
+  <line x1="941" y1="194" x2="781" y2="194" stroke="#6a1b9a" stroke-width="1.3" stroke-dasharray="4 3" marker-end="url(#m)"/>
+
+  <rect x="945" y="140" width="195" height="76" rx="5" fill="#fff" stroke="#37474f" stroke-width="1.3"/>
+  <text x="957" y="160" font-size="12" font-weight="600" fill="#263238">CUVE</text>
+  <text x="957" y="178" font-size="11" font-weight="600" fill="#1565c0">demande déclarée : inf</text>
+  <text x="957" y="194" font-size="11" fill="#546e7a">chaleur entrée → sortie</text>
+  <text x="957" y="210" font-size="11" font-weight="700" fill="#b71c1c">sortie toujours non câblée</text>
+
+  <text x="633" y="244" font-size="12" fill="#4e342e">On écrit noir sur blanc « je veux toute la chaleur qu'on me donne ».</text>
+  <text x="633" y="268" font-size="12" font-weight="700" fill="#b71c1c">La déclaration n'est jamais consultée : var_demand_default ne s'applique</text>
+  <text x="633" y="286" font-size="12" font-weight="700" fill="#b71c1c">qu'à une entrée qu'aucune règle et aucun transfert ne couvre.</text>
+  <text x="633" y="310" font-size="12" fill="#4e342e">Ici le transfert la couvre, donc c'est lui qui décide — et lui ne demande rien,</text>
+  <text x="633" y="328" font-size="12" fill="#4e342e">puisque sa sortie pend.</text>
+  <text x="633" y="356" font-size="12" font-style="italic" fill="#b71c1c">Le modélisateur a énoncé son intention. Elle est correcte. Elle est ignorée.</text>
+
+  <!-- ============== 3 ============== -->
+  <rect x="40" y="405" width="545" height="290" rx="8" fill="#e8f5e9" stroke="#2e7d32" stroke-width="1.6"/>
+  <text x="58" y="431" font-size="14" font-weight="700" fill="#1b5e20">Essai 3 · accumulateur pur  →  ça marche, et exactement</text>
+
+  <rect x="62" y="451" width="140" height="62" rx="5" fill="#fff" stroke="#37474f" stroke-width="1.3"/>
+  <text x="74" y="471" font-size="12" font-weight="600" fill="#263238">ENV</text>
+  <text x="74" y="489" font-size="11" fill="#e65100">produit K(100−T)</text>
+  <text x="74" y="505" font-size="11" fill="#1b5e20">= 21,654</text>
+
+  <line x1="206" y1="471" x2="366" y2="471" stroke="#e65100" stroke-width="2.4" marker-end="url(#q)"/>
+  <text x="232" y="463" font-size="11.5" font-weight="700" fill="#e65100">chaleur : 21,654</text>
+  <line x1="366" y1="499" x2="206" y2="499" stroke="#6a1b9a" stroke-width="1.3" stroke-dasharray="4 3" marker-end="url(#m)"/>
+  <text x="238" y="515" font-size="11" fill="#6a1b9a">T = 89,173</text>
+
+  <rect x="370" y="445" width="175" height="76" rx="5" fill="#e8f5e9" stroke="#2e7d32" stroke-width="1.4"/>
+  <text x="382" y="465" font-size="12" font-weight="600" fill="#263238">CUVE</text>
+  <text x="382" y="483" font-size="11" font-weight="700" fill="#1b5e20">entrée SEULE</text>
+  <text x="382" y="499" font-size="11" fill="#33691e">capacité, fill_rate = inf</text>
+  <text x="382" y="515" font-size="11" fill="#33691e">part de T = 20</text>
+
+  <text x="58" y="549" font-size="12" fill="#33691e">Plus de sortie, donc plus de transfert : le volume réclame pour lui-même, et</text>
+  <text x="58" y="567" font-size="12" fill="#33691e">la chaleur circule enfin.</text>
+
+  <rect x="62" y="580" width="483" height="58" rx="5" fill="#fff" stroke="#66bb6a" stroke-width="1.2"/>
+  <text x="76" y="600" font-size="12" font-weight="600" fill="#1b5e20">T(1) simulé = 93,233236   ·   analytique = 93,233236   ·   écart 2·10⁻⁸</text>
+  <text x="76" y="622" font-size="11.5" fill="#33691e">Le solveur intègre dT/dt = K(Tenv − T) exactement. Aucune ligne de bibliothèque touchée.</text>
+
+  <text x="58" y="662" font-size="12" fill="#33691e">Le débit variable vient d'une surcharge d'output_production_factor, un point</text>
+  <text x="58" y="680" font-size="12" fill="#33691e">d'extension documenté : la physique propre au composant reste dans le composant.</text>
+
+  <!-- ============== 4 ============== -->
+  <rect x="615" y="405" width="545" height="290" rx="8" fill="#fff8e1" stroke="#f57f17" stroke-width="1.6"/>
+  <text x="633" y="431" font-size="14" font-weight="700" fill="#e65100">Limite 1 · le récepteur doit demander</text>
+
+  <text x="633" y="459" font-size="12" fill="#5d4037">Trois essais, deux à zéro. Le canal continu est TIRÉ PAR LA DEMANDE :</text>
+  <text x="633" y="477" font-size="12" fill="#5d4037">livré = min(produit, demandé). Sans demande, rien ne passe.</text>
+
+  <rect x="633" y="492" width="507" height="52" rx="5" fill="#fff" stroke="#ffb300" stroke-width="1.2"/>
+  <text x="647" y="512" font-size="12" font-weight="700" fill="#e65100">Or la chaleur ne se demande pas. C'était votre objection, et elle</text>
+  <text x="647" y="532" font-size="12" font-weight="700" fill="#e65100">reparaît ici : elle est poussée, jamais tirée.</text>
+
+  <text x="633" y="568" font-size="12" fill="#5d4037">Le fill_rate = inf de l'essai 3 fonctionne, mais dit « remplis-toi au débit du</text>
+  <text x="633" y="586" font-size="12" fill="#5d4037">producteur ». C'est juste ici par coïncidence, et ça ne parle pas de chaleur.</text>
+
+  <text x="633" y="616" font-size="12" font-weight="600" fill="#e65100">Ce qu'il faudrait : un flux PORTÉ, sans canal de demande du tout, dont la</text>
+  <text x="633" y="634" font-size="12" font-weight="600" fill="#e65100">valeur se déduit de ce qui l'a transporté.</text>
+
+  <text x="633" y="664" font-size="12" font-style="italic" fill="#5d4037">Le même manque sert l'advection (l'eau qui emporte sa chaleur)</text>
+  <text x="633" y="682" font-size="12" font-style="italic" fill="#5d4037">et la conduction. Une seule brique pour les deux.</text>
+
+  <!-- ============== 5 ============== -->
+  <rect x="40" y="710" width="545" height="290" rx="8" fill="#fff8e1" stroke="#f57f17" stroke-width="1.6"/>
+  <text x="58" y="736" font-size="14" font-weight="700" fill="#e65100">Limite 2 · l'échange ne va que dans un sens</text>
+
+  <rect x="62" y="756" width="140" height="62" rx="5" fill="#fff" stroke="#37474f" stroke-width="1.3"/>
+  <text x="74" y="776" font-size="12" font-weight="600" fill="#263238">ENV · Tenv = 100</text>
+  <text x="74" y="794" font-size="11" fill="#b71c1c">facteur = max(0, −0,5)</text>
+  <text x="74" y="810" font-size="11" font-weight="700" fill="#b71c1c">= 0</text>
+
+  <line x1="206" y1="776" x2="366" y2="776" stroke="#b71c1c" stroke-width="1.3" marker-end="url(#z)"/>
+  <text x="242" y="768" font-size="11.5" font-weight="700" fill="#b71c1c">chaleur : 0</text>
+  <line x1="366" y1="804" x2="206" y2="804" stroke="#6a1b9a" stroke-width="1.3" stroke-dasharray="4 3" marker-end="url(#m)"/>
+  <text x="248" y="820" font-size="11" fill="#6a1b9a">T = 150</text>
+
+  <rect x="370" y="750" width="175" height="76" rx="5" fill="#ffcdd2" stroke="#c62828" stroke-width="1.4"/>
+  <text x="382" y="770" font-size="12" font-weight="600" fill="#263238">CUVE · T = 150</text>
+  <text x="382" y="788" font-size="11" font-weight="700" fill="#b71c1c">plus chaude que Tenv</text>
+  <text x="382" y="806" font-size="11" fill="#b71c1c">devrait perdre 100</text>
+  <text x="382" y="822" font-size="11" font-weight="700" fill="#b71c1c">ne perd rien</text>
+
+  <text x="58" y="854" font-size="12" fill="#5d4037">Cuve plus chaude que l'environnement : le facteur devient négatif et le max(0,·)</text>
+  <text x="58" y="872" font-size="12" fill="#5d4037">l'écrase. La cuve reste chaude indéfiniment.</text>
+  <text x="58" y="898" font-size="12" fill="#5d4037">Le plafond à zéro n'est pas arbitraire : une production négative viderait un</text>
+  <text x="58" y="916" font-size="12" fill="#5d4037">tampon à l'envers, et la bibliothèque la refuse pour cette raison.</text>
+  <text x="58" y="944" font-size="12" font-weight="600" fill="#e65100">Un flux muscadet est unidirectionnel. Un échange qui change de signe demande</text>
+  <text x="58" y="962" font-size="12" font-weight="600" fill="#e65100">deux connexions : ENV → CUVE pour chauffer, CUVE → ENV pour refroidir.</text>
+
+  <!-- ============== 6 ============== -->
+  <rect x="615" y="710" width="545" height="290" rx="8" fill="#ede7f6" stroke="#4527a0" stroke-width="1.6"/>
+  <text x="633" y="736" font-size="14" font-weight="700" fill="#311b92">Ce que ça dit de votre principe</text>
+
+  <text x="633" y="764" font-size="12" fill="#4527a0">Il tient mieux que je ne l'annonçais. L'environnement reste un composant à</text>
+  <text x="633" y="782" font-size="12" fill="#4527a0">port de chaleur, connecté normalement, et ce qui sort du formalisme est</text>
+  <text x="633" y="800" font-size="12" fill="#4527a0">confiné DANS le composant — là où un modélisateur met la physique d'un</text>
+  <text x="633" y="818" font-size="12" fill="#4527a0">équipement. Pas de mécanisme parallèle sur les capacités.</text>
+
+  <rect x="633" y="834" width="507" height="74" rx="5" fill="#fff" stroke="#7e57c2" stroke-width="1.2"/>
+  <text x="647" y="854" font-size="12" font-weight="700" fill="#311b92">Une seule brique manque vraiment : le flux porté.</text>
+  <text x="647" y="874" font-size="11.5" fill="#4527a0">La bidirectionnalité se traite par convention — deux connexions.</text>
+  <text x="647" y="892" font-size="11.5" fill="#4527a0">La lecture de T = H/V demande la mesure par constituant, qui est petite.</text>
+
+  <text x="633" y="936" font-size="12" font-style="italic" fill="#4527a0">Et les deux essais à zéro appartiennent à la famille que cette version passe</text>
+  <text x="633" y="954" font-size="12" font-style="italic" fill="#4527a0">son temps à fermer : le modèle tourne, se termine, et ne dit rien.</text>
+
+  <text x="40" y="1020" font-size="12" fill="#607d8b">Mesuré sur muscadet à bb7b35e, sans modification de la bibliothèque. Les trois essais sont reproductibles tels quels.</text>
+  <text x="40" y="1040" font-size="12" fill="#607d8b">L'écart de 2·10⁻⁸ est celui du solveur, pas du modèle : la loi intégrée est exactement dT/dt = K(Tenv − T).</text>
+
+</svg>
