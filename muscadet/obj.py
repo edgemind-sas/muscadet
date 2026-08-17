@@ -164,6 +164,8 @@ from .capacity import (
     allocate_measurement_equation_order,
 )
 
+from .transfer import TransferPair, build_transfer
+
 # The two standalone algorithms over a component, bound as methods of ObjFlow
 # further down: the two-sweep evaluation and the derating engine. Imported as
 # modules rather than by name so the binding block reads as what it is.
@@ -290,6 +292,11 @@ class ObjFlow(cod3s.PycComponent):
         # Capacities, keyed by capacity name, in declaration order. Declared
         # with add_capacity, INDEPENDENTLY of the rules (KD14).
         self.capacities = {}
+
+        # Transfer pairs, keyed by pair name, in declaration order. Declared
+        # with add_transfer. The order is the order the sweeps spend the shared
+        # per-input budget in, after the rule sets (KTD2).
+        self.transfers = {}
 
         # The same capacities, keyed by (held flow name, side): the index
         # get_capacity_of_flow answers KTD13's counterparty substitution from.
@@ -1442,6 +1449,110 @@ class ObjFlow(cod3s.PycComponent):
         self.measurements_in[name] = measurement
 
         return measurement
+
+    def add_transfer(self, name, flows=None, equation=None):
+        """
+        Declares a transfer pair: a computed quantity moving between two flows.
+
+        MUSCADET otherwise transports quantities pulled by DEMAND, which is the
+        wrong vehicle for one that moves because a gradient makes it move. A
+        pair is that second vehicle: the equation returns a **signed** quantity
+        and the library routes the sign, so a model never writes a direction
+        clamp.
+
+        The flows it names must already be declared, so call this AFTER the
+        ``add_flow_continuous_*`` calls of ``add_flows``.
+
+        Parameters
+        ----------
+        name : str
+            Pair name. Must be unique on the component.
+        flows : sequence of str
+            Exactly two continuous flow names, source first: a positive
+            quantity moves from the first to the second. Naming the **same**
+            flow twice is the metered conduit, where what crosses the component
+            is the computed quantity.
+        equation : muscadet.Transfer or dict
+            The declared equation, or the ``{"cls": ...}`` mapping form. A bare
+            callable is refused: see :mod:`muscadet.transfer` for why the
+            continuity attestation cannot be inferred.
+
+        Returns
+        -------
+        muscadet.transfer.TransferPair
+
+        Raises
+        ------
+        ValueError
+            If the name is taken, if ``flows`` does not name exactly two
+            continuous flows of this component, or if the equation is not a
+            declared transfer.
+        """
+        if name in self.transfers:
+            raise ValueError(
+                f"Object {self.name()}: transfer pair {name} already exists"
+            )
+
+        flows = list(flows or [])
+        pair = TransferPair(
+            name=name, flows=flows, equation=build_transfer(equation, name)
+        )
+
+        for flow_name in dict.fromkeys(flows):
+            self._resolve_transfer_flow(flow_name, name, conduit=pair.is_conduit)
+
+        self.transfers[name] = pair
+
+        return pair
+
+    def _resolve_transfer_flow(self, flow_name, pair_name, conduit=False):
+        """Check one transfer flow name, or refuse it where it was written.
+
+        A pair writes to BOTH balances, and a balance is written on the output
+        side, so every named flow needs a continuous output. A **conduit**
+        additionally needs the input side: it meters a transit, and there is no
+        transit to meter without one.
+
+        A capacity name and a measurement-channel name are refused for the
+        reasons :meth:`_resolve_rule_flow` refuses them in a ``cons`` map. A
+        measurement carries a reading and no quantity, and its channel may
+        combine several publishers by median, which conserves nothing: letting
+        one name a transfer balance is exactly how a non-conserved estimator
+        would leak into a mass balance.
+        """
+        where = f"transfer pair {pair_name}"
+
+        if flow_name in self.measurements_in or flow_name in self.measurements_out:
+            raise ValueError(
+                f"Object {self.name()}: {where} names measurement channel "
+                f"{flow_name}, which is not a flow: a measurement carries a "
+                "READING and no quantity -- its channel may combine several "
+                "publishers by mean or median, which conserves nothing -- so "
+                "no quantity can be moved into or out of it. Read it as a "
+                "POTENTIAL from the equation instead"
+            )
+
+        if flow_name in self.capacities:
+            raise ValueError(
+                f"Object {self.name()}: {where} names capacity {flow_name}, "
+                "which is not a flow: an interposed capacity replaces the flow "
+                "it buffers automatically, so a pair names flows, never "
+                "capacities"
+            )
+
+        if flow_name not in self.flows_continuous_out:
+            raise ValueError(
+                f"Object {self.name()}: {where} names {flow_name}, which is "
+                "not a continuous OUTPUT of this component. A pair writes to "
+                "both balances, and a balance is written on the output side"
+            )
+
+        if conduit and flow_name not in self.flows_continuous_in:
+            raise ValueError(
+                f"Object {self.name()}: {where} names {flow_name} twice, which "
+                "meters that flow's transit -- but it is not a continuous "
+                "INPUT of this component, so there is no transit to meter"
+            )
 
     def add_measurement_out(self, name, **params):
         """

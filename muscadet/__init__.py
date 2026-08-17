@@ -20,6 +20,7 @@ from .profile import Profile, SinusoidalProfile, build_profile
 from .transfer import (
     ConductiveTransfer,
     Transfer,
+    TransferPair,
     build_transfer,
     resolve_operand,
 )

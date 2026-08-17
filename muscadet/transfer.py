@@ -70,6 +70,11 @@ the modeller states what muscadet cannot check.
 import math
 import typing
 
+import pydantic
+from colored import attr, fg
+
+import cod3s
+
 #: What a modeller is told when the equation is not a declared-continuous one.
 #: It names the mechanism that would be needed rather than only the rule broken.
 _CONTINUITY_MESSAGE = (
@@ -295,6 +300,91 @@ class ConductiveTransfer(Transfer):
 TRANSFER_CLASSES: typing.Dict[str, type] = {
     "ConductiveTransfer": ConductiveTransfer,
 }
+
+
+class TransferPair(cod3s.ObjCOD3S):
+    """One declared pair: two flow names and the equation moving between them.
+
+    The equation (:class:`Transfer`) says HOW MUCH; the pair says BETWEEN WHAT.
+    They are separate objects because one equation shape serves any pair of
+    flows, and because the pair is what the sweeps iterate over.
+
+    :attr:`is_conduit` is the distinction the whole notion turns on, and the
+    two shapes take different paths through the production sweep -- see the
+    module docstring.
+    """
+
+    name: str = pydantic.Field(..., description="Pair name, unique on the component")
+
+    flows: typing.List[str] = pydantic.Field(
+        ...,
+        description=(
+            "The two continuous flow names, source first. A positive quantity "
+            "moves from the first to the second. Naming the same flow twice is "
+            "the metered conduit."
+        ),
+    )
+
+    equation: typing.Any = pydantic.Field(
+        None,
+        exclude=True,
+        repr=False,
+        description="The declared Transfer returning the signed quantity",
+    )
+
+    @pydantic.field_validator("flows")
+    @classmethod
+    def check_two_flows(cls, value):
+        if len(value) != 2:
+            raise ValueError(
+                f"A transfer pair names exactly two flows, got {len(value)}: "
+                f"{value!r}. Name the same flow twice for a metered conduit"
+            )
+        return value
+
+    @property
+    def is_conduit(self) -> bool:
+        """True when the pair meters one flow's transit rather than moving between two."""
+        return self.flows[0] == self.flows[1]
+
+    @property
+    def source(self) -> str:
+        """The flow a positive quantity leaves."""
+        return self.flows[0]
+
+    @property
+    def destination(self) -> str:
+        """The flow a positive quantity enters."""
+        return self.flows[1]
+
+    def quantity(self, comp) -> float:
+        """The signed quantity this pair moves right now."""
+        return self.equation.quantity(comp, self.name)
+
+    def directed(self, comp) -> typing.Tuple[str, str, float]:
+        """``(from_flow, to_flow, magnitude)`` with the sign already routed.
+
+        The whole of KD1 in one place: a model never writes a direction clamp,
+        because the library reads the sign here and hands back an unsigned
+        magnitude with the two ends already in the right order.
+        """
+        value = self.quantity(comp)
+
+        if value < 0.0:
+            return self.destination, self.source, -value
+
+        return self.source, self.destination, value
+
+    def __repr__(self) -> str:
+        shape = "conduit" if self.is_conduit else "pair"
+        return (
+            f"{fg('cyan')}TransferPair{attr('reset')} "
+            f"{fg('blue')}{self.name}{attr('reset')} "
+            f"[{shape}] {self.source} -> {self.destination}"
+        )
+
+    def __str__(self) -> str:
+        return self.__repr__()
 
 
 def build_transfer(spec, pair_name=None):
