@@ -281,12 +281,15 @@ class TpdSubject(muscadet.ObjFlow):
 
 
 @pytest.fixture(scope="module")
-def subject():
+def the_system():
     system = muscadet.System(name="TpdSys")
     system.add_component(name="SUBJ", cls="TpdSubject")
-    yield system.comp["SUBJ"]
-    system.deleteSys()
-    cod3s.terminate_session()
+    yield system
+
+
+@pytest.fixture(scope="module")
+def subject(the_system):
+    return the_system.comp["SUBJ"]
 
 
 def test_a_pair_over_two_continuous_flows_registers(subject):
@@ -387,3 +390,8 @@ def test_a_bare_callable_is_refused_at_declaration_too(subject):
 def test_a_refused_pair_leaves_no_trace(subject):
     """A declaration that raised must not half-register."""
     assert "bad" not in subject.transfers
+
+
+def test_delete(the_system):
+    the_system.deleteSys()
+    cod3s.terminate_session()

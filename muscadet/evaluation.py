@@ -938,12 +938,47 @@ def evaluate_production(comp):
         accumulate(consumption, {flow_name: transferred * uptake})
         accumulate(production, {flow_name: transferred})
 
+    # Every flow a CONDUIT meters starts at zero, for the reason a rule set's
+    # flows do: the conduit replaced that flow's identity transfer, so the
+    # source default below must not fill it, and a quantity the previous
+    # evaluation left must be cleared rather than inherited.
+    for flow_name in transfer_named_flows(comp):
+        accumulate(consumption, {flow_name: 0.0})
+        accumulate(production, {flow_name: 0.0})
+
     # A continuous output no rule and no transfer names is a SOURCE: the
     # value it was declared with is what it can produce. It appears here so
     # that what it delivers is reconciled with the demand like any other
     # production -- an output holding a rate nobody asks for delivers less.
     for flow_name, flow in comp.flows_continuous_out.items():
         production.setdefault(flow_name, float(flow.var_fed_default))
+
+    # Transfer pairs, LAST and in declaration order (KTD2). Last for two
+    # independent reasons: a two-flow pair adjusts a production every earlier
+    # contributor may have written, so it needs the map complete; and on a
+    # contested input the pair is then the thing that saturates, which is the
+    # state it has a shortfall channel for and a rule set has not.
+    for pair in comp.transfers.values():
+        source, destination, requested = pair.directed(comp)
+
+        if pair.is_conduit:
+            # What crosses IS the computed quantity (R5). The pair replaced
+            # the transfer, so it draws from the input side like a rule does
+            # and spends against the shared budget.
+            moved = min(requested, max(take(source), 0.0))
+            spend({source: moved})
+            accumulate(consumption, {source: moved})
+            accumulate(production, {source: moved})
+        else:
+            # A signed delta on top of two streams that keep transiting. The
+            # cap is what the source is about to produce: a stream cannot be
+            # relieved of more than it carries.
+            moved = min(requested, max(production.get(source, 0.0), 0.0))
+            accumulate(production, {source: -moved})
+            accumulate(production, {destination: moved})
+
+        pair.last_requested = requested
+        pair.last_moved = moved
 
     return consumption, production
 
@@ -1107,6 +1142,28 @@ def rule_named_flows(comp):
     return named
 
 
+def transfer_named_flows(comp):
+    """
+    Returns the flow names the component's CONDUIT pairs meter.
+
+    The transfer-pair counterpart of :func:`rule_named_flows`, and deliberately
+    narrower than it: only a conduit is subtracted from the identity-transfer
+    residue, because only a conduit REPLACES a transit (R5, KTD4).
+
+    A two-flow pair contributes nothing here, and that asymmetry is the whole
+    of KTD4. Its two streams keep crossing the component and the pair moves a
+    quantity BETWEEN their balances as a signed delta; subtract them and the
+    exchanger's streams stop crossing at all, leaving the pair to carry a whole
+    balance it was never asked to carry.
+
+    Returns
+    -------
+    set of str
+        Empty when the component declares no pair, or only two-flow ones.
+    """
+    return {pair.source for pair in (comp.transfers or {}).values() if pair.is_conduit}
+
+
 def get_identity_transfer_flows(comp):
     """
     Returns the flow names a component transfers unchanged, input to output.
@@ -1164,7 +1221,7 @@ def get_identity_transfer_flows(comp):
         unnamed flows straddle both sides, has no counterpart of the same
         name. The message names the component and every unmatched flow.
     """
-    named = rule_named_flows(comp)
+    named = rule_named_flows(comp) | transfer_named_flows(comp)
 
     flows_in = {
         name: flow
@@ -1220,7 +1277,7 @@ def get_transferable_flows(comp):
     list of str
         The matched flow names, in input declaration order.
     """
-    named = rule_named_flows(comp)
+    named = rule_named_flows(comp) | transfer_named_flows(comp)
     flows_out = comp.flows_continuous_out
 
     return [

@@ -332,6 +332,19 @@ class TransferPair(cod3s.ObjCOD3S):
         description="The declared Transfer returning the signed quantity",
     )
 
+    last_requested: float = pydantic.Field(
+        0.0,
+        description=(
+            "Magnitude the equation asked for at the last evaluation. Kept "
+            "beside last_moved so the shortfall of a saturated transfer is "
+            "readable rather than inferred from the balances (KD5)."
+        ),
+    )
+
+    last_moved: float = pydantic.Field(
+        0.0, description="Magnitude actually moved at the last evaluation"
+    )
+
     @pydantic.field_validator("flows")
     @classmethod
     def check_two_flows(cls, value):
