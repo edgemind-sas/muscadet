@@ -271,18 +271,30 @@ def evaluate_capability(comp):
     # it back. A consumer sizing itself on that figure then asks for a quantity
     # the pair can honour.
     for pair in comp.transfers.values():
+        requested = pair.quantity(comp)
+        origin, target, magnitude = pair.directed(comp, requested)
+
         if pair.is_conduit:
             # Clamped at zero for the reason the production sweep clamps it: a
             # conduit's direction is the connection's, and nothing crosses
             # backwards.
-            movable = min(max(pair.quantity(comp), 0.0), max(take(pair.source), 0.0))
+            movable = min(max(requested, 0.0), max(take(pair.source), 0.0))
             spend({pair.source: movable})
             accumulate({pair.source: movable})
         else:
-            origin, target, magnitude = pair.directed(comp)
-            magnitude = min(magnitude, max(capabilities.get(origin, 0.0), 0.0))
-            accumulate({origin: -magnitude})
+            available = max(capabilities.get(origin, 0.0), 0.0)
+            magnitude = min(magnitude, available)
+
             accumulate({target: magnitude})
+
+            # ``inf - inf`` is not a quantity, and the NaN it yields would be
+            # published on the origin's capability channel, where every
+            # downstream ``get_supply_scale`` would compare against it and
+            # silently poison the demand of the whole subgraph. An unbounded
+            # source relieved of an unbounded quantity is still unbounded:
+            # that reading carries no information, but it destroys none either.
+            if not (math.isinf(magnitude) and math.isinf(available)):
+                accumulate({origin: -magnitude})
 
     return capabilities
 

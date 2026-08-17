@@ -1,14 +1,15 @@
 """The continuous components MUSCADET ships (R32).
 
-Six domain-neutral shapes, and nothing else: a **source** holding a declared
+Seven domain-neutral shapes, and nothing else: a **source** holding a declared
 rate, a **sinusoidal source** whose rate follows a curve of simulation time, a
 **transformer** taking its rules as parameters, a **capacity** wrapping the
 volume declaration, a **consumer** publishing a declared demand, and a **sensor**
-reading a capacity level and driving a discrete control output.
+reading a capacity level and driving a discrete control output, and an
+**exchange** moving a computed quantity because a gradient makes it move.
 
 Only shapes that appeared TWICE outside the library ship here. An electrolyser
 with a membrane leak percentage or a battery with a start-up policy stays with
-the project that needs it: these five carry no chemistry, no electricity and no
+the project that needs it: these seven carry no chemistry, no electricity and no
 hydraulics, in their names or in their parameters.
 
 The sensor is the load-bearing one. A rule guard cannot reference a capacity
@@ -99,7 +100,7 @@ def allocation_params(kwargs):
 
 
 class ContinuousComponent(muscadet.ObjFlow):
-    """Shared base of the five shipped components: a CHECKED declaration.
+    """Shared base of the shipped components: a CHECKED declaration.
 
     Every component here reads its parameters with ``kwargs.get(key,
     default)``, so a misspelled key would otherwise be swallowed and its
@@ -832,7 +833,15 @@ class ExchangeContinuous(ContinuousComponent):
         self.add_flow_continuous_out(name=flow)
 
         for channel in kwargs.get("measurements") or []:
-            self.add_measurement_in(name=channel)
+            # A bare name opens a total-only channel; a mapping opens the
+            # constituents a per-constituent potential needs. Without the
+            # second form the `{"measurement": n, "flow": f}` operand this
+            # component's own docstring advertises can never resolve, and it
+            # fails from inside a PDMP equation rather than at declaration.
+            if isinstance(channel, dict):
+                self.add_measurement_in(**channel)
+            else:
+                self.add_measurement_in(name=channel)
 
         self.add_transfer(
             name=kwargs.get("transfer_name", "transfer"),

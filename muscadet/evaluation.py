@@ -961,7 +961,7 @@ def evaluate_production(comp):
     # flows do: the conduit replaced that flow's identity transfer, so the
     # source default below must not fill it, and a quantity the previous
     # evaluation left must be cleared rather than inherited.
-    for flow_name in transfer_named_flows(comp):
+    for flow_name in comp.transfer_named_flows():
         accumulate(consumption, {flow_name: 0.0})
         accumulate(production, {flow_name: 0.0})
 
@@ -979,6 +979,7 @@ def evaluate_production(comp):
     # state it has a shortfall channel for and a rule set has not.
     for pair in comp.transfers.values():
         requested = pair.quantity(comp)
+        origin, target, magnitude = pair.directed(comp, requested)
 
         if pair.is_conduit:
             # What crosses IS the computed quantity (R5). The pair replaced
@@ -994,14 +995,30 @@ def evaluate_production(comp):
             # readable on {pair}_requested: a reversal shows up as a negative
             # ask against a zero crossing, not as a plausible number.
             moved = min(max(requested, 0.0), max(take(pair.source), 0.0))
-            spend({pair.source: moved})
-            accumulate(consumption, {pair.source: moved})
+
+            # And never more than the output can actually hand on. A conduit
+            # replaced its flow's identity transfer, so the demand it published
+            # upstream is its OWN computed quantity and not the downstream
+            # demand -- which is exactly what keeps `get_input_available` from
+            # bounding it the way it bounds a transfer. Drawn but undeliverable,
+            # the difference is destroyed: nothing downstream of here releases
+            # it, and `release_unused_supply` caps at this very consumption.
+            if comp.output_carries_demand(pair.source):
+                moved = min(moved, max(comp.get_output_demand(pair.source), 0.0))
+
+            # The draw is scaled by what the output's deratings and time profile
+            # LEFT, exactly as the identity transfer scales its own (R-13). A
+            # dead output produces nothing and must therefore consume nothing,
+            # or the difference is drawn from the supplier and lost.
+            uptake = comp.get_uptake_factor((pair.source,))
+
+            spend({pair.source: moved * uptake})
+            accumulate(consumption, {pair.source: moved * uptake})
             accumulate(production, {pair.source: moved})
         else:
             # A signed delta on top of two streams that keep transiting. The
             # cap is what the source is about to produce: a stream cannot be
             # relieved of more than it carries.
-            origin, target, magnitude = pair.directed(comp)
             magnitude = min(magnitude, max(production.get(origin, 0.0), 0.0))
             accumulate(production, {origin: -magnitude})
             accumulate(production, {target: magnitude})

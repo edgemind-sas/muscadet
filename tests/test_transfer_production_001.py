@@ -139,6 +139,21 @@ def build_system():
     system.connect_flow(source="SRC_PLAIN", target="CND_PLAIN", flow_name="x")
     system.connect_flow(source="CND_PLAIN", target="SNK_PLAIN", flow_name="x")
 
+    # A conduit whose consumer asks for LESS than it meters. The conduit's own
+    # upstream claim is its computed quantity, so nothing else bounds it here.
+    system.add_component(name="SRC_CAP", cls="TprSource")
+    system.add_component(name="CND_CAP", cls="TprConduit", rate=5.0)
+    system.add_component(name="SNK_CAP", cls="TprSink", demand=1.0)
+    system.connect_flow(source="SRC_CAP", target="CND_CAP", flow_name="x")
+    system.connect_flow(source="CND_CAP", target="SNK_CAP", flow_name="x")
+
+    # A conduit whose output a failure mode derates.
+    system.add_component(name="SRC_DER", cls="TprSource")
+    system.add_component(name="CND_DER", cls="TprConduit", rate=3.0)
+    system.add_component(name="SNK_DER", cls="TprSink")
+    system.connect_flow(source="SRC_DER", target="CND_DER", flow_name="x")
+    system.connect_flow(source="CND_DER", target="SNK_DER", flow_name="x")
+
     # A conduit asking for more than its supply can give.
     system.add_component(name="SRC_SAT", cls="TprSource", rate=1.0)
     system.add_component(name="CND_SAT", cls="TprConduit", rate=5.0)
@@ -374,6 +389,56 @@ def test_a_reversing_conduit_asks_for_nothing(the_system):
         assert conduit.evaluate_demand()["x"] == pytest.approx(0.0)
     finally:
         pair.equation = original
+
+
+# ----------------------------------------------------------------------
+# What a conduit may not draw: the two ways it could destroy a quantity
+# ----------------------------------------------------------------------
+
+
+def test_a_conduit_draws_no_more_than_its_consumer_will_take(the_system):
+    """Metering 5 into a consumer asking 1 must not draw 5 and deliver 1.
+
+    A conduit replaced its flow's identity transfer, so the demand it publishes
+    upstream is its OWN computed quantity rather than the downstream demand --
+    which is exactly what stops ``get_input_available`` from bounding it the
+    way it bounds a transfer. Drawn but undeliverable, the difference has
+    nowhere to go: nothing below releases it and ``release_unused_supply`` caps
+    at this very consumption.
+    """
+    consumption, production = maps(the_system, "CND_CAP")
+
+    assert consumption["x"] == pytest.approx(1.0)
+    assert production["x"] == pytest.approx(1.0)
+    assert received(the_system, "SNK_CAP", "x") == pytest.approx(1.0)
+
+
+def test_a_derated_conduit_draws_what_it_can_deliver(the_system):
+    """R-13 on the conduit path: a dead output consumes nothing.
+
+    ``apply_production`` multiplies production by the output's derating and
+    time profile AFTER this map is built, so a consumption left unscaled is a
+    quantity drawn from the supplier and destroyed inside the component.
+    """
+    conduit = the_system.comp["CND_DER"]
+    rate = conduit.flows_out["x"].var_out_rate
+
+    rate.setValue(0.5)
+    try:
+        consumption, production = conduit.evaluate_production()
+        factor = conduit.output_production_factor("x")
+
+        assert consumption["x"] == pytest.approx(production["x"] * factor)
+        assert consumption["x"] == pytest.approx(1.5)
+    finally:
+        rate.setValue(1.0)
+
+
+def test_an_undecorated_conduit_is_unaffected_by_the_uptake_rule(the_system):
+    """The control: with nothing derating it, draw and production coincide."""
+    consumption, production = maps(the_system, "CND_DER")
+
+    assert consumption["x"] == pytest.approx(production["x"])
 
 
 def test_delete(the_system):

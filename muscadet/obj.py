@@ -1523,6 +1523,15 @@ class ObjFlow(cod3s.PycComponent):
         """
         where = f"transfer pair {pair_name}"
 
+        if conduit and flow_name in evaluation.rule_named_flows(self):
+            raise ValueError(
+                f"Object {self.name()}: {where} meters {flow_name}, which a "
+                "rule set already consumes or produces. A conduit REPLACES "
+                "what crosses the component, so the flow would cross twice -- "
+                "once by the rule and once by the pair. Meter a flow the rules "
+                "leave alone, or express the metering in the rule itself"
+            )
+
         if flow_name in self.measurements_in or flow_name in self.measurements_out:
             raise ValueError(
                 f"Object {self.name()}: {where} names measurement channel "

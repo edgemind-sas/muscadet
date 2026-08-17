@@ -210,6 +210,18 @@ def resolve_operand(comp, spec, where=""):
         return float(spec)
 
     if isinstance(spec, dict):
+        if "const" in spec and "measurement" in spec:
+            # Refused rather than resolved by precedence. Switching a fixed
+            # environment to a measured one by adding the key and forgetting to
+            # remove the old one is the natural mistake, and honouring one of
+            # them silently leaves the law running against a frozen potential
+            # for the whole mission. Same rule ExchangeContinuous applies one
+            # level up to its own two spellings.
+            raise ValueError(
+                f"Transfer operand{where}: {spec!r} declares both 'const' and "
+                "'measurement'. Declare one or the other"
+            )
+
         if "const" in spec:
             return float(spec["const"])
 
@@ -427,14 +439,21 @@ class TransferPair(cod3s.ObjCOD3S):
         """The signed quantity this pair moves right now."""
         return self.equation.quantity(comp, self.name)
 
-    def directed(self, comp) -> typing.Tuple[str, str, float]:
+    def directed(self, comp, value=None) -> typing.Tuple[str, str, float]:
         """``(from_flow, to_flow, magnitude)`` with the sign already routed.
 
         The whole of KD1 in one place: a model never writes a direction clamp,
         because the library reads the sign here and hands back an unsigned
         magnitude with the two ends already in the right order.
+
+        ``value`` lets a caller that has ALREADY evaluated the equation hand
+        the reading in rather than provoking a second one. Not an optimisation:
+        the solver evaluates the equation set several times per integration
+        step, and a caller reading twice could pair the sign of one reading
+        with the magnitude of another.
         """
-        value = self.quantity(comp)
+        if value is None:
+            value = self.quantity(comp)
 
         if value < 0.0:
             return self.destination, self.source, -value

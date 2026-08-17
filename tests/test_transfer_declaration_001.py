@@ -247,6 +247,16 @@ def test_an_unknown_operand_form_is_refused_naming_the_accepted_ones():
         muscadet.resolve_operand(FakeComponent(), {"quantity": "heat", "per": "water"})
 
 
+def test_an_operand_declaring_both_forms_is_refused(the_system):
+    """Switching a fixed potential to a measured one and forgetting to remove
+    the old key is the natural mistake; honouring one silently would leave the
+    law running against a frozen potential for the whole mission."""
+    comp = FakeComponent({"tank": FakeChannel({None: 1.0})})
+
+    with pytest.raises(ValueError, match="both 'const' and 'measurement'"):
+        muscadet.resolve_operand(comp, {"const": 300.0, "measurement": "tank"})
+
+
 # ----------------------------------------------------------------------
 # Declaring a pair ON a component (U2)
 # ----------------------------------------------------------------------
@@ -278,6 +288,18 @@ class TpdSubject(muscadet.ObjFlow):
         self.add_flow_out(name="sig", var_prod_default=True)
         self.add_measurement_in(name="probe")
         self.add_capacity(name="vol", flow="d", capacity=100.0, side="in")
+
+
+class TpdRuled(muscadet.ObjFlow):
+    """A flow a rule set already accounts for, plus one it does not."""
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        for flow in ("r", "s"):
+            self.add_flow_continuous_in(name=flow)
+            self.add_flow_continuous_out(name=flow)
+
+        self.add_rules(name="pass", rules=[dict(cons={"r": 1.0}, prod={"r": 1.0})])
 
 
 @pytest.fixture(scope="module")
@@ -390,6 +412,28 @@ def test_a_bare_callable_is_refused_at_declaration_too(subject):
 def test_a_refused_pair_leaves_no_trace(subject):
     """A declaration that raised must not half-register."""
     assert "bad" not in subject.transfers
+
+
+def test_a_conduit_may_not_meter_a_flow_a_rule_already_names(the_system):
+    """The other route to the double crossing, and it was unguarded.
+
+    Removing a conduit's flow from the identity transfer stops it crossing
+    twice by that path -- but a rule set naming the same flow puts it back,
+    and neither declaration looks at the other's.
+    """
+    the_system.add_component(name="RULED", cls="TpdRuled")
+    ruled = the_system.comp["RULED"]
+
+    with pytest.raises(ValueError, match="already consumes or produces"):
+        ruled.add_transfer("meter", flows=["r", "r"], equation=a_quantity())
+
+
+def test_a_two_flow_pair_may_still_name_a_ruled_flow(the_system):
+    """It adds a delta on top of what the rule produced, which is legitimate."""
+    ruled = the_system.comp["RULED"]
+    pair = ruled.add_transfer("delta", flows=["r", "s"], equation=a_quantity())
+
+    assert not pair.is_conduit
 
 
 def test_delete(the_system):
