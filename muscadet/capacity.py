@@ -55,11 +55,24 @@ Measurement link (R33)
 ----------------------
 A capacity publishes its level through a **read-only export**: the message box
 ``{c}_level_out`` carries the aliases ``{c}_level`` (total raw quantity) and
-``{c}_fill`` (total weighted fill). An observing component declares the matching
-import with :meth:`muscadet.ObjFlow.add_measurement_in`, which creates the
-message box ``{c}_level_in`` importing the same two aliases into *references*.
-A reference has no ``setValue``, so the importing component cannot write the
-level; the link carries no quantity and takes part in no allocation.
+``{c}_fill`` (total weighted fill), plus ``{c}_level_{f}`` and ``{c}_fill_{f}``
+for every held flow. An observing component declares the matching import with
+:meth:`muscadet.ObjFlow.add_measurement_in`, which creates the message box
+``{c}_level_in`` importing the totals, and the constituents its ``flows=`` list
+names, into *references*. A reference has no ``setValue``, so the importing
+component cannot write the level; the link carries no quantity and takes part
+in no allocation.
+
+**Why per constituent.** The total is the one reading an INTENSIVE property
+cannot be recovered from: a volume holding water and heat is at a temperature
+of ``heat / water``, while ``{c}_level`` is the raw sum, which is neither term
+and is not a quantity of anything when the constituents differ in nature. An
+observer that wants the ratio needs both terms, so both are published, and an
+instrument republishing a reading (:class:`MeasurementOut`) carries them too --
+an observer cannot tell a capacity from a republisher, and that has to stay
+true. Aliases are built in :func:`level_alias` / :func:`fill_alias`, in one
+place, because a drift of one underscore between the two sides fails the whole
+``connect`` rather than only the constituent.
 
 Scope
 -----
@@ -134,6 +147,26 @@ COMBINE_POLICIES = (
     COMBINE_MIN,
     COMBINE_MAX,
 )
+
+
+def level_alias(channel, flow=None):
+    """The message-box alias carrying a measurement channel's level.
+
+    ``flow=None`` is the WHOLE volume, the alias muscadet has always
+    published. Naming a held flow gives that constituent's own level.
+
+    Publisher and observer both build their alias here on purpose. The two
+    sides are matched by string equality inside PyCATSHOO, and a mismatch is
+    not a soft failure: the exporting box refuses the whole ``connect``, so a
+    convention that drifted by one underscore would take the total down with
+    the constituent.
+    """
+    return f"{channel}_level" if flow is None else f"{channel}_level_{flow}"
+
+
+def fill_alias(channel, flow=None):
+    """The alias carrying a channel's weighted fill. See :func:`level_alias`."""
+    return f"{channel}_fill" if flow is None else f"{channel}_fill_{flow}"
 
 
 def combine_sum(values):
@@ -547,15 +580,48 @@ class Capacity(cod3s.ObjCOD3S):
         )
 
     def add_mb(self, comp):
-        """Publish the level as a read-only export (R33).
+        """Publish the level as a read-only export (R33), total AND per flow.
 
         Only exports: the observing side imports into references, which carry
         no setter at all, so the link cannot be written from downstream.
+
+        **Why the totals are not enough.** The total is precisely the thing an
+        intensive property cannot be recovered from. A volume holding water and
+        heat has a temperature of ``heat / water``, while ``{c}_level`` is
+        their weighted sum, which is neither term. An observer wanting the
+        ratio needs both, so both are published, under
+        :func:`level_alias` / :func:`fill_alias`.
+
+        **The extra aliases cost an existing model nothing**, measured rather
+        than assumed: PyCATSHOO matches an import to an export by alias and
+        simply ignores an export nobody imports, so a 1.x observer importing
+        ``{c}_level`` alone still connects to this wider box and still reads
+        the total. The reverse is refused, and refused *atomically* -- an
+        import naming an alias the box does not export fails the whole
+        ``connect``, taking the total with it -- which is why
+        :meth:`muscadet.System.check_measurement_constituents` intercepts that
+        case ahead of the engine and names what the volume actually holds.
         """
         mb_name = f"{self.name}_level_out"
         comp.addMessageBox(mb_name)
-        comp.addMessageBoxExport(mb_name, self.var_qty_total, f"{self.name}_level")
-        comp.addMessageBoxExport(mb_name, self.var_fill_total, f"{self.name}_fill")
+        comp.addMessageBoxExport(mb_name, self.var_qty_total, level_alias(self.name))
+        comp.addMessageBoxExport(mb_name, self.var_fill_total, fill_alias(self.name))
+
+        for entry in self.flows:
+            comp.addMessageBoxExport(
+                mb_name,
+                self.var_qty[entry.name],
+                level_alias(self.name, entry.name),
+            )
+            comp.addMessageBoxExport(
+                mb_name,
+                self.var_fill[entry.name],
+                fill_alias(self.name, entry.name),
+            )
+
+    def published_flows(self):
+        """Names of the constituents this capacity publishes per flow."""
+        return [entry.name for entry in self.flows]
 
     def add_automaton(self, comp):
         """Build the empty/full automaton driven by the total weighted fill."""
@@ -698,16 +764,31 @@ class Capacity(cod3s.ObjCOD3S):
         """The total raw quantity, recomputed from the per-flow levels."""
         return self.get_quantity()
 
-    def total_fill(self) -> float:
-        """The total weighted fill, recomputed from the per-flow levels.
+    def current_fill(self, flow_name=None) -> float:
+        """The weighted fill recomputed from the ODE levels, of one flow or all.
 
-        Recomputed rather than read back from ``var_fill_total`` so the bound
-        conditions never lag one integration step behind the levels.
+        Recomputed rather than read back from ``var_fill`` / ``var_fill_total``,
+        which are EXPLICIT variables the capacity equation writes: reading one
+        back from another equation of the same step lags one integration step
+        behind the levels. Everything that must not lag -- the bound
+        conditions, and what a republisher hands an observer -- comes here.
         """
+        if flow_name is None:
+            return (
+                sum(
+                    self.var_qty[entry.name].value() * entry.weight
+                    for entry in self.flows
+                )
+                / self.capacity
+            )
+
         return (
-            sum(self.var_qty[entry.name].value() * entry.weight for entry in self.flows)
-            / self.capacity
+            self.var_qty[flow_name].value() * self.weight_of(flow_name) / self.capacity
         )
+
+    def total_fill(self) -> float:
+        """The total weighted fill, recomputed from the per-flow levels."""
+        return self.current_fill()
 
     # ------------------------------------------------------------------
     # Transit -- the two hooks the sweeps write (KTD13)
@@ -922,6 +1003,17 @@ class MeasurementIn(cod3s.ObjCOD3S):
         ),
     )
 
+    flows: typing.List[str] = pydantic.Field(
+        default_factory=list,
+        description=(
+            "Constituents of the observed volume to read individually, BESIDE "
+            "the total this channel has always carried. Empty -- the default "
+            "-- imports the total alone and is byte-identical to 1.x. Naming "
+            "a flow is what lets an observer form an intensive property, which "
+            "the total cannot be divided back into."
+        ),
+    )
+
     level_default: float = pydantic.Field(
         0.0, description="Level read while the link is not connected"
     )
@@ -961,6 +1053,38 @@ class MeasurementIn(cod3s.ObjCOD3S):
         None, exclude=True, repr=False, description="Reference on the observed fill"
     )
 
+    var_level_flow: typing.Dict[str, typing.Any] = pydantic.Field(
+        default_factory=dict,
+        exclude=True,
+        repr=False,
+        description="Per-constituent level references, keyed by flow name",
+    )
+
+    var_fill_flow: typing.Dict[str, typing.Any] = pydantic.Field(
+        default_factory=dict,
+        exclude=True,
+        repr=False,
+        description="Per-constituent fill references, keyed by flow name",
+    )
+
+    @pydantic.model_validator(mode="after")
+    def check_flows(self):
+        """Refuse a malformed constituent list at DECLARATION time.
+
+        A duplicate would declare the same reference twice under the same
+        alias, which PyCATSHOO refuses far from the declaration that caused it.
+        """
+        seen = set()
+        for flow_name in self.flows:
+            if flow_name in seen:
+                raise ValueError(
+                    f"Measurement channel {self.name}: constituent "
+                    f"{flow_name!r} is declared more than once"
+                )
+            seen.add(flow_name)
+
+        return self
+
     @pydantic.model_validator(mode="after")
     def check_combine(self):
         """Refuse an unusable combination policy at DECLARATION time.
@@ -993,17 +1117,48 @@ class MeasurementIn(cod3s.ObjCOD3S):
         self.var_level = comp.addReference(f"{self.name}_level_in")
         self.var_fill = comp.addReference(f"{self.name}_fill_in")
 
+        for flow_name in self.flows:
+            self.var_level_flow[flow_name] = comp.addReference(
+                f"{self.name}_level_{flow_name}_in"
+            )
+            self.var_fill_flow[flow_name] = comp.addReference(
+                f"{self.name}_fill_{flow_name}_in"
+            )
+
         if not self.combines_several:
             # A measurement observes exactly one publisher unless the
-            # declaration says how several of them combine.
-            self.var_level.setCnctMax(1)
-            self.var_fill.setCnctMax(1)
+            # declaration says how several of them combine. The cap belongs on
+            # every reference of the channel, constituents included: they all
+            # come from the one box, so a second publisher would otherwise be
+            # capped on the total and silently summed on the constituents.
+            for var in self.every_reference():
+                var.setCnctMax(1)
+
+    def every_reference(self):
+        """Every reference this channel reads, totals and constituents."""
+        return (
+            [self.var_level, self.var_fill]
+            + list(self.var_level_flow.values())
+            + list(self.var_fill_flow.values())
+        )
 
     def add_mb(self, comp):
         mb_name = f"{self.name}_level_in"
         comp.addMessageBox(mb_name)
-        comp.addMessageBoxImport(mb_name, self.var_level, f"{self.name}_level")
-        comp.addMessageBoxImport(mb_name, self.var_fill, f"{self.name}_fill")
+        comp.addMessageBoxImport(mb_name, self.var_level, level_alias(self.name))
+        comp.addMessageBoxImport(mb_name, self.var_fill, fill_alias(self.name))
+
+        for flow_name in self.flows:
+            comp.addMessageBoxImport(
+                mb_name,
+                self.var_level_flow[flow_name],
+                level_alias(self.name, flow_name),
+            )
+            comp.addMessageBoxImport(
+                mb_name,
+                self.var_fill_flow[flow_name],
+                fill_alias(self.name, flow_name),
+            )
 
     def readings(self, var, default) -> typing.List[float]:
         """The per-connection readings of one reference, in connection order.
@@ -1018,28 +1173,57 @@ class MeasurementIn(cod3s.ObjCOD3S):
 
         return [float(var.value(index)) for index in range(var.cnctCount())]
 
-    def get_level(self) -> float:
-        """The level read on this channel, combined over its publishers."""
+    def reduce(self, var, default) -> float:
+        """One reference's readings, reduced by this channel's policy.
+
+        The single-source path stays ``sumValue``, which is what it always was:
+        the identity on one connection, and the only reduction reachable
+        without declaring a policy.
+        """
         if not self.combines_several:
-            return self.var_level.sumValue(self.level_default)
+            return var.sumValue(default)
 
         return combine(
-            self.readings(self.var_level, self.level_default),
+            self.readings(var, default),
             policy=self.combine,
             combine_fun=self.combine_fun,
-            default=self.level_default,
+            default=default,
         )
 
-    def get_fill(self) -> float:
-        """The fill read on this channel, combined over its publishers."""
-        if not self.combines_several:
-            return self.var_fill.sumValue(self.fill_default)
+    def resolve(self, mapping, flow_name, kind):
+        """The per-constituent reference for ``flow_name``, or a clear refusal."""
+        var = mapping.get(flow_name)
+        if var is not None:
+            return var
 
-        return combine(
-            self.readings(self.var_fill, self.fill_default),
-            policy=self.combine,
-            combine_fun=self.combine_fun,
-            default=self.fill_default,
+        declared = ", ".join(self.flows) if self.flows else "none"
+        raise ValueError(
+            f"Measurement channel {self.name}: no {kind} is read for "
+            f"constituent {flow_name!r}; this channel declares {declared}. "
+            "Add it to the channel's flows= list to import it"
+        )
+
+    def get_level(self, flow=None) -> float:
+        """The level read on this channel, combined over its publishers.
+
+        ``flow=None`` is the whole volume. Naming a declared constituent gives
+        that constituent's own level, which is what an intensive property is
+        formed from.
+        """
+        if flow is None:
+            return self.reduce(self.var_level, self.level_default)
+
+        return self.reduce(
+            self.resolve(self.var_level_flow, flow, "level"), self.level_default
+        )
+
+    def get_fill(self, flow=None) -> float:
+        """The fill read on this channel. See :meth:`get_level` for ``flow``."""
+        if flow is None:
+            return self.reduce(self.var_fill, self.fill_default)
+
+        return self.reduce(
+            self.resolve(self.var_fill_flow, flow, "fill"), self.fill_default
         )
 
     @property
@@ -1114,6 +1298,17 @@ class MeasurementOut(cod3s.ObjCOD3S):
         ),
     )
 
+    flows: typing.List[str] = pydantic.Field(
+        default_factory=list,
+        description=(
+            "Constituents republished individually beside the total. Kept in "
+            "step with MeasurementIn.flows on purpose: an observer cannot tell "
+            "a capacity from a republisher, so an instrument standing between "
+            "a multi-constituent volume and a voter has to be able to carry "
+            "what the volume publishes."
+        ),
+    )
+
     level_default: float = pydantic.Field(
         0.0, description="Level published before anything has been written"
     )
@@ -1142,6 +1337,34 @@ class MeasurementOut(cod3s.ObjCOD3S):
         None, exclude=True, repr=False, description="Public gain variable"
     )
 
+    var_level_flow: typing.Dict[str, typing.Any] = pydantic.Field(
+        default_factory=dict,
+        exclude=True,
+        repr=False,
+        description="Per-constituent published level variables, by flow name",
+    )
+
+    var_fill_flow: typing.Dict[str, typing.Any] = pydantic.Field(
+        default_factory=dict,
+        exclude=True,
+        repr=False,
+        description="Per-constituent published fill variables, by flow name",
+    )
+
+    @pydantic.model_validator(mode="after")
+    def check_flows(self):
+        """Refuse a duplicate constituent at declaration time."""
+        seen = set()
+        for flow_name in self.flows:
+            if flow_name in seen:
+                raise ValueError(
+                    f"Published measurement {self.name}: constituent "
+                    f"{flow_name!r} is declared more than once"
+                )
+            seen.add(flow_name)
+
+        return self
+
     def add_variables(self, comp):
         self.var_level = comp.addVariable(
             f"{self.name}_level", pyc.TVarType.t_double, float(self.level_default)
@@ -1156,32 +1379,83 @@ class MeasurementOut(cod3s.ObjCOD3S):
         # the next Monte Carlo sequence starts, exactly like a derating.
         self.var_gain.setReinitialized(True)
 
+        for flow_name in self.flows:
+            self.var_level_flow[flow_name] = comp.addVariable(
+                f"{self.name}_level_{flow_name}",
+                pyc.TVarType.t_double,
+                float(self.level_default),
+            )
+            self.var_fill_flow[flow_name] = comp.addVariable(
+                f"{self.name}_fill_{flow_name}",
+                pyc.TVarType.t_double,
+                float(self.fill_default),
+            )
+
     def add_mb(self, comp):
         """Publish the reading as a read-only export, capacity-compatible."""
         mb_name = f"{self.name}_level_out"
         comp.addMessageBox(mb_name)
-        comp.addMessageBoxExport(mb_name, self.var_level, f"{self.name}_level")
-        comp.addMessageBoxExport(mb_name, self.var_fill, f"{self.name}_fill")
+        comp.addMessageBoxExport(mb_name, self.var_level, level_alias(self.name))
+        comp.addMessageBoxExport(mb_name, self.var_fill, fill_alias(self.name))
+
+        for flow_name in self.flows:
+            comp.addMessageBoxExport(
+                mb_name,
+                self.var_level_flow[flow_name],
+                level_alias(self.name, flow_name),
+            )
+            comp.addMessageBoxExport(
+                mb_name,
+                self.var_fill_flow[flow_name],
+                fill_alias(self.name, flow_name),
+            )
+
+    def published_flows(self):
+        """Names of the constituents this channel publishes per flow."""
+        return list(self.flows)
+
+    def every_variable(self):
+        """Every variable the equation writes: totals and constituents.
+
+        What :meth:`muscadet.ObjFlow.add_measurement_out` declares explicit to
+        the solver. It deliberately leaves out ``var_gain``, which is an INPUT
+        a failure mode clamps and which muscadet never writes.
+        """
+        return (
+            [self.var_level, self.var_fill]
+            + list(self.var_level_flow.values())
+            + list(self.var_fill_flow.values())
+        )
 
     def get_gain(self) -> float:
         """The factor currently applied to everything this channel publishes."""
         return self.var_gain.value() if self.var_gain is not None else 1.0
 
-    def publish(self, level, fill=None):
-        """Write the reading, gain applied. ``fill`` defaults to the level."""
-        gain = self.get_gain()
-        self.var_level.setValue(float(level) * gain)
-        self.var_fill.setValue(float(level if fill is None else fill) * gain)
+    def publish(self, level, fill=None, flow=None):
+        """Write one reading, gain applied. ``fill`` defaults to the level.
 
-    def read_source(self, comp):
-        """The ``(level, fill)`` pair the declared source currently holds."""
+        The gain is the SAME for the total and for every constituent: one
+        instrument publishes one set of readings, so a mode that kills it kills
+        all of them. A per-constituent gain would model a probe that fails on
+        the heat channel while staying honest on the water channel, which is
+        two instruments, and two instruments are two components.
+        """
+        gain = self.get_gain()
+        var_level = self.var_level if flow is None else self.var_level_flow[flow]
+        var_fill = self.var_fill if flow is None else self.var_fill_flow[flow]
+
+        var_level.setValue(float(level) * gain)
+        var_fill.setValue(float(level if fill is None else fill) * gain)
+
+    def resolve_source(self, comp):
+        """The capacity or measurement channel this republisher reads."""
         capacity = comp.capacities.get(self.source)
         if capacity is not None:
-            return capacity.total_quantity(), capacity.total_fill()
+            return capacity
 
         measurement = comp.measurements_in.get(self.source)
         if measurement is not None:
-            return measurement.get_level(), measurement.get_fill()
+            return measurement
 
         raise ValueError(
             f"Object {comp.name()}: published measurement {self.name} declares "
@@ -1189,21 +1463,48 @@ class MeasurementOut(cod3s.ObjCOD3S):
             "measurement channel of this component"
         )
 
+    def read_source(self, comp, flow=None):
+        """The ``(level, fill)`` pair the declared source currently holds.
+
+        ``flow=None`` is the whole volume. A capacity and a measurement channel
+        answer the same question under different method names, which is the
+        only reason this dispatches at all.
+        """
+        source = self.resolve_source(comp)
+
+        if isinstance(source, Capacity):
+            # current_fill, never get_fill: the latter reads back the variable
+            # the capacity equation writes, which lags a step behind the level
+            # this very call is republishing.
+            return source.get_quantity(flow), source.current_fill(flow)
+
+        return source.get_level(flow), source.get_fill(flow)
+
     def compute(self, comp):
-        """Refresh the published reading from its source, if it declares one."""
+        """Refresh the published readings from the source, if one is declared."""
         if self.source is None:
             return
 
         level, fill = self.read_source(comp)
         self.publish(level, fill)
 
-    def get_level(self) -> float:
-        """The level currently published."""
-        return self.var_level.value() if self.var_level is not None else 0.0
+        for flow_name in self.flows:
+            level, fill = self.read_source(comp, flow_name)
+            self.publish(level, fill, flow=flow_name)
 
-    def get_fill(self) -> float:
-        """The fill currently published."""
-        return self.var_fill.value() if self.var_fill is not None else 0.0
+    def read_published(self, mapping, var_total, flow) -> float:
+        """One published variable's current value, total or per constituent."""
+        var = var_total if flow is None else mapping.get(flow)
+
+        return var.value() if var is not None else 0.0
+
+    def get_level(self, flow=None) -> float:
+        """The level currently published, total or for one constituent."""
+        return self.read_published(self.var_level_flow, self.var_level, flow)
+
+    def get_fill(self, flow=None) -> float:
+        """The fill currently published, total or for one constituent."""
+        return self.read_published(self.var_fill_flow, self.var_fill, flow)
 
     def __repr__(self) -> str:
         origin = f" <- {self.source}" if self.source else ""

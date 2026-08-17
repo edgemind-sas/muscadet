@@ -696,6 +696,13 @@ class System(cod3s.PycSystem):
             self.flow_behind_message_box(component_target, interface_target, "in"),
         )
 
+        self.check_measurement_constituents(
+            component_source,
+            interface_source,
+            component_target,
+            interface_target,
+        )
+
         return super().connect(
             component_source,
             interface_source,
@@ -703,6 +710,70 @@ class System(cod3s.PycSystem):
             interface_target,
             *args,
             **kwargs,
+        )
+
+    def measurement_publisher(self, component, interface):
+        """The capacity or publication behind a ``{name}_level_out`` box."""
+        if not interface.endswith("_level_out"):
+            return None
+
+        comp = self.comp.get(component)
+        if comp is None:
+            return None
+
+        name = interface[: -len("_level_out")]
+
+        return comp.capacities.get(name) or comp.measurements_out.get(name)
+
+    def measurement_observer(self, component, interface):
+        """The measurement import behind a ``{name}_level_in`` box."""
+        if not interface.endswith("_level_in"):
+            return None
+
+        comp = self.comp.get(component)
+        if comp is None:
+            return None
+
+        return comp.measurements_in.get(interface[: -len("_level_in")])
+
+    def check_measurement_constituents(
+        self, component_source, interface_source, component_target, interface_target
+    ):
+        """Refuse a measurement link asking for a constituent nobody publishes.
+
+        The engine already refuses it, but on two counts unhelpfully: the
+        message names the missing alias and not the volume's actual contents,
+        and the refusal is **atomic**, so the observer loses the total it would
+        otherwise have read. Caught here, the modeller is told which
+        constituents exist.
+
+        Silent on everything that is not a measurement-to-measurement link, and
+        silent when either end is unknown: this is a diagnostic ahead of the
+        engine, never a second authority on what may connect.
+        """
+        observer = self.measurement_observer(component_target, interface_target)
+        if observer is None or not observer.flows:
+            return
+
+        publisher = self.measurement_publisher(component_source, interface_source)
+        if publisher is None:
+            return
+
+        published = publisher.published_flows()
+        missing = [name for name in observer.flows if name not in published]
+
+        if not missing:
+            return
+
+        plural = "s" if len(missing) > 1 else ""
+        available = ", ".join(published) if published else "none"
+        raise ValueError(
+            f"Measurement link {component_source}.{interface_source} -> "
+            f"{component_target}.{interface_target}: the observer reads "
+            f"constituent{plural} {', '.join(repr(n) for n in missing)}, which "
+            f"{component_source} does not publish; it publishes {available}. "
+            "A constituent is published by the flows a capacity HOLDS, or by "
+            "the flows= list of a republished measurement"
         )
 
     def auto_connect(

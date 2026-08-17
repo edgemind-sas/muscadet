@@ -1416,8 +1416,16 @@ class ObjFlow(cod3s.PycComponent):
             Measurement channel name. Matches the observed publisher's name,
             which is what makes the exported and imported aliases line up.
         **params : dict
-            Additional measurement parameters: ``level_default``,
+            Additional measurement parameters: ``flows``, ``level_default``,
             ``fill_default``, ``combine``, ``combine_fun``.
+
+            ``flows`` names constituents of the observed volume to read
+            individually, beside the total. It is what an intensive property
+            is formed from: a tank holding water and heat has a temperature of
+            ``heat / water``, and the total is their weighted sum, which is
+            neither term and cannot be divided back into them. Read one with
+            ``get_level(flow)`` / ``get_fill(flow)``. A constituent the
+            publisher does not hold is refused at ``connect``.
 
         Returns
         -------
@@ -1458,7 +1466,15 @@ class ObjFlow(cod3s.PycComponent):
         name : str
             Published channel name.
         **params : dict
-            ``source``, ``level_default``, ``fill_default``, ``gain_default``.
+            ``source``, ``flows``, ``level_default``, ``fill_default``,
+            ``gain_default``.
+
+            ``flows`` republishes those constituents of the source beside its
+            total, so an instrument standing between a multi-constituent
+            volume and a voter carries what the volume publishes. An observer
+            cannot tell a capacity from a republisher, and this is what keeps
+            that true. One gain covers every reading: a mode that kills the
+            instrument kills all of them.
 
         Returns
         -------
@@ -1494,8 +1510,11 @@ class ObjFlow(cod3s.PycComponent):
         if measurement.source is not None:
             system = self.system()
 
-            system.pdmp_add_explicit_variable(measurement.var_level)
-            system.pdmp_add_explicit_variable(measurement.var_fill)
+            # Every published variable, constituents included: PyCATSHOO
+            # refuses setValue on one its solver does not know about, and the
+            # refusal lands at the first integration step rather than here.
+            for var in measurement.every_variable():
+                system.pdmp_add_explicit_variable(var)
 
             if not self._measurement_equation_registered:
                 system.pdmp_add_equation_method(
