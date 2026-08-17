@@ -245,6 +245,22 @@ def evaluate_demand(comp):
             continue
         accumulate(flow_name, comp.get_output_demand(flow_name))
 
+    # A CONDUIT asks for what it is about to move (R6, KD4). It replaced its
+    # flow's identity transfer, so nothing else claims that input, and without
+    # this the three-component conduit returns zero -- the measured failure the
+    # whole notion exists for.
+    #
+    # A TWO-FLOW pair asks for nothing of its own, and that asymmetry is not an
+    # omission. Both its streams keep their identity transfer, so each already
+    # carries its consumer's demand upstream; adding the moved quantity on top
+    # would ask a supplier for a quantity no balance needs.
+    for pair in comp.transfers.values():
+        if not pair.is_conduit:
+            continue
+
+        source, _, requested = pair.directed(comp)
+        accumulate(source, requested)
+
     # A continuous input no rule and no transfer covers claims what it was
     # declared with: a pure consumer has no output to map a demand back from.
     for flow_name, flow in comp.flows_continuous_in.items():

@@ -255,8 +255,32 @@ def evaluate_capability(comp):
     for flow_name in comp.get_transferable_flows():
         accumulate({flow_name: comp.get_input_capability(flow_name)})
 
+    # A conduit's flow is not transferable, so nothing above wrote it. Seeded
+    # at zero here for the reason a rule set's produced flows are, and before
+    # the source default below, which would otherwise fill it behind the pair.
+    for flow_name in comp.transfer_named_flows():
+        accumulate({flow_name: 0.0})
+
     for flow_name, flow in comp.flows_continuous_out.items():
         capabilities.setdefault(flow_name, float(flow.var_fed_default))
+
+    # Transfer pairs, last and in declaration order, mirroring the production
+    # sweep exactly (R10, KTD1). The difference is the one that defines this
+    # whole sweep: the bound is the source's CAPABILITY, not its delivery, so
+    # what is published is what the pair could move if nothing downstream held
+    # it back. A consumer sizing itself on that figure then asks for a quantity
+    # the pair can honour.
+    for pair in comp.transfers.values():
+        source, destination, requested = pair.directed(comp)
+
+        if pair.is_conduit:
+            movable = min(requested, max(take(source), 0.0))
+            spend({source: movable})
+            accumulate({source: movable})
+        else:
+            movable = min(requested, max(capabilities.get(source, 0.0), 0.0))
+            accumulate({source: -movable})
+            accumulate({destination: movable})
 
     return capabilities
 
