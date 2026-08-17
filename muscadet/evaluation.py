@@ -258,8 +258,10 @@ def evaluate_demand(comp):
         if not pair.is_conduit:
             continue
 
-        source, _, requested = pair.directed(comp)
-        accumulate(source, requested)
+        # Clamped like the crossing it is about to ask for: a conduit that
+        # computed a reversal asks for nothing rather than for a magnitude it
+        # will not move.
+        accumulate(pair.source, max(pair.quantity(comp), 0.0))
 
     # A continuous input no rule and no transfer covers claims what it was
     # declared with: a pure consumer has no output to map a demand back from.
@@ -976,23 +978,34 @@ def evaluate_production(comp):
     # contested input the pair is then the thing that saturates, which is the
     # state it has a shortfall channel for and a rule set has not.
     for pair in comp.transfers.values():
-        source, destination, requested = pair.directed(comp)
+        requested = pair.quantity(comp)
 
         if pair.is_conduit:
             # What crosses IS the computed quantity (R5). The pair replaced
             # the transfer, so it draws from the input side like a rule does
             # and spends against the shared budget.
-            moved = min(requested, max(take(source), 0.0))
-            spend({source: moved})
-            accumulate(consumption, {source: moved})
-            accumulate(production, {source: moved})
+            #
+            # A NEGATIVE quantity crosses nothing. A conduit's direction is the
+            # connection's, and a connection whose direction reverses mid-run
+            # is out of scope by KD1 -- ordering, acyclicity and allocation all
+            # assume it fixed. Moving the magnitude forward instead would be
+            # actively wrong, warming the tank a symmetric conduction law is
+            # telling to cool, so it is clamped here and the raw request stays
+            # readable on {pair}_requested: a reversal shows up as a negative
+            # ask against a zero crossing, not as a plausible number.
+            moved = min(max(requested, 0.0), max(take(pair.source), 0.0))
+            spend({pair.source: moved})
+            accumulate(consumption, {pair.source: moved})
+            accumulate(production, {pair.source: moved})
         else:
             # A signed delta on top of two streams that keep transiting. The
             # cap is what the source is about to produce: a stream cannot be
             # relieved of more than it carries.
-            moved = min(requested, max(production.get(source, 0.0), 0.0))
-            accumulate(production, {source: -moved})
-            accumulate(production, {destination: moved})
+            origin, target, magnitude = pair.directed(comp)
+            magnitude = min(magnitude, max(production.get(origin, 0.0), 0.0))
+            accumulate(production, {origin: -magnitude})
+            accumulate(production, {target: magnitude})
+            moved = magnitude if requested >= 0.0 else -magnitude
 
         pair.last_requested = requested
         pair.last_moved = moved

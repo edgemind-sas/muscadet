@@ -757,3 +757,118 @@ class SensorContinuous(ContinuousComponent):
             effects_12=[(available, True)],
             effects_21=[(available, False)],
         )
+
+
+class ExchangeContinuous(ContinuousComponent):
+    """A metered conduit: what crosses is a quantity a transfer law computes.
+
+    The seventh shape, and the one that gave the transfer pair its name. Every
+    component above moves a quantity because somebody ASKED for it. This one
+    moves a quantity because a gradient makes it move: it carries one flow in
+    and out, and a pair naming that flow twice meters the transit, so what
+    crosses the component is exactly what the equation computed.
+
+    That is what a wall between a tank and its environment is, and what a
+    membrane between two half-cells is. Neither is a consumer, and shaping one
+    as a consumer was measured to get exactly one property right: as an
+    identity transfer the exchange conserves but its rate is a proportion of
+    what arrived; as a source the rate is exact but the quantity appears from
+    nowhere.
+
+    The potentials it reads are declared, not computed here. A measurement
+    channel publishes each constituent of a volume, so a component dividing two
+    of them publishes an intensive property already: this one reads that
+    property rather than deriving it, which is why it carries no chemistry and
+    no thermodynamics in its parameters.
+
+    Parameters
+    ----------
+    flow : str, optional
+        The flow whose transit is metered, carried in and out. Defaults to
+        ``"q"``.
+    measurements : list of str, optional
+        Measurement channels to open, so a potential can name one. Wire each
+        with ``system.connect(holder, f"{name}_level_out", exchange,
+        f"{name}_level_in")``.
+    transfer : muscadet.Transfer or dict, optional
+        The equation, given whole. Use it for a law the shipped shape does not
+        cover. Mutually exclusive with the three parameters below.
+    conductance : float, optional
+        ``G`` of ``Q = G x (potential_a - potential_b)``.
+    potential_a, potential_b : dict or float, optional
+        The two potentials, in the forms :func:`muscadet.resolve_operand`
+        accepts: a number, ``{"const": x}``, or ``{"measurement": name}``
+        optionally narrowed to one constituent with ``"flow"``.
+    transfer_name : str, optional
+        Name of the declared pair, and therefore of its two published
+        magnitudes ``{name}_requested`` / ``{name}_moved``. Defaults to
+        ``"transfer"``.
+
+    Raises
+    ------
+    ValueError
+        If neither ``transfer`` nor a conduction triple is declared, if both
+        are, or if a declaration key is not one this component reads.
+    """
+
+    DECLARATION_KEYS = (
+        "flow",
+        "measurements",
+        "transfer",
+        "conductance",
+        "potential_a",
+        "potential_b",
+        "transfer_name",
+    )
+
+    #: The three keys that spell a conduction law inline.
+    CONDUCTION_KEYS = ("conductance", "potential_a", "potential_b")
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+
+        flow = kwargs.get("flow", DEFAULT_FLOW)
+        self.add_flow_continuous_in(name=flow)
+        self.add_flow_continuous_out(name=flow)
+
+        for channel in kwargs.get("measurements") or []:
+            self.add_measurement_in(name=channel)
+
+        self.add_transfer(
+            name=kwargs.get("transfer_name", "transfer"),
+            flows=[flow, flow],
+            equation=self.declared_equation(kwargs),
+        )
+
+    def declared_equation(self, kwargs):
+        """The equation, given whole or spelled as a conduction law.
+
+        The two spellings are mutually exclusive rather than layered: a
+        component carrying both would silently honour one of them, and which
+        one is exactly the kind of thing a reader has to run the model to
+        discover.
+        """
+        inline = [key for key in self.CONDUCTION_KEYS if key in kwargs]
+
+        if "transfer" in kwargs:
+            if inline:
+                raise ValueError(
+                    f"Object {self.name()}: declares both a whole 'transfer' "
+                    f"and the conduction parameters {', '.join(inline)}. "
+                    "Declare one or the other"
+                )
+            return kwargs["transfer"]
+
+        if not inline:
+            raise ValueError(
+                f"Object {self.name()}: declares no transfer law. Give a whole "
+                "'transfer', or the conduction triple 'conductance', "
+                "'potential_a' and 'potential_b'"
+            )
+
+        return muscadet.ConductiveTransfer(
+            conductance=kwargs.get("conductance"),
+            potential_a=kwargs.get("potential_a"),
+            potential_b=kwargs.get("potential_b"),
+            name=kwargs.get("transfer_name", "transfer"),
+        )

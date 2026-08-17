@@ -336,14 +336,21 @@ class TransferPair(cod3s.ObjCOD3S):
     last_requested: float = pydantic.Field(
         0.0,
         description=(
-            "Magnitude the equation asked for at the last evaluation. Kept "
-            "beside last_moved so the shortfall of a saturated transfer is "
-            "readable rather than inferred from the balances (KD5)."
+            "The SIGNED quantity the equation returned at the last evaluation. "
+            "Kept beside last_moved so the shortfall of a saturated transfer is "
+            "readable rather than inferred from the balances (KD5) -- and so "
+            "that a conduit computing a reversal shows up as a negative ask "
+            "against a zero crossing rather than as a plausible number."
         ),
     )
 
     last_moved: float = pydantic.Field(
-        0.0, description="Magnitude actually moved at the last evaluation"
+        0.0,
+        description=(
+            "The SIGNED quantity actually moved: positive from source to "
+            "destination, negative the other way. Never negative on a conduit, "
+            "whose direction is its connection's."
+        ),
     )
 
     var_requested: typing.Any = pydantic.Field(
@@ -383,8 +390,13 @@ class TransferPair(cod3s.ObjCOD3S):
 
     @property
     def shortfall(self) -> float:
-        """What the last evaluation asked for and could not move."""
-        return max(self.last_requested - self.last_moved, 0.0)
+        """What the last evaluation asked for and could not move.
+
+        Compared on MAGNITUDES, because both readings are signed: a conduit
+        that computed a reversal asked for something and moved nothing, and
+        that gap is exactly as real as a saturated one.
+        """
+        return max(abs(self.last_requested) - abs(self.last_moved), 0.0)
 
     @pydantic.field_validator("flows")
     @classmethod

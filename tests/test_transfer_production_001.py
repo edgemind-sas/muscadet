@@ -314,14 +314,66 @@ def test_an_unsaturated_pair_records_the_two_equal(the_system):
 
 
 def test_conservation_holds_on_every_pair(the_system):
-    """Covers AE2 across both shapes: nothing is created and nothing lost."""
+    """Covers AE2 across both shapes: nothing is created and nothing lost.
+
+    Compared on MAGNITUDES: both readings are signed, so a pair moving 2.0 the
+    other way reports -2.0 rather than a second positive number that would hide
+    the direction.
+    """
     for comp_name in ("CND_OK", "CND_SAT", "XCH_POS", "XCH_NEG", "XCH_SUM"):
         comp = the_system.comp[comp_name]
         maps(the_system, comp_name)
 
         for pair in comp.transfers.values():
-            assert pair.last_moved <= pair.last_requested + 1e-12, comp_name
-            assert pair.last_moved >= 0.0, comp_name
+            assert abs(pair.last_moved) <= abs(pair.last_requested) + 1e-12, comp_name
+            assert pair.shortfall >= 0.0, comp_name
+
+
+def test_the_readback_carries_the_direction(the_system):
+    """A reversed two-flow pair reports a negative quantity on both readings."""
+    maps(the_system, "XCH_NEG")
+    pair = the_system.comp["XCH_NEG"].transfers["swap0"]
+
+    assert pair.last_requested == pytest.approx(-2.0)
+    assert pair.last_moved == pytest.approx(-2.0)
+    assert pair.shortfall == pytest.approx(0.0)
+
+
+def test_a_conduit_crosses_nothing_backwards(the_system):
+    """A conduit's direction is its connection's, and KD1 fixes that.
+
+    Moving the magnitude forward instead would be actively wrong: a symmetric
+    conduction law telling a tank to cool would warm it. The request stays
+    readable so the reversal is visible rather than silently dropped.
+    """
+    conduit = the_system.comp["CND_OK"]
+    pair = conduit.transfers["meter"]
+    original = pair.equation
+
+    pair.equation = fixed(-4.0)
+    try:
+        consumption, production = conduit.evaluate_production()
+
+        assert consumption["x"] == pytest.approx(0.0)
+        assert production["x"] == pytest.approx(0.0)
+        assert pair.last_requested == pytest.approx(-4.0)
+        assert pair.last_moved == pytest.approx(0.0)
+        assert pair.shortfall == pytest.approx(4.0)
+    finally:
+        pair.equation = original
+
+
+def test_a_reversing_conduit_asks_for_nothing(the_system):
+    """It would otherwise claim upstream a quantity it will not move."""
+    conduit = the_system.comp["CND_OK"]
+    pair = conduit.transfers["meter"]
+    original = pair.equation
+
+    pair.equation = fixed(-4.0)
+    try:
+        assert conduit.evaluate_demand()["x"] == pytest.approx(0.0)
+    finally:
+        pair.equation = original
 
 
 def test_delete(the_system):

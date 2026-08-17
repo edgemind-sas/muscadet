@@ -271,16 +271,18 @@ def evaluate_capability(comp):
     # it back. A consumer sizing itself on that figure then asks for a quantity
     # the pair can honour.
     for pair in comp.transfers.values():
-        source, destination, requested = pair.directed(comp)
-
         if pair.is_conduit:
-            movable = min(requested, max(take(source), 0.0))
-            spend({source: movable})
-            accumulate({source: movable})
+            # Clamped at zero for the reason the production sweep clamps it: a
+            # conduit's direction is the connection's, and nothing crosses
+            # backwards.
+            movable = min(max(pair.quantity(comp), 0.0), max(take(pair.source), 0.0))
+            spend({pair.source: movable})
+            accumulate({pair.source: movable})
         else:
-            movable = min(requested, max(capabilities.get(source, 0.0), 0.0))
-            accumulate({source: -movable})
-            accumulate({destination: movable})
+            origin, target, magnitude = pair.directed(comp)
+            magnitude = min(magnitude, max(capabilities.get(origin, 0.0), 0.0))
+            accumulate({origin: -magnitude})
+            accumulate({target: magnitude})
 
     return capabilities
 
