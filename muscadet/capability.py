@@ -142,6 +142,14 @@ def register_capability_variables(system, comp):
         if flow.var_capability is not None:
             system.pdmp_add_explicit_variable(flow.var_capability)
 
+    # A transfer pair's two publications are written from the production sweep
+    # and fall under the same rule, so they are declared in the same place
+    # rather than in a second pre-run hook that could drift out of step with
+    # this one.
+    for pair in comp.transfers.values():
+        for var in pair.every_variable():
+            system.pdmp_add_explicit_variable(var)
+
 
 def compute_capability(comp):
     """

@@ -1501,6 +1501,7 @@ class ObjFlow(cod3s.PycComponent):
         for flow_name in dict.fromkeys(flows):
             self._resolve_transfer_flow(flow_name, name, conduit=pair.is_conduit)
 
+        pair.add_variables(self)
         self.transfers[name] = pair
 
         return pair
@@ -1930,6 +1931,8 @@ class ObjFlow(cod3s.PycComponent):
     get_input_transferred = evaluation.get_input_transferred
     get_identity_transfer_flows = evaluation.get_identity_transfer_flows
     get_transferable_flows = evaluation.get_transferable_flows
+    transfer_named_flows = evaluation.transfer_named_flows
+    publish_transfers = evaluation.publish_transfers
     continuous_flow_is_connected = staticmethod(evaluation.continuous_flow_is_connected)
     apply_consumption = evaluation.apply_consumption
     release_unused_supply = evaluation.release_unused_supply

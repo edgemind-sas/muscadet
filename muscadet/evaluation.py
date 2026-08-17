@@ -641,6 +641,7 @@ def compute_production(comp):
     comp.apply_consumption(consumption)
     comp.release_unused_supply(consumption)
     comp.apply_production(production)
+    comp.publish_transfers()
 
 
 def evaluation_time(comp):
@@ -981,6 +982,18 @@ def evaluate_production(comp):
         pair.last_moved = moved
 
     return consumption, production
+
+
+def publish_transfers(comp):
+    """Write each pair's two magnitudes onto the model (R8, KD5).
+
+    Called from :func:`compute_production` and not from
+    :func:`evaluate_production`: the latter is a pure reader that tests and the
+    capability sweep drive on their own, and writing a solver variable from it
+    would put a ``setValue`` on a path that is not always inside an equation.
+    """
+    for pair in comp.transfers.values():
+        pair.publish()
 
 
 def get_active_rule(comp, rule_set):

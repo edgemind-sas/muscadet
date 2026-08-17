@@ -70,6 +70,7 @@ the modeller states what muscadet cannot check.
 import math
 import typing
 
+import Pycatshoo as pyc
 import pydantic
 from colored import attr, fg
 
@@ -344,6 +345,46 @@ class TransferPair(cod3s.ObjCOD3S):
     last_moved: float = pydantic.Field(
         0.0, description="Magnitude actually moved at the last evaluation"
     )
+
+    var_requested: typing.Any = pydantic.Field(
+        None, exclude=True, repr=False, description="Published {pair}_requested"
+    )
+
+    var_moved: typing.Any = pydantic.Field(
+        None, exclude=True, repr=False, description="Published {pair}_moved"
+    )
+
+    def add_variables(self, comp):
+        """Declare the two read-only publications of this pair on ``comp``.
+
+        A saturated transfer is a legitimate physical state; an INVISIBLE one is
+        the defect class this release has spent its life closing (KD5). The gap
+        between what the equation asked for and what the supply allowed is
+        therefore published rather than left to be inferred from the balances,
+        where a rule set's draw and a capacity's fill are mixed into the same
+        numbers.
+        """
+        self.var_requested = comp.addVariable(
+            f"{self.name}_requested", pyc.TVarType.t_double, 0.0
+        )
+        self.var_moved = comp.addVariable(
+            f"{self.name}_moved", pyc.TVarType.t_double, 0.0
+        )
+
+    def every_variable(self):
+        """Every variable an equation writes, for the pre-run PDMP declaration."""
+        return [var for var in (self.var_requested, self.var_moved) if var is not None]
+
+    def publish(self):
+        """Write the last evaluation's two magnitudes onto the model."""
+        if self.var_requested is not None:
+            self.var_requested.setValue(float(self.last_requested))
+            self.var_moved.setValue(float(self.last_moved))
+
+    @property
+    def shortfall(self) -> float:
+        """What the last evaluation asked for and could not move."""
+        return max(self.last_requested - self.last_moved, 0.0)
 
     @pydantic.field_validator("flows")
     @classmethod
