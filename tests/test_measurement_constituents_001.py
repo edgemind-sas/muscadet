@@ -317,6 +317,38 @@ def test_the_refusal_leaves_the_observer_unwired(the_system):
     assert not ghost.is_connected
 
 
+def test_a_republisher_may_not_carry_what_its_source_does_not_hold(the_system):
+    """The publishing side of the mistake the connect guard catches downstream.
+
+    Left to the first integration step it surfaces as a bare ``KeyError`` out
+    of a PDMP equation, naming neither the component, nor the channel, nor the
+    volume's contents.
+    """
+    relay = the_system.comp["RELAY"]
+
+    with pytest.raises(ValueError, match="which holds water, heat"):
+        relay.add_measurement_out(
+            name="bogus", source="tank", flows=["water", "plutonium"]
+        )
+
+
+def test_a_republisher_refuses_a_constituent_it_does_not_publish(the_system):
+    """Symmetric with MeasurementIn, and the invariant depends on it.
+
+    An observer is not supposed to be able to tell a capacity from a
+    republisher. A plausible zero on one side against a naming error on the
+    other is exactly the difference that forbids -- and zero is the one wrong
+    answer that reads as a real measurement of an empty volume.
+    """
+    relay = the_system.comp["RELAY"].measurements_out["relay"]
+
+    with pytest.raises(ValueError, match="constituent 'plutonium'"):
+        relay.get_level("plutonium")
+
+    with pytest.raises(ValueError, match="constituent 'plutonium'"):
+        relay.get_fill("plutonium")
+
+
 def test_a_duplicate_constituent_is_refused_at_declaration():
     """It would declare one alias twice, far from the declaration at fault."""
     with pytest.raises(ValueError, match="declared more than once"):

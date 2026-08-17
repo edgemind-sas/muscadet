@@ -1618,6 +1618,7 @@ class ObjFlow(cod3s.PycComponent):
             )
 
         measurement = MeasurementOut(name=name, **params)
+        measurement.check_source_carries(self)
         measurement.add_variables(self)
         measurement.add_mb(self)
 

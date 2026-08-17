@@ -9,7 +9,7 @@ exchanger wall, hydrogen through a membrane, charge through a resistance.
 A **transfer pair** is that second vehicle. A component declares two of its
 continuous flows and an equation returning a signed quantity; the library moves
 that quantity from one flow's balance to the other's, draws what it needs from
-upstream, and holds the two sides equal. Nothing else in the library can say
+upstream, and holds the two BALANCES equal. Nothing else in the library can say
 "move exactly this much, which I computed": production is always
 ``declared x factor``, so a component could express a proportion of what
 arrived or a proportion of a constant, never an absolute computed quantity
@@ -32,6 +32,26 @@ The distinction is load-bearing and the two cannot share one rule. Remove a
 two-flow pair's streams from the identity transfer and the exchanger's streams
 stop crossing the component at all; leave a conduit's flow in it and the stream
 crosses twice, once by transfer and once by the pair.
+
+What "equal" means, and where a derating comes in
+-------------------------------------------------
+A pair balances the **raw** productions: it subtracts ``Q`` from one and adds
+``Q`` to the other, so the component's raw total is untouched. Each leg is then
+scaled by its OWN derating and time profile, exactly as any output is, which is
+where a reader can go wrong::
+
+    delivered = (P_origin - Q) x factor_origin  +  (P_target + Q) x factor_target
+
+With different factors on the two legs, what arrives is not what left. That is
+not a leak: a derating destroys quantity **by design** -- it is what a modelled
+failure does -- and forcing the legs to agree would either invent a loss on the
+healthy one or defeat the derating on the damaged one. The raw balance is what
+a pair guarantees; the delivered difference is the declared loss, and it is
+attributable to the mode that declared it.
+
+``last_moved`` is likewise the RAW quantity the balances exchanged, on the same
+footing as every other production figure here, which are all pre-factor. What
+finally leaves the target leg is that times the target's factor.
 
 The sign is the direction
 -------------------------

@@ -1134,6 +1134,16 @@ class MeasurementIn(cod3s.ObjCOD3S):
             for var in self.every_reference():
                 var.setCnctMax(1)
 
+    def published_flows(self):
+        """Constituents this channel can hand on: the ones it reads.
+
+        Named to match :meth:`Capacity.published_flows` so a republisher can
+        check its source without caring which of the two it resolved to -- the
+        two ARE interchangeable as sources, which is what makes a chain of
+        republishers possible at all.
+        """
+        return list(self.flows)
+
     def every_reference(self):
         """Every reference this channel reads, totals and constituents."""
         return (
@@ -1492,19 +1502,67 @@ class MeasurementOut(cod3s.ObjCOD3S):
             level, fill = self.read_source(comp, flow_name)
             self.publish(level, fill, flow=flow_name)
 
-    def read_published(self, mapping, var_total, flow) -> float:
-        """One published variable's current value, total or per constituent."""
-        var = var_total if flow is None else mapping.get(flow)
+    def read_published(self, mapping, var_total, flow, kind) -> float:
+        """One published variable's current value, total or per constituent.
 
-        return var.value() if var is not None else 0.0
+        A constituent this channel does not publish is **refused**, not read as
+        zero. The symmetric :meth:`MeasurementIn.get_level` refuses it, and an
+        observer is not supposed to be able to tell a capacity from a
+        republisher: a plausible zero here against a naming error there is
+        exactly the difference that invariant forbids -- and zero is the one
+        wrong answer that looks like a real reading of an empty volume.
+        """
+        if flow is None:
+            return var_total.value() if var_total is not None else 0.0
+
+        var = mapping.get(flow)
+        if var is None:
+            declared = ", ".join(self.flows) if self.flows else "none"
+            raise ValueError(
+                f"Published measurement {self.name}: no {kind} is published "
+                f"for constituent {flow!r}; this channel declares {declared}. "
+                "Add it to the channel's flows= list to publish it"
+            )
+
+        return var.value()
 
     def get_level(self, flow=None) -> float:
         """The level currently published, total or for one constituent."""
-        return self.read_published(self.var_level_flow, self.var_level, flow)
+        return self.read_published(self.var_level_flow, self.var_level, flow, "level")
 
     def get_fill(self, flow=None) -> float:
         """The fill currently published, total or for one constituent."""
-        return self.read_published(self.var_fill_flow, self.var_fill, flow)
+        return self.read_published(self.var_fill_flow, self.var_fill, flow, "fill")
+
+    def check_source_carries(self, comp):
+        """Refuse a constituent the declared source does not hold.
+
+        Called at declaration, where the mistake was made. Left to the first
+        integration step it surfaces as a bare ``KeyError`` out of a PDMP
+        equation, naming neither the component, nor the channel, nor the
+        volume's actual contents.
+
+        :meth:`muscadet.System.check_measurement_constituents` does this for the
+        OBSERVING side of the same mistake; this is the publishing side, which
+        had no equivalent.
+        """
+        if self.source is None or not self.flows:
+            return
+
+        published = self.resolve_source(comp).published_flows()
+        missing = [name for name in self.flows if name not in published]
+
+        if not missing:
+            return
+
+        plural = "s" if len(missing) > 1 else ""
+        available = ", ".join(published) if published else "none"
+        raise ValueError(
+            f"Object {comp.name()}: published measurement {self.name} "
+            f"republishes constituent{plural} "
+            f"{', '.join(repr(name) for name in missing)} of {self.source!r}, "
+            f"which holds {available}"
+        )
 
     def __repr__(self) -> str:
         origin = f" <- {self.source}" if self.source else ""

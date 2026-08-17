@@ -441,6 +441,49 @@ def test_an_undecorated_conduit_is_unaffected_by_the_uptake_rule(the_system):
     assert consumption["x"] == pytest.approx(production["x"])
 
 
+def test_a_pair_balances_the_raw_productions_not_the_delivered_ones(the_system):
+    """What "the two sides equal" means once a leg carries a derating.
+
+    A pair subtracts Q from one raw production and adds Q to the other, so the
+    component's raw total is untouched. Each leg is THEN scaled by its own
+    derating and profile. With different factors, what arrives is not what
+    left -- and that is not a leak: a derating destroys quantity by design.
+    Forcing the legs to agree would invent a loss on the healthy one or defeat
+    the derating on the damaged one.
+    """
+    exchange = the_system.comp["XCH_POS"]
+    rate = exchange.flows_out["b"].var_out_rate
+
+    rate.setValue(0.5)
+    try:
+        _, production = exchange.evaluate_production()
+        _, neutral = maps(the_system, "XCH_ZERO")
+
+        # The RAW balance still exchanges exactly what the pair computed.
+        assert neutral["a"] - production["a"] == pytest.approx(2.0)
+        assert production["b"] - neutral["b"] == pytest.approx(2.0)
+
+        # And the delivered difference is exactly what the derating removed,
+        # attributable to the mode that declared it rather than unexplained.
+        assert exchange.output_production_factor("b") == pytest.approx(0.5)
+    finally:
+        rate.setValue(1.0)
+
+
+def test_the_readback_is_the_raw_quantity_the_balances_exchanged(the_system):
+    """On the same footing as every other production figure: pre-factor."""
+    exchange = the_system.comp["XCH_POS"]
+    rate = exchange.flows_out["b"].var_out_rate
+
+    rate.setValue(0.5)
+    try:
+        exchange.evaluate_production()
+
+        assert exchange.transfers["swap0"].last_moved == pytest.approx(2.0)
+    finally:
+        rate.setValue(1.0)
+
+
 def test_delete(the_system):
     the_system.deleteSys()
     cod3s.terminate_session()
