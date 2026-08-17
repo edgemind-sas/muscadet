@@ -41,6 +41,15 @@ The last four tests in this module are the measurement of why: they are boundary
 tests, and each one asserts what MUSCADET 2.0 does instead of what the benchmark
 needs.
 
+One of those boundaries has since moved, and the test that marks it says so. A
+capacity used to publish only the total raw quantity over its constituents, so
+on a water-plus-enthalpy volume every threshold was watching 7 + 217 = 224. A
+measurement channel now names the constituents it reads, so ``H/V`` -- the
+mixture temperature -- is observable. What is still missing is the other half:
+a watched threshold is built from the ``{name, op, value}`` operand vocabulary,
+which names a channel and not a constituent of one, so the reading is available
+to Python and unavailable to a guard.
+
 The benchmark's Monte-Carlo estimate is out of reach here and is deliberately
 not attempted as a test: measured on this model, one 200 h sequence costs about
 37 s, so the reference's 1000 sequences over 1000 h would run for days. The
@@ -228,6 +237,27 @@ class HTClock(muscadet.ObjFlow):
 
     def add_flows(self, **kwargs):
         super().add_flows(**kwargs)
+
+
+class HTConstituentProbe(muscadet.ObjFlow):
+    """Observes named constituents of a volume rather than its total.
+
+    Hand-written on purpose: the primitive
+    ``add_measurement_in(flows=[...])`` reads a constituent, but the shipped
+    ``SensorContinuous`` does not carry the key, so this is what the KB cannot
+    yet express. See
+    ``test_a_constituent_is_observable_but_no_shipped_sensor_thresholds_it``.
+    """
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        self.add_measurement_in(
+            name=kwargs.get("measurement", "tank"),
+            flows=list(kwargs.get("flows", [])),
+        )
+
+    def reading(self, flow=None):
+        return self.measurements_in["tank"].get_level(flow)
 
 
 # The plant
@@ -436,6 +466,33 @@ def run_enthalpy_reading(obs):
     )
     system.connect("TANK", "tank_level_out", "OBS", "tank_level_in")
 
+    # The same volume, observed per constituent. One box, more aliases: the
+    # total-only observer above is untouched by this one existing.
+    system.add_component(
+        name="CPROBE",
+        cls="HTConstituentProbe",
+        measurement="tank",
+        flows=["water", "heat"],
+    )
+    system.connect("TANK", "tank_level_out", "CPROBE", "tank_level_in")
+
+    # What the KB still cannot say: a shipped sensor thresholds a CHANNEL, and
+    # the operand vocabulary it builds -- {name, op, value} -- names no
+    # constituent. Taken here rather than asserted from memory.
+    try:
+        system.add_component(
+            name="KBPROBE",
+            cls="SensorContinuous",
+            measurement="tank",
+            flows=["water"],
+            control="low",
+            direction="below",
+            activate=LEVEL_MIN,
+        )
+        obs["kb_sensor_constituent"] = None
+    except ValueError as error:
+        obs["kb_sensor_constituent"] = str(error)
+
     system.add_component(name="CLOCK", cls="HTClock")
     system.comp["CLOCK"].add_atm2states(
         name="horizon",
@@ -452,12 +509,20 @@ def run_enthalpy_reading(obs):
         system.isimu_step_forward()
 
     capacity = system.comp["TANK"].capacities["tank"]
-    # The capacity publishes ONE level for the whole volume.
+    # A channel that names no constituent still reads the whole volume ...
     obs["enthalpy_reading"] = system.comp["OBS"].measurements_in["tank"].get_level()
     obs["enthalpy_water_level"] = capacity.get_quantity("water")
     obs["enthalpy_heat_level"] = capacity.get_quantity("heat")
     # ... and the detector at the overflow threshold is already tripped by it.
     obs["enthalpy_detector"] = system.comp["OBS"].flows_out["high"].var_fed.value()
+
+    # ... while a channel that names them reads each one, and their ratio is
+    # the mixture temperature the energy balance needs.
+    probe = system.comp["CPROBE"]
+    obs["enthalpy_water_reading"] = probe.reading("water")
+    obs["enthalpy_heat_reading"] = probe.reading("heat")
+    obs["enthalpy_total_reading"] = probe.reading()
+    obs["enthalpy_temperature"] = probe.reading("heat") / probe.reading("water")
 
     system.isimu_stop()
     system.deleteSys()
@@ -742,24 +807,47 @@ def test_an_unbounded_request_gets_the_ratio_and_loses_the_magnitude(the_run):
     assert water > NOMINAL
 
 
-def test_a_measurement_channel_publishes_the_whole_volume_not_a_constituent(
+def test_a_constituent_is_observable_but_no_shipped_sensor_thresholds_it(
     the_run,
 ):
-    """The second, independent blocker on carrying enthalpy in the volume.
+    """The second blocker, and where it now stands: half lifted.
 
-    A capacity exports ONE level, ``{c}_qty``, the total raw quantity over every
-    constituent, and that is what a sensor's threshold compares. On a
-    water-plus-enthalpy tank that reads 7 + 217 = 224, so the level regulation
-    at 6 and 8 and the dry-out and overflow detectors would all be observing the
-    enthalpy. Neither one constituent's level nor a ratio of two is observable.
+    It used to be whole. A capacity exported ONE level, the total raw quantity
+    over every constituent, and that was the only thing a sensor could compare.
+    On a water-plus-enthalpy tank that reads 7 + 217 = 224, so the regulation at
+    6 and 8 and both feared-event detectors were watching the enthalpy: the
+    overflow detector below is tripped from t = 0 on a tank holding 7 of water.
+
+    A channel naming its constituents now reads each one, so ``H/V`` -- the
+    mixture temperature -- is observable, and that half of the blocker is gone.
+    What remains is that no SHIPPED component can act on it: a sensor's watched
+    threshold is built from the ``{name, op, value}`` operand vocabulary, which
+    names a measurement CHANNEL and has no way to name a constituent of one.
+    So the reading is available to Python and unavailable to a guard, which is
+    the boundary this test now marks.
     """
+    # Unchanged, and deliberately so: a channel that names nothing still reads
+    # the whole volume, which is what keeps every 1.x model working.
+    assert the_run["enthalpy_reading"] == pytest.approx(224.0, abs=1e-1)
+    assert the_run["enthalpy_detector"] is True
+
+    # The levels the capacity holds, and the same two now arriving over the
+    # channel rather than being read out of the capacity object in Python.
     assert the_run["enthalpy_water_level"] == pytest.approx(7.0, abs=1e-2)
     assert the_run["enthalpy_heat_level"] == pytest.approx(217.0, abs=1e-1)
-    assert the_run["enthalpy_reading"] == pytest.approx(224.0, abs=1e-1)
+    assert the_run["enthalpy_water_reading"] == pytest.approx(7.0, abs=1e-2)
+    assert the_run["enthalpy_heat_reading"] == pytest.approx(217.0, abs=1e-1)
+    assert the_run["enthalpy_total_reading"] == pytest.approx(224.0, abs=1e-1)
 
-    # A detector placed at the overflow level of a tank standing at 7 of water
-    # is tripped from t = 0 by the enthalpy sharing its volume.
-    assert the_run["enthalpy_detector"] is True
+    # And the ratio an energy balance needs, which no reading gave before.
+    assert the_run["enthalpy_temperature"] == pytest.approx(31.0, abs=1e-3)
+
+    # The residual: the shipped sensor refuses the key, so a threshold on a
+    # constituent has no declaration. Refused rather than silently ignored,
+    # which is the one behaviour that would have been worse.
+    refusal = the_run["kb_sensor_constituent"]
+    assert refusal is not None, "SensorContinuous now accepts flows= -- update this"
+    assert "'flows'" in refusal
 
 
 def test_an_exponential_rate_is_a_variable_that_nothing_may_drive(the_run):
