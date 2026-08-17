@@ -15,7 +15,7 @@ execution: code
 
 - **Objective.** Let a component declare that a quantity it computes moves from one of its continuous flows to another, so MUSCADET can express heat exchangers, membrane permeation, metered conduits and environmental exchange inside the flow formalism.
 - **Product authority.** The transfer pair only. The associated flow that would let a quantity travel with its carrier — advection — is a separate work unit and is not active scope here.
-- **Open blockers.** How the equation is written declaratively is unresolved and blocks planning; see Outstanding Questions.
+- **Open blockers.** None. How the equation is declared was the last one and is settled by KD6.
 
 ## Product Contract
 
@@ -45,9 +45,10 @@ This plan owns the transfer pair alone. The breakdown below is how the surroundi
 - **The associated, or carried, flow** — a quantity that travels with its carrier at the carrier's rate, with no demand channel of its own.
   - **Enables** the advection terms of a thermal balance: what a stream brings in and takes out, which a pair does not express.
   - **Shares** the same motivation — a quantity that moves for reasons other than being demanded.
-- **Per-constituent measurement publication** — a channel exposing each constituent of a volume rather than its total.
-  - **Enables** an observer outside a component to read an intensive property; a pair does not need it, since it reads its own quantities.
-  - **Still to decide** whether it belongs with the associated flow or stands alone.
+- **Per-constituent measurement publication** — a channel exposing each constituent of a volume rather than its total. **Shipped** (`12c24f0`), so this is settled rather than pending.
+  - **Enables** an observer outside a component to read an intensive property: a channel naming its constituents reads each, and a component dividing two of them publishes the ratio, which is how a J-to-K probe is built with no library change.
+  - **Simplifies this plan** rather than blocking it. A pair need not be told how to form a potential from a volume's contents, because a sensor can publish the potential already; the `potential_*` shape an earlier sketch carried is therefore not part of the declaration.
+  - **Leaves one half undone**, recorded under Scope Boundaries: a watched threshold still cannot name a constituent.
 
 ### Key Decisions
 
@@ -56,6 +57,11 @@ This plan owns the transfer pair alone. The breakdown below is how the surroundi
 - KD3. **A pair names two flows of the component, not two ports.** (session-settled: user-directed — chosen over an input/output pair: a two-stream exchanger is then native, and a metered conduit is the degenerate case where both names are the same flow.) Governs R4, R5.
 - KD4. **A pair publishes upstream what its balances require.** (session-settled: user-directed — chosen over redistributing only what already arrived: without it the three-component conduit returns zero, which is the measured failure.) Governs R6.
 - KD5. **A transfer that cannot be supplied is capped, not refused, and the shortfall is readable.** (session-settled: user-approved — chosen over silent capping: saturation is a legitimate physical state, but an invisible one is the defect class this release has spent its life closing.) Governs R7, R8.
+- KD6. **The equation is a declared object carrying a continuity attestation, on the `Profile` pattern, and a bare callable is refused.** (session-settled: user-approved — chosen over a bare callable on the `allocation_fun` / `combine_fun` pattern, and over a method the component overrides, which is what the experiments used and what the shipped J-to-K sensor already does through `compute_measurements`.) Governs R11, R12.
+
+  The library has both patterns already, and what separates them is not style: `allocation_fun` and `combine_fun` are bare callables and carry no attestation, while `Profile` is an object whose `continuous=True` has no default and whose bare-callable form is refused outright. A transfer equation belongs on the second, for the identical reason spelled out in `muscadet/profile.py`: it is read from inside the sweeps at the solver's own integration points, so a discontinuous law — a thermostat switching at a threshold — is crossed inside a step and overshoots by that step with no error the solver can detect. Neither a bare callable nor an overridden method can carry the attestation that muscadet cannot infer.
+
+  The secondary gains are real but were not decisive, since both are unreachable today: the mapping form serialises, which a knowledge-base component will need, and the deferred canonical laws become subclasses exactly as `SinusoidalProfile` is of `Profile`. The serialisation destination currently carries discrete components only.
 
 The degenerate case is the part a reader is most likely to miss: one notion covers both shapes.
 
@@ -76,6 +82,8 @@ flowchart TB
 - R1. A component declares one transfer pair naming two of its continuous flows and the quantity to move between their balances.
 - R2. The declared equation returns a signed quantity, and the library routes the sign to the matching direction; a model never writes a direction clamp.
 - R3. The equation reads the raw quantities the component holds or receives and forms whatever ratio it needs; the library hands it no intensive property.
+- R11. The equation is declared as an object attesting that it is continuous in the quantities it reads, and a bare callable is refused at declaration with a message naming the mechanism a discontinuous law would need.
+- R12. A declaration may name a shipped equation shape through the `{"cls": ...}` mapping form wherever the object itself is accepted.
 
 **Semantics**
 
@@ -115,6 +123,8 @@ flowchart TB
 - AE5. **Covers R8.** Given the same saturated case, when the model is read, then the computed quantity and the quantity actually moved are both available and differ.
 - AE6. **Covers R9.** Given one input consumed by a rule set and drawn on by a pair, when both run in one evaluation, then their combined draw does not exceed what arrived.
 - AE7. **Covers R1, R3.** Given an exchanger whose equation divides one flow's quantity by another's, when the two streams change independently, then the moved quantity follows both without any declaration changing.
+- AE8. **Covers R11.** Given a pair declared with a bare callable, when the component is built, then the declaration is refused and the message names the watched transition a discontinuous law would need.
+- AE9. **Covers R12.** Given a pair declared through the mapping form of a shipped shape, when the model runs, then it moves the same quantity as the equivalent object form.
 
 ### Scope Boundaries
 
@@ -122,7 +132,7 @@ flowchart TB
 
 - The associated or carried flow — a quantity travelling with its carrier at the carrier's rate. It is what advection needs, and the pair does not depend on it.
 - Canonical transfer laws shipped in the knowledge base — `k·ΔT`, effectiveness-NTU, LMTD. The free equation covers them; naming them is an ergonomics question once the range of laws real models need is known.
-- A measurement channel publishing per constituent rather than the whole volume. A pair forms its own ratios from quantities it holds, so it does not need this; an observer outside the component still does.
+- Making a constituent reading available to a WATCHED THRESHOLD. Per-constituent publication shipped, so a channel naming `water` and `heat` reads each and their ratio is the mixture temperature. What no declaration reaches is a threshold on one: a sensor's band is built from the `{name, op, value}` operand vocabulary, which names a measurement channel and has no slot for a constituent of one, so the reading is available to Python and not to a guard. Extending it touches `validate_operand_shape`, the single implementation a rule guard and a discrete production condition both validate through.
 
 **Outside this notion's identity**
 
@@ -135,14 +145,14 @@ flowchart TB
 - A quantity computed from an integrated state introduces no circularity: levels are state, not sweep output. A quantity computed from a flow would be circular and is assumed out of scope.
 - A component can already compute a state-dependent rate through a documented extension point; this was measured against the analytic solution of `dT/dt = K(T_env − T)` to 2e-8.
 - A pair transfers nothing at instant 0, like everything else that runs through the sweeps. This is the known reporting artefact, not specific to pairs.
+- A component can compute and publish a derived quantity at every integration step by overriding `compute_measurements`, measured end to end on a probe reading joules and kilograms and publishing kelvin, gain included. This is why KD6 had to be decided on the attestation rather than on feasibility: the override route works, and is rejected for what it cannot state.
+- The serialisation destination carries discrete components only. Read from the platform export fixture: interfaces there are input/output with a discrete production condition, and nothing continuous travels that route yet. So the mapping form of KD6 is a destination rather than an immediate gain.
 
 ### Outstanding Questions
 
-**Resolve before planning**
-
-- How the equation is written at declaration. The library has three precedents for a declared Python function — `allocation_fun`, `combine_fun`, and a time profile — which argue for a callable passed with the pair. The alternative is a method the component overrides, which is what the experiments used. The choice affects how a pair is serialised and whether a knowledge-base component can carry one.
-
 **Deferred to planning**
+
+- What the mapping form of a shipped equation shape accepts as its terms. The `potential_*` sketch is dropped (a sensor publishes the potential now), so what remains is how a conductance and two operands are named in data.
 
 - Which equation band a pair evaluates in, and whether it needs one of its own or belongs with an existing sweep.
 - The priority order between a pair and the rule sets sharing one input, given that rule sets are served in declaration order.
@@ -152,5 +162,7 @@ flowchart TB
 
 - `docs/review/2026-08-14-temperature-sortie-vanne.svg` — why a valve's throughput starts depending on the tank's temperature; the measured 1.500 against 0.593.
 - `docs/review/2026-08-16-environnement-deux-limites.svg` — the three environment-exchange experiments and the two limits they exposed.
-- `tests/test_heated_tank_001.py` — the dynamic-reliability benchmark and the four things the knowledge base could not express, of which this plan addresses the first.
+- `tests/test_heated_tank_001.py` — the dynamic-reliability benchmark and the four things the knowledge base could not express, of which this plan addresses the first. Its measurement boundary has since moved and the test says so: a constituent is observable, a threshold on one is not.
+- `muscadet/profile.py` — the pattern KD6 follows, and the continuity argument it borrows verbatim.
+- `tests/test_measurement_constituents_001.py` — per-constituent publication, including the two engine facts it rests on.
 - The reference hydrogen model's electrolyser, which declares `flow_H2_membrane_leak` and `flow_O2_membrane_leak` as a percentage of production — an existing non-thermal transfer pair written as a proportion.
