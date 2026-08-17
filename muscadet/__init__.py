@@ -17,6 +17,12 @@ from .flow_continuous import (
     FlowContinuousOut,
 )
 from .profile import Profile, SinusoidalProfile, build_profile
+from .transfer import (
+    ConductiveTransfer,
+    Transfer,
+    build_transfer,
+    resolve_operand,
+)
 from .ordering import ContinuousFlowCycleError, RateComparisonLoopError
 from .rules import Rule, RuleOperand, RuleSet
 from .capacity import (
