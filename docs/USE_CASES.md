@@ -114,6 +114,12 @@ regression needs.
 
 `tests/test_advection_001.py`
 
+![Advection step by step](images/advection-step-by-step.svg)
+
+The figure is the model at three stops, with the rate on every connection.
+Every number in it is asserted by the test, so it doubles as the reference a
+simulation of this arrangement can be checked against.
+
 A tank fed at one temperature and drained at the same rate mixes toward the
 inlet:
 
@@ -248,6 +254,8 @@ them. See the *Modelling pitfalls* section of the README.
 ## The domestic hot-water circuit
 
 `tests/test_domestic_heating_001.py`
+
+![Domestic hot-water circuit](images/domestic-heating-circuit.svg)
 
 The integration case. Every mechanism the continuous layer carries meets on one
 small system that a heating engineer would recognise:

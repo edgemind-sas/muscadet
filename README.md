@@ -1501,6 +1501,8 @@ Nothing else in the library can say *move exactly this much, which I computed*. 
 
 This is the part a reader is most likely to get wrong:
 
+![The two shapes of a transfer pair](docs/images/transfer-pair-shapes.svg)
+
 | Declaration | Meaning | Identity transfer |
 |---|---|---|
 | `flows=("heat_water", "heat_air")` | moves a quantity **between** two streams that keep transiting, as a signed delta on top | both flows **stay** |
@@ -1652,7 +1654,12 @@ Two consequences for assertions. An absolute or relative bound tighter than abou
 
 ## Worked models
 
-Three complete models, each with figures that can be checked outside MUSCADET, are documented in [`docs/USE_CASES.md`](docs/USE_CASES.md): the heated-tank dynamic-reliability benchmark, a counter-flow exchanger validated against the effectiveness-NTU relation, and a domestic hot-water circuit with a heat pump backed by an electric resistance.
+Four complete models, each with figures that can be checked outside MUSCADET, are documented in [`docs/USE_CASES.md`](docs/USE_CASES.md): the heated-tank dynamic-reliability benchmark, advection measured against the analytic mixing solution, a counter-flow exchanger validated against the effectiveness-NTU relation, and a domestic hot-water circuit with a heat pump backed by an electric resistance.
+
+Two of them carry step-by-step diagrams of the exchanged flows, so a simulation can be checked against a picture rather than against prose:
+
+- [advection, at three stops](docs/images/advection-step-by-step.svg)
+- [the domestic hot-water circuit](docs/images/domestic-heating-circuit.svg)
 
 ## More Examples
 
