@@ -1,0 +1,130 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1190 950" width="1190" height="950" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif">
+
+  <rect x="0" y="0" width="1190" height="950" fill="#ffffff"/>
+
+  <defs>
+    <marker id="arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#546e7a"/>
+    </marker>
+  </defs>
+
+  <text x="40" y="44" font-size="22" font-weight="600" fill="#263238">Portage du cœur H2 sur MUSCADET 2.0 — la suite, et ce qui cloche</text>
+  <text x="40" y="69" font-size="14" fill="#607d8b">À gauche le chemin. À droite ce qui me gêne physiquement, et ce que je reproche à la bibliothèque.</text>
+
+  <!-- ============ COLONNE GAUCHE : LE CHEMIN ============ -->
+
+  <rect x="40" y="94" width="560" height="104" rx="8" fill="#e8f5e9" stroke="#2e7d32" stroke-width="1.6"/>
+  <circle cx="66" cy="120" r="14" fill="#2e7d32"/>
+  <text x="66" y="125" font-size="14" font-weight="700" fill="#ffffff" text-anchor="middle">1</text>
+  <text x="92" y="125" font-size="15" font-weight="600" fill="#1b5e20">ACQUIS — la tranche 1 est portée</text>
+  <text x="92" y="148" font-size="13" fill="#33691e">4 composants · égalité exacte de t=1 à t=5 · réservoir exact dès t=0</text>
+  <text x="92" y="168" font-size="13" fill="#33691e">2 défauts silencieux corrigés : le réservoir terminal se remplit,</text>
+  <text x="92" y="186" font-size="13" fill="#33691e">une capacité stockée sert depuis son stock</text>
+
+  <line x1="320" y1="198" x2="320" y2="230" stroke="#546e7a" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <rect x="40" y="232" width="560" height="250" rx="8" fill="#fff8e1" stroke="#f57f17" stroke-width="1.6"/>
+  <circle cx="66" cy="258" r="14" fill="#f57f17"/>
+  <text x="66" y="263" font-size="14" font-weight="700" fill="#ffffff" text-anchor="middle">2</text>
+  <text x="92" y="263" font-size="15" font-weight="600" fill="#e65100">TROIS ÉCARTS DE SÉMANTIQUE — vous décidez</text>
+
+  <rect x="60" y="280" width="522" height="58" rx="5" fill="#ffffff" stroke="#ffb300" stroke-width="1.1"/>
+  <text x="74" y="300" font-size="13" font-weight="600" fill="#e65100">A · Nominal contre non-borné</text>
+  <text x="74" y="320" font-size="12" fill="#5d4037">Le réservoir doit déclarer le débit nominal de son producteur. Rien</text>
+  <text x="74" y="333" font-size="12" fill="#5d4037">ne dit « cette règle plafonne à son nominal ».</text>
+
+  <rect x="60" y="346" width="522" height="58" rx="5" fill="#ffffff" stroke="#ffb300" stroke-width="1.1"/>
+  <text x="74" y="366" font-size="13" font-weight="600" fill="#e65100">B · Dérating : porte globale absente</text>
+  <text x="74" y="386" font-size="12" fill="#5d4037">Couper le H2 laisse l'O2 produire : un électrolyseur mort qui</text>
+  <text x="74" y="399" font-size="12" fill="#5d4037">fabrique encore de l'oxygène.</text>
+
+  <rect x="60" y="412" width="522" height="58" rx="5" fill="#ffffff" stroke="#ffb300" stroke-width="1.1"/>
+  <text x="74" y="432" font-size="13" font-weight="600" fill="#e65100">C · Demande déclarée contre disponible</text>
+  <text x="74" y="452" font-size="12" fill="#5d4037">Le réactif abondant est tiré à plein et détruit. Voir le point 1</text>
+  <text x="74" y="465" font-size="12" fill="#5d4037">de la colonne physique — c'est le plus grave des trois.</text>
+
+  <line x1="320" y1="482" x2="320" y2="514" stroke="#546e7a" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <rect x="40" y="516" width="560" height="82" rx="8" fill="#e3f2fd" stroke="#1565c0" stroke-width="1.6"/>
+  <circle cx="66" cy="542" r="14" fill="#1565c0"/>
+  <text x="66" y="547" font-size="14" font-weight="700" fill="#ffffff" text-anchor="middle">3</text>
+  <text x="92" y="547" font-size="15" font-weight="600" fill="#0d47a1">UN ARTEFACT D'OUTILLAGE — code seul</text>
+  <text x="92" y="569" font-size="13" fill="#1565c0">L'instant 0 n'est pas établi. Coût : une ligne fausse par</text>
+  <text x="92" y="588" font-size="13" fill="#1565c0">indicateur et par étude.</text>
+
+  <line x1="320" y1="598" x2="320" y2="630" stroke="#546e7a" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <rect x="40" y="632" width="560" height="82" rx="8" fill="#e3f2fd" stroke="#1565c0" stroke-width="1.6"/>
+  <circle cx="66" cy="658" r="14" fill="#1565c0"/>
+  <text x="66" y="663" font-size="14" font-weight="700" fill="#ffffff" text-anchor="middle">4</text>
+  <text x="92" y="663" font-size="15" font-weight="600" fill="#0d47a1">ÉLARGIR — tranche par tranche</text>
+  <text x="92" y="685" font-size="13" fill="#1565c0">variantes du stack · fuites · ventilation · capacités multi-</text>
+  <text x="92" y="704" font-size="13" fill="#1565c0">constituants · capteurs redondants · profils sinusoïdaux</text>
+
+  <line x1="320" y1="714" x2="320" y2="746" stroke="#546e7a" stroke-width="2" marker-end="url(#arrow)"/>
+
+  <rect x="40" y="748" width="560" height="82" rx="8" fill="#eceff1" stroke="#37474f" stroke-width="1.8"/>
+  <circle cx="66" cy="774" r="14" fill="#37474f"/>
+  <text x="66" y="779" font-size="14" font-weight="700" fill="#ffffff" text-anchor="middle">5</text>
+  <text x="92" y="779" font-size="15" font-weight="600" fill="#263238">MODÈLE H2 COMPLET — le verrou du tag 2.0.0</text>
+  <text x="92" y="801" font-size="13" fill="#455a64">42 références déterministes. La barre est l'égalité exacte.</text>
+  <text x="92" y="820" font-size="13" fill="#455a64">La migration cod3s est numériquement inerte : la référence traverse.</text>
+
+  <text x="40" y="866" font-size="12.5" fill="#607d8b">L'étape 2 est bloquante : chacun de ces écarts change ce que le modèle porté</text>
+  <text x="40" y="884" font-size="12.5" fill="#607d8b">signifie, pas seulement la façon de l'écrire. L'étape 3 ne coûte qu'une restitution.</text>
+
+  <!-- ============ COLONNE DROITE : CRITIQUE ============ -->
+
+  <rect x="640" y="94" width="510" height="388" rx="8" fill="#ffebee" stroke="#c62828" stroke-width="1.8"/>
+  <text x="662" y="122" font-size="15" font-weight="700" fill="#b71c1c">PHYSIQUE — ce qui me gêne</text>
+
+  <rect x="660" y="136" width="470" height="104" rx="5" fill="#ffffff" stroke="#e57373" stroke-width="1.1"/>
+  <text x="674" y="157" font-size="13" font-weight="600" fill="#b71c1c">1 · La conservation est violée, et pas marginalement</text>
+  <text x="674" y="177" font-size="12" fill="#4e342e">Un composant tire de ses fournisseurs ce que sa demande réclame,</text>
+  <text x="674" y="190" font-size="12" fill="#4e342e">pas ce que sa règle consomme. Le surplus n'est ni stocké ni produit.</text>
+  <text x="674" y="210" font-size="12" font-weight="600" fill="#b71c1c">Mesuré : 99 livrés, 0,5 réagis, 98,5 détruits par unité de temps.</text>
+  <text x="674" y="229" font-size="12" fill="#4e342e">Invisible sur une source infinie. Sur un stock, il se vide pour rien.</text>
+
+  <rect x="660" y="248" width="470" height="92" rx="5" fill="#ffffff" stroke="#e57373" stroke-width="1.1"/>
+  <text x="674" y="269" font-size="13" font-weight="600" fill="#b71c1c">2 · Un réservoir n'a pas de débit de décharge</text>
+  <text x="674" y="289" font-size="12" fill="#4e342e">Une demande non bornée le tire à hauteur de tout son contenu :</text>
+  <text x="674" y="310" font-size="14" font-weight="600" fill="#b71c1c" font-family="ui-monospace, monospace">dq/dt = −q</text>
+  <text x="674" y="330" font-size="12" fill="#4e342e">Constante de temps sans origine physique. Même confusion stock/débit</text>
+  <text x="674" y="343" font-size="12" fill="#4e342e">que le bug IMDR révoqué — mais côté sémantique, pas côté code.</text>
+
+  <rect x="660" y="350" width="470" height="60" rx="5" fill="#ffffff" stroke="#e57373" stroke-width="1.1"/>
+  <text x="674" y="371" font-size="13" font-weight="600" fill="#b71c1c">3 · Aucune force motrice</text>
+  <text x="674" y="391" font-size="12" fill="#4e342e">Ni pression, ni potentiel, ni charge. Qu'un réservoir plein freine son</text>
+  <text x="674" y="404" font-size="12" fill="#4e342e">producteur est déclaré, pas émergent. Choix assumé, mais il a un prix.</text>
+
+  <rect x="660" y="418" width="470" height="50" rx="5" fill="#ffffff" stroke="#e57373" stroke-width="1.1"/>
+  <text x="674" y="439" font-size="13" font-weight="600" fill="#b71c1c">4 · L'instant 0 ment</text>
+  <text x="674" y="459" font-size="12" fill="#4e342e">Les conditions initiales sont lues à zéro. En sûreté, t=0 compte.</text>
+
+  <rect x="640" y="500" width="510" height="330" rx="8" fill="#ede7f6" stroke="#4527a0" stroke-width="1.8"/>
+  <text x="662" y="528" font-size="15" font-weight="700" fill="#311b92">MUSCADET — ce que je lui reproche</text>
+
+  <text x="662" y="556" font-size="13" font-weight="600" fill="#311b92">La posture par défaut est d'accepter et de continuer</text>
+  <text x="662" y="576" font-size="12" fill="#4527a0">Sept défauts trouvés aujourd'hui, tous de la même famille : le modèle</text>
+  <text x="662" y="589" font-size="12" fill="#4527a0">tourne et rend faux. Chacun a été corrigé au cas par cas ; il n'existe</text>
+  <text x="662" y="602" font-size="12" fill="#4527a0">aucun contrôle de cohérence du modèle au pré-run.</text>
+
+  <text x="662" y="630" font-size="13" font-weight="600" fill="#311b92">Trois canaux multiplicatifs, trois règles de composition</text>
+  <text x="662" y="650" font-size="12" fill="#4527a0">out_rate, dératings par mode, profil temporel : min, min, produit.</text>
+  <text x="662" y="663" font-size="12" fill="#4527a0">Documenté, mais un modélisateur se trompera.</text>
+
+  <text x="662" y="691" font-size="13" font-weight="600" fill="#311b92">L'information existe et n'est pas utilisée</text>
+  <text x="662" y="711" font-size="12" fill="#4527a0">Une règle déclare ses sorties corrélées. La bibliothèque le sait, et</text>
+  <text x="662" y="724" font-size="12" fill="#4527a0">laisse pourtant un dérating les découpler.</text>
+
+  <text x="662" y="752" font-size="13" font-weight="600" fill="#311b92">Les boutons d'une capacité se recouvrent</text>
+  <text x="662" y="772" font-size="12" fill="#4527a0">demand, fill_rate, weight, side, ports, combine — et demand comme</text>
+  <text x="662" y="785" font-size="12" fill="#4527a0">fill_rate aboutissent au même nombre publié, sans règle d'usage.</text>
+
+  <text x="662" y="813" font-size="12.5" font-style="italic" fill="#311b92">Et surtout : appeler « limite de conception documentée » une violation</text>
+  <text x="662" y="826" font-size="12.5" font-style="italic" fill="#311b92">de conservation ne rend pas les chiffres justes.</text>
+
+  <text x="640" y="866" font-size="12.5" fill="#607d8b">Rien de tout cela n'invalide le portage : la tranche 1 reproduit la référence à l'exact.</text>
+  <text x="640" y="884" font-size="12.5" fill="#607d8b">Mais le point 1 doit être tranché avant d'élargir, sinon on porte une erreur à l'échelle.</text>
+
+</svg>

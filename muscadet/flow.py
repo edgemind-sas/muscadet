@@ -4,22 +4,67 @@ import pydantic
 from colored import fg, attr
 
 import cod3s
-from .common import get_pyc_type
+from .common import fresh_instant_occ_law, get_pyc_type
 
 
-def _prod_cond_operand_value(flow_inner, negate_matrix, i, j):
-    """Return the effective boolean of one ``var_prod_cond`` operand.
+def _prod_cond_matrix_entry(matrix, i, j, default=None):
+    """Entry ``(i, j)`` of a matrix aligned index-for-index with ``var_prod_cond``.
 
-    ``flow_inner`` is a resolved flow object; ``negate_matrix`` mirrors the
-    shape of ``var_prod_cond`` (list[list[bool]]). When the aligned entry is
-    True the operand is negated (``not var_fed``), otherwise the raw
-    ``var_fed`` value is returned. A missing entry (shorter / empty matrix)
-    defaults to non-negated, so a partial or empty matrix is safe.
+    A missing entry -- a shorter row, a shorter matrix, the EMPTY matrix that
+    is every such matrix's default -- yields ``default``, so a partial matrix is
+    safe and an empty one means "no operand carries this".
     """
-    value = flow_inner.var_fed.value()
-    if i < len(negate_matrix) and j < len(negate_matrix[i]) and negate_matrix[i][j]:
-        return not value
-    return value
+    if i < len(matrix) and j < len(matrix[i]):
+        return matrix[i][j]
+    return default
+
+
+def _prod_cond_quantity_reader(source):
+    """Zero-arg reader of the quantity a COMPARISON operand reads.
+
+    Every flow answers :meth:`FlowModel.live_value`; a measurement link is not
+    a flow and answers ``get_level``, the level of the capacity it observes.
+    """
+    reader = getattr(source, "live_value", None)
+    return reader if reader is not None else source.get_level
+
+
+def _prod_cond_state_reader(source):
+    """Reader of a plain operand: is ``source`` fed."""
+    return lambda: source.var_fed.value()
+
+
+def _prod_cond_negated_reader(source):
+    """Reader of a negated operand: is ``source`` NOT fed."""
+    return lambda: not source.var_fed.value()
+
+
+def _prod_cond_compare_reader(source, comparator, threshold):
+    """Reader of a comparison operand: what ``source`` carries, against
+    ``threshold`` (R22).
+
+    The quantity is read LIVE and not from a mirror refreshed between
+    integration steps, for the very reason a rule guard is (R12): the solver
+    root-finds a crossing, and a mirror would lag one step behind the value
+    being watched.
+    """
+    read = _prod_cond_quantity_reader(source)
+    return lambda: bool(comparator(float(read()), threshold))
+
+
+def _prod_cond_threshold_condition(read, comparator, threshold, above):
+    """Condition of one crossing transition of a comparison operand.
+
+    ``above`` selects the direction: the transition INTO the "above" state
+    fires when the comparison holds, the one back out of it when it stops
+    holding.
+    """
+
+    def condition():
+        holds = bool(comparator(float(read()), threshold))
+        return holds if above else (not holds)
+
+    return condition
 
 
 class FlowModel(cod3s.ObjCOD3S):
@@ -50,6 +95,55 @@ class FlowModel(cod3s.ObjCOD3S):
         )
     )
 
+    combine: typing.Any = pydantic.Field(
+        None,
+        exclude=True,
+        repr=False,
+        description=(
+            "Declared ONLY so it can be refused by name (R37). A combination "
+            "policy belongs to a measurement channel and never to a flow; "
+            "pydantic ignores unknown keys, so without this field the key would "
+            "be swallowed and the flow would go on summing while the model read "
+            "as if it took a median."
+        ),
+    )
+
+    combine_fun: typing.Any = pydantic.Field(
+        None,
+        exclude=True,
+        repr=False,
+        description="Refused by name for the same reason as ``combine`` (R37).",
+    )
+
+    @pydantic.model_validator(mode="after")
+    def check_combine_is_not_a_flow_policy(self):
+        """Refuse a combination policy on a FLOW, at declaration time (R37).
+
+        A continuous input is the SUM of its connections, permanently: it
+        carries a conserved quantity, and the median of three pipes delivering
+        water creates or destroys matter. A discrete input already votes, with
+        an integer ``logic`` -- ``logic=2`` over three connections is a
+        2-out-of-3 majority.
+
+        This is what makes the restriction unreachable rather than merely
+        documented. Pydantic's default is to IGNORE an unknown key, so a
+        ``combine="median"`` written on a flow would be accepted, dropped, and
+        the flow would keep summing: the model would read as a vote and behave
+        as a sum, which is the worst of the three possible outcomes.
+        """
+        if self.combine is None and self.combine_fun is None:
+            return self
+
+        raise ValueError(
+            f"Flow {self.name}: a combination policy cannot be declared on a "
+            "flow (R37). A continuous flow carries a CONSERVED quantity and is "
+            "the sum of its connections; taking a mean or a median of it would "
+            "create or destroy matter. Combine readings on a MEASUREMENT "
+            "channel instead -- add_measurement_in(name, combine='median') -- "
+            "or, to vote on discrete inputs, declare an integer logic: "
+            "add_flow_in(name, logic=2) is a 2-out-of-3 majority"
+        )
+
     @classmethod
     def get_clsname(basecls, **specs):
         port_name = specs.pop("port")
@@ -60,6 +154,17 @@ class FlowModel(cod3s.ObjCOD3S):
         clsname = f"Flow{port_name}"
         return clsname
 
+    def initial_fed_value(self):
+        """The value ``{name}_fed_{port}`` is CREATED at.
+
+        The declared default, and the override point for a flow whose value at
+        instant 0 is not simply that -- a continuous output carrying a time
+        profile, whose production at 0 is the default scaled by the profile
+        there. It is the engine's init value, restored at the start of every
+        Monte Carlo sequence, so it must be a pure function of the declaration.
+        """
+        return self.var_fed_default
+
     def add_variables(self, comp, port, **kwargs):
 
         py_type, pyc_type = get_pyc_type(self.var_type)
@@ -69,11 +174,33 @@ class FlowModel(cod3s.ObjCOD3S):
         )
 
         self.var_fed = comp.addVariable(
-            f"{self.name}_fed_{port}", pyc_type, py_type(self.var_fed_default)
+            f"{self.name}_fed_{port}", pyc_type, py_type(self.initial_fed_value())
         )
 
     def add_automata(self, comp):
         pass
+
+    def live_value(self):
+        """The quantity this flow carries right now.
+
+        The single reading every COMPARISON operand goes through, whichever
+        direction of the discrete/continuous interoperation declares it: a rule
+        guard reading a flow (R21), a discrete production condition reading a
+        continuous one (R22). Overridden where ``var_fed`` is a mirror rather
+        than the value itself.
+        """
+        return self.var_fed.value()
+
+    @property
+    def is_continuous(self) -> bool:
+        """False on the discrete family, True on the continuous one.
+
+        What tells a comparison operand whether its crossing must be WATCHED by
+        the solver: a discrete flow announces its own change through
+        ``var_fed``, a continuous one moves between integration steps and
+        announces nothing.
+        """
+        return False
 
     def get_flow_type_color(self) -> str:
         """Return the color formatting for flow type. Can be overridden in subclasses."""
@@ -154,7 +281,24 @@ class FlowModel(cod3s.ObjCOD3S):
         )
 
 
-class FlowIn(FlowModel):
+class FlowDiscrete(FlowModel):
+    """Shared base of the discrete flow family.
+
+    The mirror of :class:`muscadet.flow_continuous.FlowContinuous`: it exists so
+    that a discrete flow is told apart by a positive
+    ``isinstance(flow, FlowDiscrete)`` test rather than by negating the
+    continuous one. Negation is what mis-labels a future third family -- every
+    flow that is not continuous is not thereby discrete.
+
+    A pure marker: it declares no field and no behaviour of its own. It is
+    inserted between :class:`FlowModel` and the two discrete leaves, so every
+    ``isinstance`` relation that held before it existed still holds -- including
+    the legacy names, which sit further down the same chain
+    (``FlowModel -> FlowDiscrete -> FlowDiscreteOut -> FlowOut -> ...``).
+    """
+
+
+class FlowDiscreteIn(FlowDiscrete):
 
     var_in: typing.Any = pydantic.Field(
         None, description="Reference to collect external flow connections"
@@ -323,7 +467,17 @@ class FlowIn(FlowModel):
         comp.addStartMethod(self.sm_flow_fed_name, self.sm_flow_fed_fun)
 
 
-class FlowOut(FlowModel):
+class FlowIn(FlowDiscreteIn):
+    """Legacy name of :class:`FlowDiscreteIn`.
+
+    Kept permanently as a real subclass (never an assignment alias) so that
+    instances built through it report ``FlowIn`` as their runtime class name.
+    """
+
+    pass
+
+
+class FlowDiscreteOut(FlowDiscrete):
 
     # --- POINT À TRANCHER (2026-06-15) : var_is_active vs var_fed_available_out_init ---
     # var_is_active et var_fed_available sont deux portes booléennes ET sur var_fed
@@ -415,6 +569,16 @@ class FlowOut(FlowModel):
         default_factory=list,
         description="Per-operand negation matrix aligned index-for-index with 'var_prod_cond' (list[list[bool]]): when var_prod_cond_negate[i][j] is True the j-th operand of the i-th group is evaluated as NOT(flow.var_fed) instead of flow.var_fed. An EMPTY matrix (the default) means no operand is negated -> the evaluation is byte-identical to the historical behaviour. Built index-aligned by ObjFlow.postprocess_flow_specs from the '{name, negate}' operand form; the plain string operand form yields no negation.",
     )
+    var_prod_cond_compare: list = pydantic.Field(
+        default_factory=list,
+        description="Per-operand comparison matrix aligned index-for-index with 'var_prod_cond' (list[list[dict|None]]): when var_prod_cond_compare[i][j] is {'op': str, 'value': float} the j-th operand of the i-th group compares the LIVE quantity that operand reads against the threshold, instead of reading a boolean state (R22) -- which is how a continuous quantity conditions a discrete output. An EMPTY matrix (the default) means no operand compares -> the evaluation is byte-identical to the historical behaviour. Built index-aligned by ObjFlow.postprocess_flow_specs from the '{name, op, value}' operand form, the very vocabulary a rule guard operand uses.",
+    )
+    sm_prod_available_fun: typing.Any = pydantic.Field(
+        None, description="Production condition sensitive method"
+    )
+    sm_prod_available_name: typing.Any = pydantic.Field(
+        None, description="Production condition sensitive method name"
+    )
     var_prod_cond_inner_mode: str = pydantic.Field(
         "or",
         description="Flow production condition expression mode: 'or' means var_prod is evaluated like [(C11 or C12 or ... or C1_k1) and (C21 or ... C2_k2) and ... and (Cn1 or ... or Cn_kn)], 'and' means evaluation like [(C11 and C12 and ... and C1_k1) or (C21 and ... and C2_k2) or ... or (Cn1 and ... and Cn_kn)]",
@@ -501,8 +665,16 @@ class FlowOut(FlowModel):
         return f"{fg('steel_blue_1a')}"
 
     def _prod_cond_operand_label(self, flow_inner, i, j) -> str:
-        """Operand name for the textual condition, prefixed with '¬' when the
-        aligned ``var_prod_cond_negate`` entry marks it negated."""
+        """Operand name for the textual condition.
+
+        Prefixed with '¬' when the aligned ``var_prod_cond_negate`` entry marks
+        it negated, rendered as the comparison itself when the aligned
+        ``var_prod_cond_compare`` entry makes it one.
+        """
+        compare = _prod_cond_matrix_entry(self.var_prod_cond_compare, i, j)
+        if compare is not None:
+            return f"{flow_inner.name} {compare['op']} {compare['value']:g}"
+
         neg = self.var_prod_cond_negate
         negated = i < len(neg) and j < len(neg[i]) and neg[i][j]
         return f"¬{flow_inner.name}" if negated else flow_inner.name
@@ -641,17 +813,58 @@ class FlowOut(FlowModel):
 
     #     return sensitive_set_flow_prod_template
 
+    def build_prod_cond_readers(self):
+        """One zero-arg reader per ``var_prod_cond`` operand, in CNF shape.
+
+        Resolving what each operand reads ONCE, here, is what keeps the
+        extended evaluation a plain ``all(any(...))`` over callables: the
+        comparator of a comparison operand is looked up at wiring time, not on
+        every evaluation.
+
+        The readers close over the resolved operand objects and read their
+        variables lazily, so a flow whose variables are declared after this
+        runs is still read correctly.
+        """
+        # Local import, and NOT a cycle break: ``rules`` imports nothing from
+        # muscadet, so a module-level import would work. It is deferred because
+        # this module is the discrete-flow layer and only this one method needs
+        # the rules unit -- for its comparison vocabulary, so a guard (R21) and
+        # a discrete production condition (R22) compare a quantity the same way.
+        from .rules import comparator as get_comparator
+
+        readers = []
+        for i, flow_outer in enumerate(self.var_prod_cond):
+            row = []
+            for j, source in enumerate(flow_outer):
+                compare = _prod_cond_matrix_entry(self.var_prod_cond_compare, i, j)
+                if compare is not None:
+                    row.append(
+                        _prod_cond_compare_reader(
+                            source,
+                            get_comparator(compare["op"]),
+                            float(compare["value"]),
+                        )
+                    )
+                elif _prod_cond_matrix_entry(self.var_prod_cond_negate, i, j, False):
+                    row.append(_prod_cond_negated_reader(source))
+                else:
+                    row.append(_prod_cond_state_reader(source))
+            readers.append(row)
+
+        return readers
+
     def create_sensitive_set_flow_prod_available(self):
 
-        # When no operand is negated (the empty matrix default) keep the
-        # historical closures verbatim: the evaluation is byte-identical to
-        # pre-negation muscadet. The negate-aware closures only run when the
-        # component actually declares a negated operand.
-        negate_matrix = self.var_prod_cond_negate
+        # When every operand is a plain read of a flow state -- no negation, no
+        # comparison, the empty-matrix default of both -- keep the historical
+        # closures verbatim: the evaluation is byte-identical to pre-negation
+        # muscadet. The reader-based closures only run when the component
+        # actually declares a negated or a comparison operand.
+        extended = bool(self.var_prod_cond_negate) or bool(self.var_prod_cond_compare)
 
         if self.var_prod_cond_inner_mode == "or":
 
-            if not negate_matrix:
+            if not extended:
 
                 def sensitive_set_flow_prod_available_template():
                     # for flow_disj in self.var_prod_cond:
@@ -678,27 +891,18 @@ class FlowOut(FlowModel):
 
             else:
 
+                readers = self.build_prod_cond_readers()
+
                 def sensitive_set_flow_prod_available_template():
-                    # Same evaluation, with per-operand negation applied.
-                    val = all(
-                        [
-                            any(
-                                [
-                                    _prod_cond_operand_value(
-                                        flow_inner, negate_matrix, i, j
-                                    )
-                                    for j, flow_inner in enumerate(flow_outer)
-                                ]
-                            )
-                            for i, flow_outer in enumerate(self.var_prod_cond)
-                        ]
-                    )
+                    # Same evaluation, per-operand negation and comparisons
+                    # applied by the readers.
+                    val = all([any([read() for read in row]) for row in readers])
 
                     self.var_prod_available.setValue(val)
 
         elif self.var_prod_cond_inner_mode == "and":
 
-            if not negate_matrix:
+            if not extended:
 
                 def sensitive_set_flow_prod_available_template():
 
@@ -719,21 +923,12 @@ class FlowOut(FlowModel):
 
             else:
 
+                readers = self.build_prod_cond_readers()
+
                 def sensitive_set_flow_prod_available_template():
-                    # Same evaluation, with per-operand negation applied.
-                    val = any(
-                        [
-                            all(
-                                [
-                                    _prod_cond_operand_value(
-                                        flow_inner, negate_matrix, i, j
-                                    )
-                                    for j, flow_inner in enumerate(flow_outer)
-                                ]
-                            )
-                            for i, flow_outer in enumerate(self.var_prod_cond)
-                        ]
-                    )
+                    # Same evaluation, per-operand negation and comparisons
+                    # applied by the readers.
+                    val = any([all([read() for read in row]) for row in readers])
 
                     self.var_prod_available.setValue(val)
 
@@ -783,10 +978,23 @@ class FlowOut(FlowModel):
         sm_flow_prod_available_fun = self.create_sensitive_set_flow_prod_available()
         sm_flow_prod_available_name = f"set_{self.name}_prod_available"
 
+        # Kept on the flow so add_automata can wire the very same method onto
+        # the threshold automata it builds -- exactly what FlowDiscreteOutTempo
+        # does with sm_flow_fed_fun.
+        self.sm_prod_available_fun = sm_flow_prod_available_fun
+        self.sm_prod_available_name = sm_flow_prod_available_name
+
         # Add prod available update method to be sensitive to input changes
         for flow_outer in self.var_prod_cond:
             for flow_inner in flow_outer:
                 # ipdb.set_trace()
+                # A measurement link is not a flow and declares no var_fed at
+                # all: a comparison operand reading one is re-evaluated by the
+                # watched threshold automaton add_automata builds for it. The
+                # test is on the ATTRIBUTE and not on its value, so a flow whose
+                # variables are not declared yet still raises exactly as before.
+                if not hasattr(flow_inner, "var_fed"):
+                    continue
                 flow_inner.var_fed.addSensitiveMethod(
                     sm_flow_prod_available_name, sm_flow_prod_available_fun
                 )
@@ -794,14 +1002,142 @@ class FlowOut(FlowModel):
         # A negated operand can make the production condition TRUE while every
         # referenced input stays at its initial (False) value — in which case
         # none of the change-subscriptions above ever fires and var_prod_available
-        # would be stuck at its default. Seed the correct value at t=0 with a
-        # start method. GATED on negation so a non-negated condition keeps the
-        # exact legacy wiring (change-subscriptions only) -> byte-identical.
-        if self.var_prod_cond_negate:
+        # would be stuck at its default. A comparison operand has the same gap: a
+        # continuous quantity may already sit above its threshold at t=0. Seed the
+        # correct value at t=0 with a start method. GATED on the extended operand
+        # forms so a plain condition keeps the exact legacy wiring
+        # (change-subscriptions only) -> byte-identical.
+        if self.var_prod_cond_negate or self.var_prod_cond_compare:
             comp.addStartMethod(sm_flow_prod_available_name, sm_flow_prod_available_fun)
 
+    def add_automata(self, comp, **kwargs):
 
-class FlowOutTempo(FlowOut):
+        super().add_automata(comp, **kwargs)
+
+        self.add_threshold_automata(comp)
+
+    def add_threshold_automata(self, comp):
+        """Watch every continuous threshold this production condition carries (R22).
+
+        A comparison operand reading a CONTINUOUS quantity gets a two-state
+        automaton -- below the threshold, above it -- whose two instantaneous
+        transitions are registered as WATCHED. The solver then stops the
+        integration AT the crossing instead of noticing it at the following
+        step, which is exactly what a rule guard's mode automaton buys on the
+        other direction of the interoperation (R12).
+
+        The automaton is NOT what the condition reads: the closures built by
+        :meth:`build_prod_cond_readers` read the quantity live, so the two can
+        never disagree on the value. What the automaton contributes is the stop
+        at the right date, and the notification that re-runs the condition
+        there -- a continuous quantity moving inside an integration step
+        announces no change of its own, so nothing else would.
+
+        A comparison on a DISCRETE flow needs none of this: that flow announces
+        its own change through ``var_fed``, and watching it would drag a purely
+        discrete model onto the PDMP solver.
+
+        Returns
+        -------
+        list
+            The automata built, empty when the condition carries no comparison.
+        """
+        if not self.var_prod_cond_compare:
+            return []
+
+        # Local import, and NOT a cycle break: ``rules`` imports nothing from
+        # muscadet, so a module-level import would work. It is deferred because
+        # this module is the discrete-flow layer and only this one method needs
+        # the rules unit -- for its comparison vocabulary, so a guard (R21) and
+        # a discrete production condition (R22) compare a quantity the same way.
+        from .rules import comparator as get_comparator
+
+        system = comp.system()
+        automata = []
+
+        for i, flow_outer in enumerate(self.var_prod_cond):
+            for j, source in enumerate(flow_outer):
+                compare = _prod_cond_matrix_entry(self.var_prod_cond_compare, i, j)
+                if compare is None:
+                    continue
+                # Anything that is not a flow -- a measurement link -- carries a
+                # continuous quantity too, hence the True default.
+                if not getattr(source, "is_continuous", True):
+                    continue
+
+                read = _prod_cond_quantity_reader(source)
+                compare_fun = get_comparator(compare["op"])
+                threshold = float(compare["value"])
+
+                base = f"{self.name}_cond_{i}_{j}"
+                st_below = f"{base}_below"
+                st_above = f"{base}_above"
+                trans_up = f"{base}_cross_up"
+                trans_down = f"{base}_cross_down"
+
+                aut = cod3s.PycAutomaton(
+                    name=f"{comp.name()}_{base}_threshold",
+                    states=[st_below, st_above],
+                    # The state the comparison designates cannot be known here:
+                    # the instantaneous transitions settle the automaton at t=0,
+                    # which is why they must be watched rather than merely
+                    # conditioned.
+                    init_state=st_below,
+                    transitions=[
+                        {
+                            "name": trans_up,
+                            "source": st_below,
+                            "target": st_above,
+                            "is_interruptible": True,
+                            # A fresh mapping per transition: cod3s rewrites the
+                            # 'cls' entry in place while sanitizing it.
+                            "occ_law": fresh_instant_occ_law(),
+                        },
+                        {
+                            "name": trans_down,
+                            "source": st_above,
+                            "target": st_below,
+                            "is_interruptible": True,
+                            "occ_law": fresh_instant_occ_law(),
+                        },
+                    ],
+                )
+                aut.update_bkd(comp)
+
+                aut.get_transition_by_name(trans_up)._bkd.setCondition(
+                    _prod_cond_threshold_condition(read, compare_fun, threshold, True)
+                )
+                aut.get_transition_by_name(trans_down)._bkd.setCondition(
+                    _prod_cond_threshold_condition(read, compare_fun, threshold, False)
+                )
+
+                if self.sm_prod_available_fun is not None:
+                    aut._bkd.addSensitiveMethod(
+                        self.sm_prod_available_name, self.sm_prod_available_fun
+                    )
+
+                system.pdmp_add_watched_automaton(aut)
+
+                comp.automata_d[aut.name] = aut
+                automata.append(aut)
+
+        return automata
+
+
+class FlowOut(FlowDiscreteOut):
+    """Legacy name of :class:`FlowDiscreteOut`.
+
+    Kept permanently as a real subclass (never an assignment alias) so that
+    instances built through it report ``FlowOut`` as their runtime class name.
+    It deliberately sits *between* :class:`FlowDiscreteOut` and the canonical
+    tempo / trigger classes so that every ``isinstance(flow, FlowOut)``
+    relation that held before the rename still holds.
+    """
+
+    pass
+
+
+class FlowDiscreteOutTempo(FlowOut):
 
     occ_enable_flow: typing.Optional[
         typing.Union[dict, cod3s.OccurrenceDistributionModel]
@@ -982,7 +1318,13 @@ class FlowOutTempo(FlowOut):
         return sensitive_set_flow_template
 
 
-class FlowOutOnTrigger(FlowOut):
+class FlowOutTempo(FlowDiscreteOutTempo):
+    """Legacy name of :class:`FlowDiscreteOutTempo`."""
+
+    pass
+
+
+class FlowDiscreteOutOnTrigger(FlowOut):
     var_trigger_in: typing.Any = pydantic.Field(
         None, description="Trigger input reference"
     )
@@ -1124,3 +1466,9 @@ class FlowOutOnTrigger(FlowOut):
                 )
 
         return sensitive_set_flow_template
+
+
+class FlowOutOnTrigger(FlowDiscreteOutOnTrigger):
+    """Legacy name of :class:`FlowDiscreteOutOnTrigger`."""
+
+    pass

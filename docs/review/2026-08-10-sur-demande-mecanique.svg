@@ -1,0 +1,118 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 1010" width="1200" height="1010" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif">
+
+  <rect x="0" y="0" width="1200" height="1010" fill="#ffffff"/>
+  <defs>
+    <marker id="g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#546e7a"/></marker>
+    <marker id="r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#c62828"/></marker>
+  </defs>
+
+  <text x="40" y="44" font-size="22" font-weight="600" fill="#263238">Une ressource, deux rivaux : la mécanique qui produit l'incohérence</text>
+  <text x="40" y="69" font-size="14" fill="#607d8b">Le partage est décidé une passe AVANT que l'on sache qu'une des deux demandes est irréalisable.</text>
+
+  <!-- ===== TOPOLOGIE ===== -->
+  <rect x="40" y="92" width="1120" height="132" rx="8" fill="#fafafa" stroke="#90a4ae" stroke-width="1.3"/>
+  <text x="62" y="118" font-size="14" font-weight="700" fill="#263238">LE MONTAGE</text>
+
+  <rect x="62" y="132" width="132" height="46" rx="5" fill="#ffffff" stroke="#546e7a" stroke-width="1.2"/>
+  <text x="76" y="151" font-size="12" font-weight="600" fill="#37474f">SA — source A</text>
+  <text x="76" y="169" font-size="11.5" fill="#546e7a">1,0 · rare</text>
+
+  <rect x="62" y="186" width="132" height="30" rx="5" fill="#fff3e0" stroke="#ef6c00" stroke-width="1.4"/>
+  <text x="76" y="206" font-size="12" font-weight="600" fill="#e65100">SE — E, 1,0 partagée</text>
+
+  <line x1="194" y1="155" x2="252" y2="160" stroke="#546e7a" stroke-width="1.8" marker-end="url(#g)"/>
+  <line x1="194" y1="198" x2="252" y2="176" stroke="#ef6c00" stroke-width="1.8" marker-end="url(#g)"/>
+  <line x1="194" y1="204" x2="252" y2="206" stroke="#ef6c00" stroke-width="1.8" marker-end="url(#g)"/>
+
+  <rect x="254" y="132" width="290" height="60" rx="5" fill="#ffffff" stroke="#37474f" stroke-width="1.3"/>
+  <text x="268" y="151" font-size="12" font-weight="600" fill="#263238">U1  —  10 A + 1 E → 1 P1</text>
+  <text x="268" y="169" font-size="11.5" fill="#455a64">A le bride : échelle 0,1, donc 0,1 E lui suffit</text>
+  <text x="268" y="185" font-size="11.5" fill="#455a64">son aval demande 1000</text>
+
+  <rect x="254" y="196" width="290" height="48" rx="5" fill="#ffffff" stroke="#37474f" stroke-width="1.3"/>
+  <text x="268" y="215" font-size="12" font-weight="600" fill="#263238">U2  —  1 E → 1 P2</text>
+  <text x="268" y="233" font-size="11.5" fill="#1b5e20">rien ne le bride : il peut utiliser 1,0 E</text>
+
+  <rect x="590" y="132" width="250" height="80" rx="5" fill="#eceff1" stroke="#546e7a" stroke-width="1.2"/>
+  <text x="604" y="152" font-size="12" font-weight="600" fill="#37474f">Besoin réel</text>
+  <text x="604" y="172" font-size="12" fill="#455a64">U1 0,1  +  U2 1,0  =  1,1</text>
+  <text x="604" y="190" font-size="12" fill="#455a64">pour 1,0 disponible</text>
+  <text x="604" y="207" font-size="12" font-weight="600" fill="#263238">juste : 0,0909 / 0,909</text>
+
+  <rect x="860" y="132" width="278" height="80" rx="5" fill="#fff8e1" stroke="#f57f17" stroke-width="1.2"/>
+  <text x="874" y="152" font-size="12" font-weight="600" fill="#e65100">La rareté est réelle</text>
+  <text x="874" y="172" font-size="11.5" fill="#5d4037">Il manque 0,1. Le défaut n'est pas</text>
+  <text x="874" y="189" font-size="11.5" fill="#5d4037">qu'il faille arbitrer — c'est que</text>
+  <text x="874" y="206" font-size="11.5" fill="#5d4037">l'arbitrage porte sur du fictif.</text>
+
+  <!-- ===== BANDE 1 : PASSE DE DEMANDE ===== -->
+  <rect x="40" y="242" width="1120" height="184" rx="8" fill="#e3f2fd" stroke="#1565c0" stroke-width="1.6"/>
+  <text x="62" y="268" font-size="14" font-weight="700" fill="#0d47a1">PASSE DE DEMANDE — remonte le graphe</text>
+
+  <circle cx="80" cy="300" r="13" fill="#1565c0"/>
+  <text x="80" y="305" font-size="13" font-weight="700" fill="#fff" text-anchor="middle">1</text>
+  <text x="104" y="298" font-size="13" font-weight="600" fill="#0d47a1">evaluate_demand → get_demand_scale</text>
+  <text x="104" y="317" font-size="12" fill="#1565c0">Pour chaque entrée : coefficient × (demande aval ÷ coefficient de sortie).</text>
+  <text x="104" y="334" font-size="12" font-weight="600" fill="#b71c1c">U1 publie une demande de 1000 sur E. U2 publie 1.</text>
+  <text x="104" y="353" font-size="12" fill="#1565c0">Le calcul n'utilise que les coefficients DÉCLARÉS et la demande aval.</text>
+  <text x="104" y="370" font-size="12" font-weight="600" fill="#b71c1c">Il ne regarde jamais ce que les AUTRES entrées peuvent fournir — A n'existe pas ici.</text>
+
+  <circle cx="80" cy="396" r="13" fill="#1565c0"/>
+  <text x="80" y="401" font-size="13" font-weight="700" fill="#fff" text-anchor="middle">2</text>
+  <text x="104" y="394" font-size="13" font-weight="600" fill="#0d47a1">regularize_demands → split_proportional</text>
+  <text x="104" y="413" font-size="12" fill="#1565c0">SE partage ses 1,0 au prorata des demandes reçues : 1000 contre 1.</text>
+
+  <rect x="700" y="380" width="440" height="34" rx="5" fill="#ffcdd2" stroke="#c62828" stroke-width="1.4"/>
+  <text x="714" y="402" font-size="13" font-weight="700" fill="#b71c1c">U1 reçoit 0,999   ·   U2 reçoit 0,001</text>
+
+  <!-- ===== BANDE 2 : PASSE DE PRODUCTION ===== -->
+  <rect x="40" y="444" width="1120" height="250" rx="8" fill="#e8f5e9" stroke="#2e7d32" stroke-width="1.6"/>
+  <text x="62" y="470" font-size="14" font-weight="700" fill="#1b5e20">PASSE DE PRODUCTION — redescend le graphe, une fois le partage déjà décidé</text>
+
+  <circle cx="80" cy="502" r="13" fill="#2e7d32"/>
+  <text x="80" y="507" font-size="13" font-weight="700" fill="#fff" text-anchor="middle">3</text>
+  <text x="104" y="500" font-size="13" font-weight="600" fill="#1b5e20">rule_scale — la vérité arrive ici, et trop tard</text>
+  <text x="104" y="519" font-size="12" fill="#33691e">Minimum sur les entrées de (disponible ÷ coefficient) :</text>
+  <text x="104" y="540" font-size="13" font-weight="600" fill="#1b5e20" font-family="ui-monospace, monospace">min(A : 1,0/10 = 0,1  ,  E : 0,999/1 = 0,999)  =  0,1</text>
+  <text x="104" y="559" font-size="12" fill="#33691e">U1 produit 0,1. Il n'aura jamais pu utiliser plus que 0,1 de E.</text>
+
+  <circle cx="80" cy="588" r="13" fill="#2e7d32"/>
+  <text x="80" y="593" font-size="13" font-weight="700" fill="#fff" text-anchor="middle">4</text>
+  <text x="104" y="586" font-size="13" font-weight="600" fill="#1b5e20">release_unused_supply — corrigé, et insuffisant</text>
+  <text x="104" y="605" font-size="12" fill="#33691e">U1 ne prélève que 0,1 et rend 0,899 à SE. La conservation est rétablie :</text>
+  <text x="104" y="622" font-size="12" fill="#33691e">plus rien n'est détruit, et le surplus reste disponible au pas suivant.</text>
+
+  <circle cx="80" cy="652" r="13" fill="#c62828"/>
+  <text x="80" y="657" font-size="13" font-weight="700" fill="#fff" text-anchor="middle">5</text>
+  <text x="104" y="650" font-size="13" font-weight="600" fill="#b71c1c">Mais le partage a été décidé à l'étape 2</text>
+  <text x="104" y="669" font-size="12" fill="#4e342e">SE a déjà tourné — l'ordre de production est topologique. Les 0,899 rendus sont</text>
+  <text x="104" y="686" font-size="12" font-weight="600" fill="#b71c1c">alloués-mais-non-pris, pas réofferts à U2, qui reste à 0,001 au lieu de 0,909.</text>
+
+  <!-- ===== DIAGNOSTIC ===== -->
+  <rect x="40" y="712" width="550" height="196" rx="8" fill="#ede7f6" stroke="#4527a0" stroke-width="1.6"/>
+  <text x="62" y="738" font-size="14" font-weight="700" fill="#311b92">L'INFORMATION QUI MANQUE</text>
+  <text x="62" y="764" font-size="12.5" fill="#4527a0">La demande est calculée une passe AVANT l'échelle qui</text>
+  <text x="62" y="781" font-size="12.5" fill="#4527a0">révèle qu'elle était irréalisable. Ce n'est pas un bug de</text>
+  <text x="62" y="798" font-size="12.5" fill="#4527a0">calcul : c'est l'ordre des deux balayages.</text>
+  <text x="62" y="824" font-size="12.5" font-weight="600" fill="#311b92">Ce qu'il faudrait connaître à l'étape 1 : la CAPACITÉ des</text>
+  <text x="62" y="841" font-size="12.5" font-weight="600" fill="#311b92">fournisseurs de U1 — ce que SA peut donner — pour borner</text>
+  <text x="62" y="858" font-size="12.5" font-weight="600" fill="#311b92">la demande sur E par min(autres entrées : capacité/coeff).</text>
+  <text x="62" y="884" font-size="12.5" fill="#4527a0">C'est exactement ce que la troisième passe publierait.</text>
+
+  <rect x="612" y="712" width="548" height="196" rx="8" fill="#ffebee" stroke="#c62828" stroke-width="1.6"/>
+  <text x="634" y="738" font-size="14" font-weight="700" fill="#b71c1c">POURQUOI UN SIMPLE RETARD NE SUFFIT PAS</text>
+  <text x="634" y="764" font-size="12.5" fill="#4e342e">Une livraison vaut min(capacité, demande). Recalculer la</text>
+  <text x="634" y="781" font-size="12.5" fill="#4e342e">demande à partir de ce qui est ARRIVÉ est auto-référentiel :</text>
+  <text x="634" y="798" font-size="12.5" fill="#4e342e">le min a déjà détruit l'information cherchée. Mesuré :</text>
+  <text x="634" y="822" font-size="12" fill="#b71c1c">· borner par l'échelle précédente → converge vers un point fixe FAUX</text>
+  <text x="634" y="841" font-size="12" fill="#b71c1c">· borner par les livraisons → décroît vers 0 (5e-4 en 4000 évaluations)</text>
+  <text x="634" y="860" font-size="12" fill="#b71c1c">· ajouter un test de saturation → oscille en période 2</text>
+  <text x="634" y="884" font-size="12.5" font-weight="600" fill="#b71c1c">Et le solveur n'itère pas dans un pas : 1 évaluation par pas, mesuré.</text>
+
+  <text x="40" y="944" font-size="12.5" fill="#607d8b">Étapes 3 et 4 corrigées (9c5e647, ef7c6b4) : plus rien n'est détruit. L'étape 5 reste ouverte : le partage, lui, n'est pas révisé.</text>
+  <text x="40" y="964" font-size="12.5" fill="#607d8b">Sévérité : avec une demande aval non bornée — le cas normal d'un réservoir — le rival tombe à 0,001. Avec une demande modeste, à 0,5 au lieu de 0,909.</text>
+  <text x="40" y="990" font-size="12.5" fill="#607d8b">Mesuré sur muscadet à 6b73a48, allocation proportionnelle par défaut.</text>
+
+</svg>
