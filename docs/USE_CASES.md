@@ -7,6 +7,7 @@ they cannot drift from the code they document: every number below is asserted.
 | Model | What it demonstrates | Checked against |
 |---|---|---|
 | [Heated tank](#the-heated-tank) | discrete regulation, redundancy, feared events, and where the knowledge base stops | a published dynamic-reliability benchmark |
+| [Advection](#advection-a-quantity-travelling-with-its-carrier) | a quantity carried by its stream, in and out of a mixing volume | the analytic solution of the mixing ODE |
 | [Counter-flow exchanger](#the-counter-flow-exchanger) | transfer pairs carrying a computed quantity between two balances | a closed-form correlation from the heat-transfer literature |
 | [Domestic hot water](#the-domestic-hot-water-circuit) | rules with coefficients, capacity, thermostat, redundancy and standing loss in one system | elementary physics on ordinary domestic figures |
 
@@ -14,6 +15,7 @@ Run any of them with `pytest`:
 
 ```sh
 .venv/bin/python -m pytest tests/test_heated_tank_001.py -v
+.venv/bin/python -m pytest tests/test_advection_001.py -v
 .venv/bin/python -m pytest tests/test_literature_validation_001.py -v
 .venv/bin/python -m pytest tests/test_domestic_heating_001.py -v
 ```
@@ -71,14 +73,12 @@ false, which the failure mode clamps true and a third rule guard reads back.
 
 ### What it does not reproduce, and why
 
-Four boundary tests state the limits rather than papering over them. Two still
-stand:
+Four boundary tests state the limits rather than papering over them. **Two of
+the four have since moved**, and the module's own docstrings are the record of
+which.
 
-- **the temperature ODE is not ported.** `dT/dt = (sum_i q_i (T_i - T) + power)
-  / (L x area)` needs a rate proportional to a component's own integrated
-  state. The transfer pair now covers part of this, but the advection terms,
-  what a stream brings in and takes out, need the carried-flow notion that has
-  not shipped;
+One still stands:
+
 - **the temperature-dependent failure rate is not ported.** `add_exp_failure_mode`
   already creates a real variable for the rate and hands the *variable object*
   to PyCATSHOO's `newLaw`, so the parameter is a model variable rather than a
@@ -86,11 +86,19 @@ stand:
   engine draws every firing time from the parameter's initial value, so writing
   the variable during a run changes nothing.
 
-One boundary has since moved, and the test says so: a measurement channel now
-publishes each constituent, so `heat / water` is observable. What no
-declaration reaches yet is a *watched threshold* on one constituent, because a
-sensor's band is built from the `{name, op, value}` operand vocabulary, which
-names a channel and has no slot for a constituent of one.
+**Measurement.** A channel now publishes each constituent, so `heat / water`
+is observable. What no declaration reaches yet is a *watched threshold* on one
+constituent: a sensor's band is built from the `{name, op, value}` operand
+vocabulary, which names a channel and has no slot for a constituent of one.
+
+**Advection.** The temperature ODE's `sum_i q_i (T_i - T)` term was recorded
+here as needing a carried-flow notion that had not shipped. That was true when
+it was written and is no longer, and
+[`tests/test_advection_001.py`](../tests/test_advection_001.py) proves it
+against the analytic solution. See [Advection](#advection-a-quantity-travelling-with-its-carrier)
+below: the two halves take two different mechanisms, both of which shipped in
+this release. Porting the full heated-tank temperature ODE is now a question of
+assembling them, not of a missing notion.
 
 ### A note on cost
 
@@ -99,6 +107,90 @@ not attempted: one 200 h sequence costs about 37 s, so the reference's 1000
 sequences over 1000 h would run for days. What the module asserts instead is
 the deterministic sequence behind each feared event, which is what a
 regression needs.
+
+---
+
+## Advection: a quantity travelling with its carrier
+
+`tests/test_advection_001.py`
+
+A tank fed at one temperature and drained at the same rate mixes toward the
+inlet:
+
+```
+dT/dt = q (T_in - T) / V        T(t) = T_in + (T_0 - T_in) exp(-q t / V)
+```
+
+This is the term the heated-tank benchmark needs, and it was documented as
+inexpressible. It is not. The two halves take two different mechanisms, and
+both shipped in this release, so nothing here needs a dedicated "carried flow"
+notion.
+
+### The inflow: a rule
+
+A rule's coefficients are per unit consumed, so
+
+```python
+self.add_rules(
+    name="carry_in",
+    rules=[dict(cons={"water": 1.0}, prod={"water": 1.0, "heat": T_IN})],
+)
+```
+
+produces heat exactly in proportion to the water it passes. The water transits
+unchanged and the enthalpy it carries appears beside it, at any rate, with
+nothing tying them by declaration.
+
+One thing has to be declared for it to arrive: the receiving volume must
+**accept** the heat. A capacity claims for itself only what its `fill_rate`
+says, so without one the tank asks for no heat and the inlet's enthalpy never
+lands, however correctly the rule computed it.
+
+### The outflow: a conduit
+
+This is the half a rule cannot state. The outflow carries the tank's **own**
+temperature, so its enthalpy rate is `q x H/V` where both terms move. A rule
+coefficient is a constant and a demand default is a constant; what says *move
+exactly this much, which I computed* is a transfer pair:
+
+```python
+class OutletMeter(muscadet.ObjFlow):
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        self.add_flow_continuous_in(name="heat")
+        self.add_flow_continuous_out(name="heat")
+        self.add_measurement_in(name="tank", flows=["water", "heat"])
+        self.add_transfer(
+            "carry_out",
+            flows=["heat", "heat"],
+            equation=muscadet.Transfer(fun=self.enthalpy_out, continuous=True),
+        )
+
+    def enthalpy_out(self, comp):
+        channel = comp.measurements_in["tank"]
+        water = channel.get_level("water")
+        return Q * channel.get_level("heat") / water if water > 0 else 0.0
+```
+
+Per-constituent publication is the other half of why this works now: a channel
+publishing only the total could not give `H` and `V` separately, and the total
+of a water-plus-heat volume is neither.
+
+### What it measures
+
+Fed at 80 degrees from 20, `q = 2` into `V = 100`, the model tracks the
+analytic solution at every stop and lands on **39.781 degrees at 20 h** against
+39.781 computed outside it. The volume is conserved throughout, the temperature
+is monotone and never passes the inlet, and the energy balance closes over the
+run.
+
+### What is still missing, precisely
+
+Not the physics: the **declaration**. Nothing ties the carried quantity to its
+carrier, so the modeller states the association twice, once in the rule's
+coefficients and once in the conduit's equation, and MUSCADET checks neither
+against the other. A declared association would make both automatic. Its
+absence is an ergonomic gap, not a modelling one.
 
 ---
 

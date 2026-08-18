@@ -41,14 +41,27 @@ The last four tests in this module are the measurement of why: they are boundary
 tests, and each one asserts what MUSCADET 2.0 does instead of what the benchmark
 needs.
 
-One of those boundaries has since moved, and the test that marks it says so. A
-capacity used to publish only the total raw quantity over its constituents, so
-on a water-plus-enthalpy volume every threshold was watching 7 + 217 = 224. A
-measurement channel now names the constituents it reads, so ``H/V`` -- the
+**Two of those boundaries have since moved**, and this docstring is the record
+of which.
+
+*Measurement.* A capacity used to publish only the total raw quantity over its
+constituents, so on a water-plus-enthalpy volume every threshold was watching
+7 + 217 = 224. A channel now names the constituents it reads, so ``H/V`` -- the
 mixture temperature -- is observable. What is still missing is the other half:
 a watched threshold is built from the ``{name, op, value}`` operand vocabulary,
 which names a channel and not a constituent of one, so the reading is available
 to Python and unavailable to a guard.
+
+*Advection.* The temperature ODE's ``sum_i q_i (T_i - T)`` term was recorded
+here as needing a carried-flow notion that had not shipped. It does not, and
+the claim was wrong rather than merely stale: a rule produces the inflow's
+enthalpy in proportion to the water it passes, and a transfer-pair conduit
+meters the outflow at the mixture temperature ``q x H/V``, read over the
+per-constituent channel above. ``tests/test_advection_001.py`` measures the two
+together against the analytic solution of the mixing ODE. Porting the full
+temperature ODE here is therefore assembly work and not a missing notion; it is
+left undone deliberately, because this module's value is the discrete
+regulation and the feared events, which the port already reproduces.
 
 The benchmark's Monte-Carlo estimate is out of reach here and is deliberately
 not attempted as a test: measured on this model, one 200 h sequence costs about
