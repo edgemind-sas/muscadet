@@ -9,6 +9,7 @@ they cannot drift from the code they document: every number below is asserted.
 | [Heated tank](#the-heated-tank) | discrete regulation, redundancy, feared events, and where the knowledge base stops | a published dynamic-reliability benchmark |
 | [Advection](#advection-a-quantity-travelling-with-its-carrier) | a quantity carried by its stream, in and out of a mixing volume | the analytic solution of the mixing ODE |
 | [Counter-flow exchanger](#the-counter-flow-exchanger) | transfer pairs carrying a computed quantity between two balances | a closed-form correlation from the heat-transfer literature |
+| [Industrial hydrogen chain](#the-industrial-hydrogen-chain) | an electrolysis plant composed of shipped components only, no subclass | the IMDR "Industrie 4.0" study, open data |
 | [Domestic hot water](#the-domestic-hot-water-circuit) | rules with coefficients, capacity, thermostat, redundancy and standing loss in one system | elementary physics on ordinary domestic figures |
 
 Run any of them with `pytest`:
@@ -17,6 +18,7 @@ Run any of them with `pytest`:
 .venv/bin/python -m pytest tests/test_heated_tank_001.py -v
 .venv/bin/python -m pytest tests/test_advection_001.py -v
 .venv/bin/python -m pytest tests/test_literature_validation_001.py -v
+.venv/bin/python -m pytest tests/test_h2_stack_001.py -v
 .venv/bin/python -m pytest tests/test_domestic_heating_001.py -v
 ```
 
@@ -248,6 +250,81 @@ exactly half an ulp of single precision at that magnitude.
 Nothing leaks; it is representation. But it bounds every assertion in the
 project, and the file encodes both consequences rather than working around
 them. See the *Modelling pitfalls* section of the README.
+
+---
+
+## The industrial hydrogen chain
+
+`tests/test_h2_stack_001.py`
+
+The IMDR "Industrie 4.0" study: a water-and-electricity electrolysis plant with
+storage, redundant instruments and a membrane. Its figures are open data, so
+they appear here unaltered.
+
+![The IMDR hydrogen chain](images/h2-plant-imdr.svg)
+
+### What is ported, and what it proves
+
+The slice `S_H2O -> Electro -> Local`, with the battery `B1`, is ported and
+asserted. It earns its place for one reason above the others: **not a single
+component is subclassed**. What the original expresses by subclassing a flow
+object and overriding `compute_iflow` in Python, MUSCADET expresses as declared
+coefficients, and the whole plant is four `add_component` calls against
+`muscadet.kb.continuous`. The test asserts that, by reading back each
+component's runtime type.
+
+| Component | Shipped class | Declaration |
+|---|---|---|
+| `S_H2O` | `SourceContinuous` | water at a rate of 2 |
+| `B1` | `CapacityContinuous` | battery, capacity 100, stocked at 100 |
+| `Electro` | `TransformerContinuous` | `4 H2O + 1 Elec -> 1 H2 + 1 O2` |
+| `Local` | `CapacityContinuous` | tank, capacity 6, stocked at 3 |
+
+`df_H2` fails the stack at t = 2 and repairs it at t = 4, derating every
+continuous output to zero in between.
+
+What the run shows, all of it asserted:
+
+- **the limiting reagent as coefficients.** Water arrives at 2 against a
+  coefficient of 4, so the stack runs at scale 0.5 and produces 0.5 of
+  hydrogen, however full the battery. `min(H2O/4, Elec/1)` is what the two
+  coefficient maps state;
+- **two correlated outputs.** H2 and O2 come from one rule, so they move
+  together and one derating takes both down. That is why a rule set is declared
+  on the component rather than one output at a time;
+- **a demand bounded by what the other inputs can honour.** The stack asks its
+  battery for **0.5**, not its nominal 1. The original asked 1, was delivered 1,
+  reacted 0.5, and the missing 0.5 entered no reaction, no stock and no output.
+  MUSCADET's answer is the one the port takes as correct;
+- **a derated component draws nothing.** While the stack is down its water
+  intake reads 0, not the nominal 2. Water that is not converted, not stored and
+  not leaked simply vanishes otherwise;
+- **conservation.** The battery falls 100 to 98.5 and the tank rises 3 to 4.5:
+  1.5 of electricity for 1.5 of hydrogen.
+
+### The full plant, and where it would go
+
+The complete study is 24 components, and it reads as a specification of what
+2.0 was built to express. The mapping is on the figure above; the parts not yet
+ported are the interesting ones:
+
+- **two sinusoidal sources**, solar at amplitude 25 over a 24-hour period and
+  wind at amplitude 4 over 6 hours, which is `SourceSinusoidalContinuous` and
+  the time-profile channel;
+- **six sensors in two triples**, on the low-pressure tank and on the local
+  tank. That is `combine="median"` over three publishers, where one stuck
+  instrument cannot move the vote;
+- **`C_ratio_H2_Membrane`**, which reads a *ratio* rather than a level. That
+  needs per-constituent publication, which shipped in this release;
+- **the membrane leaks**, hydrogen crossing to the oxygen side. Written in the
+  original as a percentage of production because a proportion was what the
+  formalism could say; a transfer pair is what says it properly;
+- **a distribution node** between the two electrical sources and the battery,
+  which is the allocation policies.
+
+Nothing here is blocked. The mechanisms exist and each has its own worked model
+elsewhere in this document. What is missing is the porting work itself, which
+belongs with the study rather than with the library.
 
 ---
 
