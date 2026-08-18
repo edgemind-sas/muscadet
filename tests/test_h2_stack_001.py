@@ -1,8 +1,9 @@
-"""An industrial hydrogen slice, composed of shipped components only.
+"""An industrial electrolysis plant, composed of shipped components only.
 
-The four-component electrolysis plant of the IMDR "Industrie 4.0" study, whose
-figures are open data: a water source, a battery, an electrolyser stack and a
-local hydrogen tank, with a delay failure mode on the stack.
+A four-component electrolysis plant: a water source, a battery, an electrolyser
+stack and a local hydrogen store, with a delay failure mode on the stack. The
+case was worked during a multi-partner project organised by the Institut pour
+la Maitrise des Risques (https://www.imdr.eu/).
 
 It earns its place here for one reason above the others: **not a single
 component is subclassed**. What the original model expressed by subclassing a
@@ -62,7 +63,7 @@ import cod3s
 import muscadet
 import muscadet.kb.continuous  # noqa: F401  -- registers the shipped classes
 
-# The plant, as the study declares it
+# The plant, as the reference declares it
 # ===================================
 
 H2_SOURCE_RATE = 2.0  # S_H2O: flow_nominal
@@ -88,10 +89,10 @@ H2_REPAIR_TIME = 2.0
 #: of 4. The battery could sustain 100, so the water is the limiting reagent.
 H2_SCALE = H2_SOURCE_RATE / H2_CONS["H2O"]
 
-#: The six instants the study samples.
+#: The six instants the reference samples.
 H2_SCHEDULE = {"nb_runs": 1, "schedule": [{"start": 0, "end": 5, "nvalues": 6}]}
 
-#: Variables read back, in the study's own terms.
+#: Variables read back, in the reference model's own terms.
 H2_OBSERVED = (
     ("Electro", "H2_fed_out"),
     ("Electro", "O2_fed_out"),
@@ -157,7 +158,7 @@ def build_system():
     system.connect_flow(source="S_H2O", target="Electro", flow_name="H2O")
     system.connect_flow(source="B1", target="Electro", flow_name="Elec")
     system.connect_flow(source="Electro", target="Local", flow_name="H2")
-    # O2 is produced and deliberately wired to nothing, as in the study.
+    # O2 is produced and deliberately wired to nothing, as in the reference.
 
     system.comp["Electro"].add_delay_failure_mode(
         name="df_H2",

@@ -9,7 +9,7 @@ asserted.
 | [Heated tank](#heated-tank) | discrete regulation, redundancy, feared events | a published dynamic-reliability benchmark |
 | [Advection](#advection) | a quantity carried by its stream through a mixing volume | the analytic solution of the mixing ODE |
 | [Counter-flow exchanger](#counter-flow-exchanger) | transfer pairs moving a computed quantity between balances | the effectiveness-NTU relation |
-| [Electrolysis plant](#electrolysis-plant) | an industrial plant built from shipped components alone | the IMDR "Industrie 4.0" study, open data |
+| [Electrolysis plant](#electrolysis-plant) | an industrial plant built from shipped components alone | a reference model of the same plant |
 | [Domestic hot water](#domestic-hot-water) | rules, capacity, thermostat, redundancy and standing loss in one system | elementary physics on ordinary domestic figures |
 
 ```sh
@@ -160,9 +160,9 @@ seventh digit.
 
 `tests/test_h2_stack_001.py`
 
-The IMDR "Industrie 4.0" study, whose figures are open data: water and
-electricity into an electrolyser, hydrogen into a store, with a delay failure
-mode on the stack.
+Water and electricity into an electrolyser, hydrogen into a store, with a delay
+failure mode on the stack. The case was worked during a multi-partner project
+organised by the [Institut pour la Maitrise des Risques](https://www.imdr.eu/).
 
 ![Electrolysis plant: the installation](images/h2-plant-physical.svg)
 
@@ -179,7 +179,7 @@ component's runtime type.
 | `Electro` | `TransformerContinuous` | `4 H2O + 1 Elec -> 1 H2 + 1 O2` |
 | `Local` | `CapacityContinuous` | store, capacity 6, stocked at 3 |
 
-![Electrolysis plant: the model](images/h2-plant-imdr.svg)
+![Electrolysis plant: the model](images/h2-plant-model.svg)
 
 ### Results
 
