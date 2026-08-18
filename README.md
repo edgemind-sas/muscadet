@@ -1438,6 +1438,124 @@ and a rule *guard* may not read one either, for the same reason it may not read 
 
 To **vote on booleans** rather than on numbers, nothing new is needed: a discrete input already accepts an integer `logic`, so `add_flow_in(name="ok", logic=2)` over three connected sources is a 2-out-of-3 majority.
 
+#### Reading one constituent of a volume
+
+A capacity publishes its **total** level, and that is the one reading an *intensive* property cannot be recovered from. A tank holding water and heat is at a temperature of `heat / water`; the total is their weighted sum, which is neither term, and is not a quantity of anything when the constituents differ in nature: 100 kg of water beside 8000 J of heat reports 8100 of nothing.
+
+So a capacity publishes one alias pair per held flow beside the totals, and an observer names the constituents it wants:
+
+```python
+class Probe(muscadet.ObjFlow):
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        self.add_measurement_in(name="tank", flows=["water", "heat"])
+
+    def temperature(self):
+        channel = self.measurements_in["tank"]
+        return channel.get_level("heat") / channel.get_level("water")
+```
+
+`get_level(flow)` and `get_fill(flow)` take a constituent; `get_level()` with no argument is the total, unchanged. A constituent the channel did not declare is **refused by name**, never read as zero, because a zero there reads as a real measurement of an empty volume.
+
+Declaring nothing keeps the total-only channel of 1.x, byte-identically. The extra aliases cost an existing model nothing, and that was measured on the engine rather than assumed: PyCATSHOO matches an import to an export by alias and ignores an export nobody imports, so an observer importing only the total still connects to the wider box. The reverse fails, and fails *atomically*, taking the total down with the constituent, which is why MUSCADET intercepts it ahead of the engine:
+
+```python
+system.connect("TANK", "tank_level_out", "PROBE", "tank_level_in")
+# ValueError: Measurement link TANK.tank_level_out -> PROBE.tank_level_in: the
+# observer reads constituent 'plutonium', which TANK does not publish; it
+# publishes water, heat ...
+```
+
+A **republisher** carries them too (`add_measurement_out(name=..., source=..., flows=[...])`), because an observer is not supposed to be able to tell a capacity from an instrument. One gain covers every reading it publishes: a mode that kills the instrument kills all of them, and a probe lying about the heat while honest about the water is two instruments, hence two components.
+
+This is what makes a **converting instrument** an ordinary component. A probe reading joules and kilograms and publishing kelvin needs no new mechanism: it reads two constituents, divides, and republishes the ratio on a channel of its own, which a rule guard can then threshold through a sensor like any other reading.
+
+### Transfer pairs: a quantity moved by a gradient
+
+Everything above moves a quantity because somebody **asked** for it: a consumer publishes a demand, a producer delivers the lesser of what it can make and what was asked. That is right for matter a component decides to take. It is the wrong vehicle for a quantity that moves because a **gradient** makes it move: heat across a wall, hydrogen through a membrane, charge through a resistance.
+
+A **transfer pair** is that second vehicle. A component names two of its continuous flows and an equation returning a signed quantity, and MUSCADET moves it from one balance to the other:
+
+```python
+class Wall(muscadet.ObjFlow):
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        self.add_flow_continuous_in(name="heat")
+        self.add_flow_continuous_out(name="heat")
+        self.add_measurement_in(name="tank")
+
+        self.add_transfer(
+            name="conduction",
+            flows=("heat", "heat"),
+            equation=muscadet.ConductiveTransfer(
+                conductance=0.05,
+                potential_a={"const": 15.0},
+                potential_b={"measurement": "tank"},
+            ),
+        )
+```
+
+Nothing else in the library can say *move exactly this much, which I computed*. Production is always `declared x factor`, so a component could express a proportion of what arrived or a proportion of a constant, never an absolute computed quantity drawn from a named supplier.
+
+#### Two shapes, and they do not share a path
+
+This is the part a reader is most likely to get wrong:
+
+| Declaration | Meaning | Identity transfer |
+|---|---|---|
+| `flows=("heat_water", "heat_air")` | moves a quantity **between** two streams that keep transiting, as a signed delta on top | both flows **stay** |
+| `flows=("heat", "heat")` | **meters** that flow's transit: what crosses IS the computed quantity | the flow **leaves** |
+
+Conflating them breaks whichever shape loses. Subtract a two-flow pair's streams from the identity transfer and the exchanger stops carrying anything, leaving the pair to supply a whole balance; leave a conduit's flow in and the stream crosses twice, once by transfer and once by the pair.
+
+Demand follows the same split. A conduit publishes upstream what it is about to move, and without that a three-component conduit returns zero. A two-flow pair publishes **nothing of its own**: both its streams keep their identity transfer and already carry their consumer's demand, so adding the moved quantity on top would ask for a quantity no balance needs.
+
+#### The sign is the direction, and a conduit cannot reverse
+
+The equation returns a **signed** quantity and the library routes the sign, so no model writes a direction clamp. This is where a transfer parts company with a profile, whose pattern it otherwise follows exactly: a profile *scales* production, so a negative factor is refused; a negative transfer means the other direction.
+
+A **conduit** is the exception, and deliberately. Its direction is its connection's, and a connection whose direction reverses mid-run is out of scope: ordering, acyclicity and allocation all assume it fixed. A conduit computing a negative quantity therefore crosses **nothing**, and the raw signed request stays readable, so a reversal shows up as a negative ask against a zero crossing rather than as a plausible number. Losing heat is a second exchange component pointing the other way.
+
+#### Continuity is declared here too
+
+The equation is read from inside the sweeps, at the integration points the solver chooses, exactly like a profile. A law with a jump, a thermostat switching at a threshold, is crossed inside a step and overshoots by that step undetectably. So a bare callable is refused and the attestation is explicit:
+
+```python
+# refused: no attestation
+comp.add_transfer("q", flows=("a", "b"), equation=lambda comp: 1.0)
+
+# accepted: the modeller states what MUSCADET cannot check
+comp.add_transfer(
+    "q", flows=("a", "b"),
+    equation=muscadet.Transfer(fun=lambda comp: 1.0, continuous=True),
+)
+```
+
+`ConductiveTransfer` is the shipped shape, `Q = G (X_a - X_b)`, continuous by construction, so it attests nothing of its own. Its operands are a number, `{"const": x}` or `{"measurement": name}` optionally narrowed with `"flow"`. Declaring both `const` and `measurement` on one operand is refused rather than resolved by precedence: switching a fixed potential to a measured one and forgetting to remove the old key would otherwise leave the law running against a frozen potential for the whole mission.
+
+Forming a ratio from a volume's own contents is deliberately **not** an operand form. A measurement channel publishes each constituent, so a component dividing two of them publishes the intensive property already: the shipped shapes read a potential, they do not compute one.
+
+#### Saturation, composition, and what a pair guarantees
+
+A transfer that cannot be supplied is **capped, not refused**, and the shortfall is readable. Saturation is a legitimate physical state; an invisible one is not:
+
+```python
+pair = comp.transfers["conduction"]
+pair.last_requested   # the signed quantity the equation asked for
+pair.last_moved       # the signed quantity actually moved
+pair.shortfall        # the gap, compared on magnitudes
+```
+
+Both are public variables on the model (`{pair}_requested`, `{pair}_moved`), written each evaluation rather than accumulated, so a transient saturation stops reading as a permanent one.
+
+**Several pairs over one flow sum.** Two gradients across one balance add. Deratings fold by *minimum* because they are competing losses on one production; that rule does not carry over and must not be applied by analogy.
+
+**A pair balances the raw productions, not the delivered ones.** It subtracts `Q` from one and adds `Q` to the other, leaving the component's raw total untouched; each leg is then scaled by its **own** derating and profile like any output. With different factors on the two legs, what arrives is not what left, and that is not a leak: a derating destroys quantity by design, and forcing the legs to agree would either invent a loss on the healthy leg or defeat the derating on the damaged one.
+
+A pair adds **no edge to the connection graph**: its two flows belong to one component, so the dependency is inside a node and the evaluation order is unchanged. That is what lets a pair ride the three existing sweeps instead of needing a band of its own.
+
+What a pair may not name: a measurement channel (it carries a reading and no quantity, and may combine publishers by median, which conserves nothing), a capacity, or a discrete flow. Every named flow needs a continuous **output**, since a balance is written on the output side; a conduit additionally needs the input side, because it meters a transit it would otherwise not have.
+
 ### Assemble the whole system before the first run
 
 A system carrying continuous flows must be **complete** — every component and every connection — before `simulate()` or `isimu_start()` is called the first time.
@@ -1466,7 +1584,7 @@ A pre-run that **raised did not run**. A model refused on its first entry point 
 
 ### The shipped continuous components
 
-MUSCADET ships six domain-neutral continuous components in `muscadet.kb.continuous`. Import them, and they resolve by name in `add_component(cls=...)`:
+MUSCADET ships seven domain-neutral continuous components in `muscadet.kb.continuous`. Import them, and they resolve by name in `add_component(cls=...)`:
 
 | Class                    | What it is                                                                    |
 |--------------------------|-------------------------------------------------------------------------------|
@@ -1475,6 +1593,7 @@ MUSCADET ships six domain-neutral continuous components in `muscadet.kb.continuo
 | `TransformerContinuous`  | continuous inputs turned into continuous outputs by rules given as a **parameter** |
 | `CapacityContinuous`     | a volume held over one or more flows: buffer (`ports="both"`), accumulator (`"in"`) or reservoir (`"out"`) |
 | `ConsumerContinuous`     | a continuous input publishing a declared `demand`                             |
+| `ExchangeContinuous`     | one flow in and out, metered by a transfer pair: what crosses is what the declared law computed, given whole (`transfer=`) or inline (`conductance`, `potential_a`, `potential_b`) |
 | `SensorContinuous`       | a level read over a measurement link — one publisher, or several combined by `combine="median"` — driving a discrete control output, and optionally republishing what it read (`publish`) so another sensor can vote on it |
 
 A transformer takes its rules as a parameter, so a two-in two-out reaction needs no subclass at all:
@@ -1500,6 +1619,40 @@ python examples/continuous_01/continuous_01.py
 ```
 
 It prints one row per event the solver stopped at, and a summary of what the trace shows.
+
+## Modelling pitfalls
+
+Four things measured on real models, none of them visible from the API, each of which cost a debugging cycle.
+
+### The time unit decides whether a model is simulable
+
+The integrator's cost scales with the number of **time units** crossed, not with the physics. The same domestic hot-water circuit written in seconds, its heat-up spanning 5380 units, cost 19 s of wall clock for 300 s of simulated time. Written in hours, spanning 1.5 units, the whole test file runs in under a second.
+
+Bisecting it showed that removing the thermostat *and* the transfer pair changed nothing, so this is the integrator and not any one mechanism. Choose the unit that puts your horizon in the tens, not the thousands.
+
+### A rule's coefficients are a ratio, not a rating
+
+```python
+rules=[dict(cons={"elec": 2}, prod={"heat": 7})]
+```
+
+says seven of heat per two of electricity and leaves the **scale** free. Behind an ample supply and a consumer asking without bound, a 2 kW heat pump declared this way ran at scale 50 and delivered 350 kW.
+
+What caps a machine is what it can **draw**. A rated machine therefore needs a rated supply, which is also where a breaker sits in the real installation.
+
+### An infinite source is not a large one
+
+`rate=math.inf` split between two finite consumers goes through `inf` arithmetic and delivers **NaN**, which then propagates into every level downstream and reads as `nan` where a temperature should be. Use a large finite rate.
+
+### A quantity carries about seven significant digits
+
+PyCATSHOO stores a variable in single precision. An enthalpy balance that closes exactly in Python reads `240000.0078125` against `240000.0`, and that residual is exactly half an ulp of `float32` at that magnitude. Nothing leaks: it is representation.
+
+Two consequences for assertions. An absolute or relative bound tighter than about `1e-7` measures the engine's storage rather than the model. And a balance formed as the **difference** of two large stored quantities needs an *absolute* tolerance scaled to the operands' ulp, because the cancellation lifts that residual into the seventh digit of the difference: a relative bound there measures the cancellation, not the physics.
+
+## Worked models
+
+Three complete models, each with figures that can be checked outside MUSCADET, are documented in [`docs/USE_CASES.md`](docs/USE_CASES.md): the heated-tank dynamic-reliability benchmark, a counter-flow exchanger validated against the effectiveness-NTU relation, and a domestic hot-water circuit with a heat pump backed by an electric resistance.
 
 ## More Examples
 
