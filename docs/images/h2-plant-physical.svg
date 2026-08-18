@@ -1,0 +1,107 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 540" width="1120" height="540"
+     font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif">
+
+  <rect x="0" y="0" width="1120" height="540" fill="#ffffff"/>
+
+  <defs>
+    <marker id="hp-w" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#1565c0"/></marker>
+    <marker id="hp-e" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#f57f17"/></marker>
+    <marker id="hp-g" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#2e7d32"/></marker>
+  </defs>
+
+  <text x="36" y="42" font-size="24" font-weight="700" fill="#212121">Electrolysis plant: the installation</text>
+
+  <g id="solar">
+    <rect x="44" y="92" width="112" height="66" rx="4" fill="#1a237e" stroke="#37474f" stroke-width="2"
+          transform="skewX(-12)"/>
+    <g stroke="#5c6bc0" stroke-width="1.6" transform="skewX(-12)">
+      <line x1="72" y1="92" x2="72" y2="158"/><line x1="100" y1="92" x2="100" y2="158"/>
+      <line x1="128" y1="92" x2="128" y2="158"/>
+      <line x1="44" y1="114" x2="156" y2="114"/><line x1="44" y1="136" x2="156" y2="136"/>
+    </g>
+    <text x="82" y="184" font-size="15" font-weight="700" fill="#263238" text-anchor="middle">PV array</text>
+  </g>
+
+  <g id="wind">
+    <line x1="240" y1="180" x2="240" y2="98" stroke="#78909c" stroke-width="5"/>
+    <circle cx="240" cy="96" r="6" fill="#455a64"/>
+    <path d="M 240 96 L 232 46 L 248 50 Z" fill="#b0bec5" stroke="#78909c" stroke-width="1.5"/>
+    <path d="M 240 96 L 288 116 L 278 129 Z" fill="#b0bec5" stroke="#78909c" stroke-width="1.5"/>
+    <path d="M 240 96 L 194 122 L 200 108 Z" fill="#b0bec5" stroke="#78909c" stroke-width="1.5"/>
+    <text x="240" y="200" font-size="15" font-weight="700" fill="#263238" text-anchor="middle">Wind turbine</text>
+  </g>
+
+  <g id="battery">
+    <rect x="130" y="232" width="130" height="76" rx="6" fill="#e8f5e9" stroke="#2e7d32" stroke-width="2.5"/>
+    <rect x="150" y="222" width="18" height="12" rx="2" fill="#2e7d32"/>
+    <rect x="222" y="222" width="18" height="12" rx="2" fill="#2e7d32"/>
+    <rect x="144" y="248" width="102" height="44" rx="3" fill="#a5d6a7" stroke="#2e7d32" stroke-width="1.4"/>
+    <text x="195" y="277" font-size="16" font-weight="700" fill="#1b5e20" text-anchor="middle">100</text>
+    <text x="195" y="330" font-size="15" font-weight="700" fill="#263238" text-anchor="middle">Battery</text>
+  </g>
+
+  <g id="water">
+    <path d="M 60 300 q 20 -34 40 0 a 20 20 0 1 1 -40 0 Z" fill="#64b5f6" stroke="#1565c0" stroke-width="2"/>
+    <text x="80" y="348" font-size="15" font-weight="700" fill="#263238" text-anchor="middle">Water</text>
+    <circle cx="80" cy="398" r="24" fill="#ffffff" stroke="#1565c0" stroke-width="2.5"/>
+    <path d="M 70 386 L 96 398 L 70 410 Z" fill="#1565c0"/>
+    <text x="80" y="442" font-size="15" font-weight="700" fill="#263238" text-anchor="middle">Pump</text>
+  </g>
+
+  <g id="stack">
+    <rect x="400" y="216" width="180" height="200" rx="8" fill="#ffffff" stroke="#1b5e20" stroke-width="3"/>
+    <rect x="428" y="248" width="26" height="140" rx="3" fill="#90a4ae" stroke="#455a64" stroke-width="1.8"/>
+    <rect x="526" y="248" width="26" height="140" rx="3" fill="#90a4ae" stroke="#455a64" stroke-width="1.8"/>
+    <line x1="490" y1="240" x2="490" y2="396" stroke="#6a1b9a" stroke-width="4" stroke-dasharray="7 5"/>
+    <text x="490" y="414" font-size="13" fill="#4a148c" text-anchor="middle">membrane</text>
+    <g fill="#a5d6a7" stroke="#2e7d32" stroke-width="1.2">
+      <circle cx="470" cy="284" r="7"/><circle cx="466" cy="318" r="6"/><circle cx="472" cy="352" r="7"/>
+    </g>
+    <g fill="#bbdefb" stroke="#1565c0" stroke-width="1.2">
+      <circle cx="512" cy="292" r="6"/><circle cx="516" cy="330" r="7"/><circle cx="510" cy="362" r="6"/>
+    </g>
+    <text x="440" y="240" font-size="13" fill="#1b5e20" text-anchor="middle">H2</text>
+    <text x="542" y="240" font-size="13" fill="#1565c0" text-anchor="middle">O2</text>
+    <text x="490" y="444" font-size="16" font-weight="700" fill="#1b5e20" text-anchor="middle">Electrolyser</text>
+    <text x="490" y="466" font-size="15" fill="#2e7d32" text-anchor="middle">4 H2O + 1 Elec → 1 H2 + 1 O2</text>
+  </g>
+
+  <g id="tank">
+    <rect x="762" y="228" width="120" height="180" rx="56" fill="#e8f5e9" stroke="#1b5e20" stroke-width="3"/>
+    <path d="M 762 336 q 30 -10 60 0 t 60 0 L 882 352 A 56 56 0 0 1 826 408 A 56 56 0 0 1 762 352 Z"
+          fill="#a5d6a7" stroke="none"/>
+    <line x1="762" y1="336" x2="882" y2="336" stroke="#1b5e20" stroke-width="1.6" stroke-dasharray="5 4"/>
+    <text x="822" y="310" font-size="16" font-weight="700" fill="#1b5e20" text-anchor="middle">3 / 6</text>
+    <text x="822" y="440" font-size="16" font-weight="700" fill="#263238" text-anchor="middle">H2 store</text>
+  </g>
+
+  <g id="gauges">
+    <circle cx="960" cy="252" r="20" fill="#f3e5f5" stroke="#6a1b9a" stroke-width="2.2"/>
+    <line x1="960" y1="252" x2="960" y2="238" stroke="#4a148c" stroke-width="2.5"/>
+    <line x1="960" y1="252" x2="971" y2="259" stroke="#4a148c" stroke-width="2.5"/>
+    <circle cx="960" cy="304" r="20" fill="#f3e5f5" stroke="#6a1b9a" stroke-width="2.2"/>
+    <line x1="960" y1="304" x2="952" y2="292" stroke="#4a148c" stroke-width="2.5"/>
+    <circle cx="960" cy="356" r="20" fill="#f3e5f5" stroke="#6a1b9a" stroke-width="2.2"/>
+    <line x1="960" y1="356" x2="968" y2="343" stroke="#4a148c" stroke-width="2.5"/>
+    <line x1="882" y1="304" x2="936" y2="304" stroke="#6a1b9a" stroke-width="2.5" stroke-dasharray="2 4"/>
+    <text x="996" y="298" font-size="15" font-weight="700" fill="#4a148c">Level</text>
+    <text x="996" y="320" font-size="15" fill="#4a148c">gauges ×3</text>
+  </g>
+
+  <line x1="112" y1="308" x2="112" y2="374" stroke="#1565c0" stroke-width="5" marker-end="url(#hp-w)"/>
+  <path d="M 104 398 L 392 398 L 392 340" fill="none" stroke="#1565c0" stroke-width="5" marker-end="url(#hp-w)"/>
+  <text x="250" y="390" font-size="15" fill="#1565c0" font-weight="600">water 2</text>
+
+  <path d="M 82 190 L 82 214 L 130 250" fill="none" stroke="#f57f17" stroke-width="5" marker-end="url(#hp-e)"/>
+  <path d="M 240 208 L 240 250 L 262 262" fill="none" stroke="#f57f17" stroke-width="5" marker-end="url(#hp-e)"/>
+  <path d="M 260 272 L 392 272" fill="none" stroke="#f57f17" stroke-width="5" marker-end="url(#hp-e)"/>
+  <text x="326" y="264" font-size="15" fill="#e65100" font-weight="600">electricity</text>
+
+  <path d="M 580 280 L 754 280" fill="none" stroke="#2e7d32" stroke-width="5" stroke-dasharray="9 5" marker-end="url(#hp-g)"/>
+  <text x="666" y="271" font-size="15" fill="#1b5e20" font-weight="600">H2 0.5</text>
+  <path d="M 580 356 L 640 356 L 640 476" fill="none" stroke="#1565c0" stroke-width="5" stroke-dasharray="9 5"/>
+  <text x="668" y="476" font-size="15" fill="#1565c0" font-weight="600">O2 vented</text>
+</svg>

@@ -1,7 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1300 860" width="1300" height="860"
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1300 380" width="1300" height="380"
      font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif">
 
-  <rect x="0" y="0" width="1300" height="860" fill="#ffffff"/>
+  <rect x="0" y="0" width="1300" height="380" fill="#ffffff"/>
 
   <defs>
     <marker id="p-w" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
@@ -14,157 +14,62 @@
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#6a1b9a"/></marker>
   </defs>
 
-  <text x="36" y="44" font-size="26" font-weight="700" fill="#212121">La chaîne hydrogène IMDR « Industrie 4.0 »</text>
-  <text x="36" y="72" font-size="17" fill="#546e7a">24 composants. En vert : la tranche portée et assertée dans muscadet.</text>
+  <text x="36" y="42" font-size="24" font-weight="700" fill="#212121">Electrolysis plant: the model</text>
 
   <g id="legend">
-    <line x1="700" y1="40" x2="736" y2="40" stroke="#1565c0" stroke-width="5"/>
-    <text x="744" y="46" font-size="15" fill="#1565c0" font-weight="600">H2O</text>
-    <line x1="800" y1="40" x2="836" y2="40" stroke="#f57f17" stroke-width="5"/>
-    <text x="844" y="46" font-size="15" fill="#f57f17" font-weight="600">Élec</text>
-    <line x1="900" y1="40" x2="936" y2="40" stroke="#2e7d32" stroke-width="5" stroke-dasharray="9 5"/>
-    <text x="944" y="46" font-size="15" fill="#2e7d32" font-weight="600">H2 / O2</text>
-    <line x1="1030" y1="40" x2="1066" y2="40" stroke="#6a1b9a" stroke-width="3" stroke-dasharray="2 4"/>
-    <text x="1074" y="46" font-size="15" fill="#6a1b9a" font-weight="600">mesure, commande</text>
+    <line x1="700" y1="36" x2="736" y2="36" stroke="#1565c0" stroke-width="5"/>
+    <text x="744" y="42" font-size="15" fill="#1565c0" font-weight="600">H2O</text>
+    <line x1="806" y1="36" x2="842" y2="36" stroke="#f57f17" stroke-width="5"/>
+    <text x="850" y="42" font-size="15" fill="#f57f17" font-weight="600">electricity</text>
+    <line x1="954" y1="36" x2="990" y2="36" stroke="#2e7d32" stroke-width="5" stroke-dasharray="9 5"/>
+    <text x="998" y="42" font-size="15" fill="#2e7d32" font-weight="600">H2 / O2</text>
+    <line x1="1084" y1="36" x2="1120" y2="36" stroke="#6a1b9a" stroke-width="3" stroke-dasharray="2 4"/>
+    <text x="1128" y="42" font-size="15" fill="#6a1b9a" font-weight="600">measurement</text>
   </g>
 
   <g id="sources">
-    <rect x="36" y="104" width="196" height="256" rx="10" fill="#fafafa" stroke="#b0bec5" stroke-width="1.5"/>
-    <text x="52" y="132" font-size="17" font-weight="700" fill="#455a64">SOURCES</text>
+    <rect x="36" y="96" width="184" height="72" rx="7" fill="#e8f2fb" stroke="#1565c0" stroke-width="2.5"/>
+    <text x="128" y="122" font-size="16" font-weight="700" fill="#0d47a1" text-anchor="middle">S_H2O</text>
+    <text x="128" y="146" font-size="15" fill="#1565c0" text-anchor="middle">SourceContinuous · 2</text>
 
-    <rect x="52" y="148" width="164" height="52" rx="6" fill="#e8f2fb" stroke="#1565c0" stroke-width="2.5"/>
-    <text x="134" y="170" font-size="16" font-weight="700" fill="#0d47a1" text-anchor="middle">S_H2O</text>
-    <text x="134" y="190" font-size="14" fill="#1565c0" text-anchor="middle">eau, 5</text>
-
-    <rect x="52" y="210" width="164" height="42" rx="6" fill="#ffffff" stroke="#1565c0" stroke-width="2"/>
-    <text x="134" y="236" font-size="16" font-weight="600" fill="#0d47a1" text-anchor="middle">P_H2O · pompe</text>
-
-    <rect x="52" y="262" width="164" height="42" rx="6" fill="#fff8e1" stroke="#f57f17" stroke-width="2"/>
-    <text x="134" y="281" font-size="15" font-weight="700" fill="#e65100" text-anchor="middle">S_PV · solaire</text>
-    <text x="134" y="298" font-size="13" fill="#e65100" text-anchor="middle">±25, période 24</text>
-
-    <rect x="52" y="310" width="164" height="42" rx="6" fill="#fff8e1" stroke="#f57f17" stroke-width="2"/>
-    <text x="134" y="329" font-size="15" font-weight="700" fill="#e65100" text-anchor="middle">S_Eolienne</text>
-    <text x="134" y="346" font-size="13" fill="#e65100" text-anchor="middle">±4, période 6</text>
-  </g>
-
-  <g id="electrical">
-    <rect x="264" y="104" width="200" height="256" rx="10" fill="#fafafa" stroke="#b0bec5" stroke-width="1.5"/>
-    <text x="280" y="132" font-size="17" font-weight="700" fill="#455a64">ÉLECTRIQUE</text>
-
-    <rect x="280" y="148" width="168" height="46" rx="6" fill="#ffffff" stroke="#f57f17" stroke-width="2"/>
-    <text x="364" y="176" font-size="16" font-weight="600" fill="#e65100" text-anchor="middle">Distrib</text>
-
-    <rect x="280" y="206" width="168" height="60" rx="6" fill="#e8f5e9" stroke="#2e7d32" stroke-width="2.5"/>
-    <text x="364" y="230" font-size="16" font-weight="700" fill="#1b5e20" text-anchor="middle">B1 · batterie</text>
-    <text x="364" y="252" font-size="14" fill="#2e7d32" text-anchor="middle">capacité 100</text>
-
-    <rect x="280" y="278" width="168" height="36" rx="6" fill="#f3e5f5" stroke="#6a1b9a" stroke-width="1.8"/>
-    <text x="364" y="302" font-size="14" fill="#4a148c" text-anchor="middle">C_Source_Elec</text>
-
-    <rect x="280" y="320" width="168" height="32" rx="6" fill="#f3e5f5" stroke="#6a1b9a" stroke-width="1.8"/>
-    <text x="364" y="342" font-size="13" fill="#4a148c" text-anchor="middle">AP_Source_B1 · &lt;20 / &gt;20</text>
+    <rect x="36" y="220" width="184" height="92" rx="7" fill="#e8f5e9" stroke="#2e7d32" stroke-width="2.5"/>
+    <text x="128" y="246" font-size="16" font-weight="700" fill="#1b5e20" text-anchor="middle">B1 · battery</text>
+    <text x="128" y="270" font-size="15" fill="#2e7d32" text-anchor="middle">CapacityContinuous</text>
+    <text x="128" y="292" font-size="15" fill="#2e7d32" text-anchor="middle">capacity 100, stocked 100</text>
   </g>
 
   <g id="stack">
-    <rect x="496" y="104" width="216" height="256" rx="10" fill="#fafafa" stroke="#b0bec5" stroke-width="1.5"/>
-    <text x="512" y="132" font-size="17" font-weight="700" fill="#455a64">ÉLECTROLYSE</text>
-
-    <rect x="512" y="148" width="184" height="84" rx="7" fill="#e8f5e9" stroke="#2e7d32" stroke-width="3"/>
-    <text x="604" y="172" font-size="17" font-weight="700" fill="#1b5e20" text-anchor="middle">Electro</text>
-    <text x="604" y="196" font-size="14" fill="#2e7d32" text-anchor="middle">5 H2O + 20 Élec</text>
-    <text x="604" y="216" font-size="14" fill="#2e7d32" text-anchor="middle">→ 2 H2 + 3 O2</text>
-
-    <rect x="512" y="246" width="184" height="34" rx="6" fill="#f3e5f5" stroke="#6a1b9a" stroke-width="1.8"/>
-    <text x="604" y="268" font-size="13" fill="#4a148c" text-anchor="middle">AP_Electro_H2_BP · &lt;3,8 / ≥4</text>
-
-    <rect x="512" y="288" width="184" height="34" rx="6" fill="#f3e5f5" stroke="#6a1b9a" stroke-width="1.8"/>
-    <text x="604" y="310" font-size="13" fill="#4a148c" text-anchor="middle">AP_Electro_Consumer · ≥0,4</text>
-
-    <rect x="512" y="328" width="184" height="24" rx="5" fill="#f3e5f5" stroke="#6a1b9a" stroke-width="1.5"/>
-    <text x="604" y="345" font-size="13" fill="#4a148c" text-anchor="middle">AP_Ventilation</text>
+    <rect x="376" y="132" width="248" height="140" rx="8" fill="#ffffff" stroke="#1b5e20" stroke-width="3"/>
+    <text x="500" y="162" font-size="18" font-weight="700" fill="#1b5e20" text-anchor="middle">Electro</text>
+    <text x="500" y="188" font-size="15" fill="#546e7a" text-anchor="middle">TransformerContinuous</text>
+    <text x="500" y="216" font-size="16" fill="#2e7d32" text-anchor="middle">4 H2O + 1 Elec</text>
+    <text x="500" y="240" font-size="16" fill="#2e7d32" text-anchor="middle">→ 1 H2 + 1 O2</text>
+    <text x="500" y="264" font-size="14" fill="#c62828" text-anchor="middle">df_H2: down 2 → 4 h</text>
   </g>
 
-  <g id="volumes">
-    <rect x="744" y="104" width="230" height="256" rx="10" fill="#fafafa" stroke="#b0bec5" stroke-width="1.5"/>
-    <text x="760" y="132" font-size="17" font-weight="700" fill="#455a64">VOLUMES</text>
-
-    <rect x="760" y="148" width="198" height="60" rx="6" fill="#ffffff" stroke="#2e7d32" stroke-width="2"/>
-    <text x="859" y="170" font-size="15" font-weight="700" fill="#1b5e20" text-anchor="middle">Stack_Membrane</text>
-    <text x="859" y="192" font-size="13" fill="#2e7d32" text-anchor="middle">H2 + O2 · sortie max 0,10</text>
-
-    <rect x="760" y="218" width="198" height="60" rx="6" fill="#ffffff" stroke="#2e7d32" stroke-width="2"/>
-    <text x="859" y="240" font-size="15" font-weight="700" fill="#1b5e20" text-anchor="middle">T_H2_BP</text>
-    <text x="859" y="262" font-size="13" fill="#2e7d32" text-anchor="middle">H2 + fuites O2, H2O · cap. 4</text>
-
-    <rect x="760" y="288" width="198" height="64" rx="6" fill="#e8f5e9" stroke="#2e7d32" stroke-width="2.5"/>
-    <text x="859" y="312" font-size="15" font-weight="700" fill="#1b5e20" text-anchor="middle">Local</text>
-    <text x="859" y="334" font-size="13" fill="#2e7d32" text-anchor="middle">H2 + O2 · capacité 10000</text>
+  <g id="tank">
+    <rect x="780" y="132" width="200" height="100" rx="7" fill="#e8f5e9" stroke="#2e7d32" stroke-width="2.5"/>
+    <text x="880" y="162" font-size="16" font-weight="700" fill="#1b5e20" text-anchor="middle">Local · H2 store</text>
+    <text x="880" y="186" font-size="15" fill="#2e7d32" text-anchor="middle">CapacityContinuous</text>
+    <text x="880" y="210" font-size="15" fill="#2e7d32" text-anchor="middle">capacity 6, stocked 3</text>
   </g>
 
-  <g id="instruments">
-    <rect x="1006" y="104" width="260" height="256" rx="10" fill="#f6f3fb" stroke="#6a1b9a" stroke-width="2"/>
-    <text x="1022" y="132" font-size="17" font-weight="700" fill="#4a148c">INSTRUMENTS</text>
-
-    <rect x="1022" y="148" width="228" height="66" rx="6" fill="#ffffff" stroke="#6a1b9a" stroke-width="2"/>
-    <text x="1136" y="170" font-size="15" font-weight="700" fill="#4a148c" text-anchor="middle">CT_H2_BP_1 · _2 · _3</text>
-    <text x="1136" y="192" font-size="13" fill="#6a1b9a" text-anchor="middle">triple redondance sur T_H2_BP</text>
-
-    <rect x="1022" y="224" width="228" height="66" rx="6" fill="#ffffff" stroke="#6a1b9a" stroke-width="2"/>
-    <text x="1136" y="246" font-size="15" font-weight="700" fill="#4a148c" text-anchor="middle">C_H2_Local_1 · _2 · _3</text>
-    <text x="1136" y="268" font-size="13" fill="#6a1b9a" text-anchor="middle">triple redondance sur Local</text>
-
-    <rect x="1022" y="300" width="228" height="52" rx="6" fill="#ffffff" stroke="#6a1b9a" stroke-width="2"/>
-    <text x="1136" y="322" font-size="15" font-weight="700" fill="#4a148c" text-anchor="middle">C_ratio_H2_Membrane</text>
-    <text x="1136" y="342" font-size="13" fill="#6a1b9a" text-anchor="middle">lit un RAPPORT H2/(H2+O2)</text>
+  <g id="vent">
+    <rect x="780" y="288" width="200" height="56" rx="6" fill="#eceff1" stroke="#90a4ae" stroke-width="2"/>
+    <text x="880" y="313" font-size="15" font-weight="600" fill="#455a64" text-anchor="middle">O2 · produced,</text>
+    <text x="880" y="334" font-size="15" fill="#546e7a" text-anchor="middle">wired to nothing</text>
   </g>
 
-  <line x1="216" y1="174" x2="504" y2="174" stroke="#1565c0" stroke-width="4" marker-end="url(#p-w)"/>
-  <line x1="216" y1="286" x2="272" y2="180" stroke="#f57f17" stroke-width="4" marker-end="url(#p-e)"/>
-  <line x1="216" y1="332" x2="272" y2="184" stroke="#f57f17" stroke-width="4" marker-end="url(#p-e)"/>
-  <line x1="364" y1="194" x2="364" y2="200" stroke="#f57f17" stroke-width="4" marker-end="url(#p-e)"/>
-  <line x1="448" y1="236" x2="504" y2="200" stroke="#f57f17" stroke-width="4" marker-end="url(#p-e)"/>
-  <line x1="696" y1="180" x2="752" y2="180" stroke="#2e7d32" stroke-width="4" stroke-dasharray="9 5" marker-end="url(#p-h)"/>
-  <line x1="696" y1="200" x2="752" y2="244" stroke="#2e7d32" stroke-width="4" stroke-dasharray="9 5" marker-end="url(#p-h)"/>
-  <line x1="859" y1="278" x2="859" y2="282" stroke="#2e7d32" stroke-width="4" stroke-dasharray="9 5" marker-end="url(#p-h)"/>
-  <line x1="958" y1="180" x2="1014" y2="180" stroke="#6a1b9a" stroke-width="3" stroke-dasharray="2 4" marker-end="url(#p-s)"/>
-  <line x1="958" y1="248" x2="1014" y2="248" stroke="#6a1b9a" stroke-width="3" stroke-dasharray="2 4" marker-end="url(#p-s)"/>
-  <line x1="958" y1="320" x2="1014" y2="320" stroke="#6a1b9a" stroke-width="3" stroke-dasharray="2 4" marker-end="url(#p-s)"/>
+  <line x1="220" y1="132" x2="368" y2="176" stroke="#1565c0" stroke-width="4.5" marker-end="url(#p-w)"/>
+  <text x="272" y="142" font-size="15" fill="#1565c0" font-weight="600">2.0</text>
 
-  <rect x="990" y="378" width="276" height="44" rx="7" fill="#ffffff" stroke="#455a64" stroke-width="2"/>
-  <text x="1128" y="406" font-size="16" font-weight="700" fill="#263238" text-anchor="middle">Consumer · sinusoïdal</text>
-  <line x1="900" y1="352" x2="1050" y2="372" stroke="#2e7d32" stroke-width="4" stroke-dasharray="9 5" marker-end="url(#p-h)"/>
+  <line x1="220" y1="266" x2="368" y2="228" stroke="#f57f17" stroke-width="4.5" marker-end="url(#p-e)"/>
+  <text x="272" y="266" font-size="15" fill="#e65100" font-weight="600">0.5 asked</text>
 
-  <g id="mapping">
-    <rect x="36" y="440" width="1230" height="290" rx="10" fill="#f5f7fa" stroke="#b0bec5" stroke-width="1.8"/>
-    <text x="60" y="472" font-size="20" font-weight="700" fill="#263238">Ce que chaque partie devient en muscadet 2.0</text>
+  <line x1="624" y1="176" x2="772" y2="176" stroke="#2e7d32" stroke-width="4.5" stroke-dasharray="9 5" marker-end="url(#p-h)"/>
+  <text x="698" y="166" font-size="15" fill="#1b5e20" font-weight="600">H2 0.5</text>
 
-    <text x="60" y="506" font-size="16" font-weight="700" fill="#0d47a1">Source, Pump</text>
-    <text x="330" y="506" font-size="16" fill="#37474f">SourceContinuous · un débit déclaré</text>
+  <line x1="624" y1="240" x2="772" y2="308" stroke="#2e7d32" stroke-width="4.5" stroke-dasharray="9 5" marker-end="url(#p-h)"/>
+  <text x="690" y="290" font-size="15" fill="#1b5e20" font-weight="600">O2 0.5</text>
 
-    <text x="60" y="538" font-size="16" font-weight="700" fill="#e65100">SourceSinusoidale ×2</text>
-    <text x="330" y="538" font-size="16" fill="#37474f">SourceSinusoidalContinuous · profil temporel, amplitude et période déclarées</text>
-
-    <text x="60" y="570" font-size="16" font-weight="700" fill="#1b5e20">Stack</text>
-    <text x="330" y="570" font-size="16" fill="#37474f">TransformerContinuous · les coefficients cons / prod, réactif limitant compris</text>
-
-    <text x="60" y="602" font-size="16" font-weight="700" fill="#1b5e20">Battery, Tank ×3</text>
-    <text x="330" y="602" font-size="16" fill="#37474f">CapacityContinuous · volumes multi-constituants, sortie plafonnée</text>
-
-    <text x="60" y="634" font-size="16" font-weight="700" fill="#4a148c">Sensor ×3 redondants</text>
-    <text x="330" y="634" font-size="16" fill="#37474f">SensorContinuous avec combine="median" · un capteur bloqué ne déplace plus le vote</text>
-
-    <text x="60" y="666" font-size="16" font-weight="700" fill="#4a148c">C_ratio_H2_Membrane</text>
-    <text x="330" y="666" font-size="16" fill="#37474f">publication par constituant · le rapport H2/(H2+O2) devient lisible</text>
-
-    <text x="60" y="698" font-size="16" font-weight="700" fill="#c62828">fuites membrane</text>
-    <text x="330" y="698" font-size="16" fill="#37474f">couple de transfert · une quantité mue par un gradient, non par une demande</text>
-  </g>
-
-  <g id="status">
-    <rect x="36" y="748" width="1230" height="82" rx="10" fill="#fff8e1" stroke="#f57f17" stroke-width="1.8"/>
-    <text x="60" y="778" font-size="17" font-weight="700" fill="#e65100">État du portage</text>
-    <text x="60" y="804" font-size="15" fill="#4e342e">PORTÉ ET ASSERTÉ dans muscadet : la tranche S_H2O → Electro → Local avec B1, quatre composants livrés, aucune sous-classe.</text>
-    <text x="60" y="824" font-size="15" fill="#4e342e">NON PORTÉ : les sources sinusoïdales, la distribution, les capteurs redondants, la membrane et la ventilation. Le chemin est ouvert, le travail ne l'est pas.</text>
-  </g>
 </svg>

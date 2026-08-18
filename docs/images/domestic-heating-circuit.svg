@@ -1,7 +1,7 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1180 700" width="1180" height="700"
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 480" width="1120" height="480"
      font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif">
 
-  <rect x="0" y="0" width="1180" height="700" fill="#ffffff"/>
+  <rect x="0" y="0" width="1120" height="480" fill="#ffffff"/>
 
   <defs>
     <marker id="dh-e" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
@@ -12,105 +12,73 @@
       <path d="M 0 0 L 10 5 L 0 10 z" fill="#00695c"/></marker>
   </defs>
 
-  <text x="40" y="46" font-size="26" font-weight="700" fill="#212121">Circuit d'eau chaude : pompe à chaleur, appoint, ballon, pertes</text>
-  <text x="40" y="74" font-size="17" fill="#546e7a">Débits en kW. Chaque valeur est vérifiable à la main et assertée par un test.</text>
+  <text x="36" y="42" font-size="24" font-weight="700" fill="#212121">Domestic hot water: the model</text>
 
   <g id="legend">
-    <line x1="690" y1="40" x2="730" y2="40" stroke="#f57f17" stroke-width="5"/>
-    <text x="738" y="46" font-size="16" fill="#f57f17" font-weight="600">électricité</text>
-    <line x1="850" y1="40" x2="890" y2="40" stroke="#c62828" stroke-width="5" stroke-dasharray="9 5"/>
-    <text x="898" y="46" font-size="16" fill="#c62828" font-weight="600">chaleur</text>
-    <line x1="1000" y1="40" x2="1040" y2="40" stroke="#00695c" stroke-width="3" stroke-dasharray="2 4"/>
-    <text x="1048" y="46" font-size="16" fill="#00695c" font-weight="600">signal</text>
+    <line x1="640" y1="36" x2="676" y2="36" stroke="#f57f17" stroke-width="5"/>
+    <text x="684" y="42" font-size="15" fill="#f57f17" font-weight="600">electricity</text>
+    <line x1="790" y1="36" x2="826" y2="36" stroke="#c62828" stroke-width="5" stroke-dasharray="9 5"/>
+    <text x="834" y="42" font-size="15" fill="#c62828" font-weight="600">heat</text>
+    <line x1="900" y1="36" x2="936" y2="36" stroke="#00695c" stroke-width="3" stroke-dasharray="2 4"/>
+    <text x="944" y="42" font-size="15" fill="#00695c" font-weight="600">signal</text>
   </g>
 
-  <g id="supplies">
-    <rect x="40" y="130" width="150" height="72" rx="7" fill="#fff8e1" stroke="#f57f17" stroke-width="2"/>
-    <text x="115" y="158" font-size="17" font-weight="700" fill="#e65100" text-anchor="middle">DÉPART PAC</text>
-    <text x="115" y="184" font-size="17" fill="#e65100" text-anchor="middle">2 kW</text>
+  <rect x="36" y="96" width="140" height="64" rx="6" fill="#fff8e1" stroke="#f57f17" stroke-width="2"/>
+  <text x="106" y="122" font-size="15" font-weight="700" fill="#e65100" text-anchor="middle">SUPPLY · pump</text>
+  <text x="106" y="146" font-size="15" fill="#e65100" text-anchor="middle">2 kW</text>
 
-    <rect x="40" y="298" width="150" height="72" rx="7" fill="#fff8e1" stroke="#f57f17" stroke-width="2"/>
-    <text x="115" y="326" font-size="17" font-weight="700" fill="#e65100" text-anchor="middle">DÉPART APP.</text>
-    <text x="115" y="352" font-size="17" fill="#e65100" text-anchor="middle">3 kW</text>
-  </g>
+  <rect x="36" y="250" width="140" height="64" rx="6" fill="#fff8e1" stroke="#f57f17" stroke-width="2"/>
+  <text x="106" y="276" font-size="15" font-weight="700" fill="#e65100" text-anchor="middle">SUPPLY · backup</text>
+  <text x="106" y="300" font-size="15" fill="#e65100" text-anchor="middle">3 kW</text>
 
-  <g id="heaters">
-    <rect x="290" y="120" width="200" height="92" rx="8" fill="#ffffff" stroke="#1565c0" stroke-width="2.5"/>
-    <text x="390" y="150" font-size="19" font-weight="700" fill="#0d47a1" text-anchor="middle">POMPE À CHALEUR</text>
-    <text x="390" y="176" font-size="16" fill="#37474f" text-anchor="middle">2 élec → 7 chaleur</text>
-    <text x="390" y="199" font-size="16" font-weight="600" fill="#1565c0" text-anchor="middle">COP 3,5</text>
+  <rect x="256" y="88" width="192" height="80" rx="7" fill="#ffffff" stroke="#1565c0" stroke-width="2.5"/>
+  <text x="352" y="114" font-size="17" font-weight="700" fill="#0d47a1" text-anchor="middle">HEAT PUMP</text>
+  <text x="352" y="138" font-size="15" fill="#37474f" text-anchor="middle">2 elec → 7 heat</text>
+  <text x="352" y="158" font-size="15" font-weight="600" fill="#1565c0" text-anchor="middle">COP 3.5</text>
 
-    <rect x="290" y="288" width="200" height="92" rx="8" fill="#ffffff" stroke="#78909c" stroke-width="2.5"/>
-    <text x="390" y="318" font-size="19" font-weight="700" fill="#455a64" text-anchor="middle">APPOINT</text>
-    <text x="390" y="344" font-size="16" fill="#37474f" text-anchor="middle">3 élec → 3 chaleur</text>
-    <text x="390" y="367" font-size="16" font-weight="600" fill="#455a64" text-anchor="middle">COP 1</text>
-  </g>
+  <rect x="256" y="242" width="192" height="80" rx="7" fill="#ffffff" stroke="#78909c" stroke-width="2.5"/>
+  <text x="352" y="268" font-size="17" font-weight="700" fill="#455a64" text-anchor="middle">BACKUP</text>
+  <text x="352" y="292" font-size="15" fill="#37474f" text-anchor="middle">3 elec → 3 heat</text>
+  <text x="352" y="312" font-size="15" font-weight="600" fill="#455a64" text-anchor="middle">COP 1</text>
 
-  <g id="tank">
-    <rect x="600" y="180" width="190" height="150" rx="8" fill="#fffde7" stroke="#f9a825" stroke-width="3"/>
-    <text x="695" y="212" font-size="19" font-weight="700" fill="#263238" text-anchor="middle">BALLON</text>
-    <text x="695" y="240" font-size="16" fill="#546e7a" text-anchor="middle">200 L · 0,2325 kWh/K</text>
-    <text x="695" y="268" font-size="16" fill="#546e7a" text-anchor="middle">15 → 60 °C</text>
-    <text x="695" y="300" font-size="17" font-weight="700" fill="#b71c1c" text-anchor="middle">10,46 kWh</text>
-    <text x="695" y="322" font-size="15" fill="#546e7a" text-anchor="middle">à stocker</text>
-  </g>
+  <rect x="552" y="150" width="180" height="130" rx="7" fill="#fffde7" stroke="#f9a825" stroke-width="3"/>
+  <text x="642" y="180" font-size="17" font-weight="700" fill="#263238" text-anchor="middle">CYLINDER</text>
+  <text x="642" y="206" font-size="15" fill="#546e7a" text-anchor="middle">200 L · 0.2325 kWh/K</text>
+  <text x="642" y="232" font-size="15" fill="#546e7a" text-anchor="middle">15 → 60 °C</text>
+  <text x="642" y="262" font-size="16" font-weight="700" fill="#b71c1c" text-anchor="middle">10.46 kWh</text>
 
-  <g id="thermostat">
-    <rect x="600" y="392" width="190" height="80" rx="8" fill="#e0f2f1" stroke="#00695c" stroke-width="2.5"/>
-    <text x="695" y="420" font-size="18" font-weight="700" fill="#004d40" text-anchor="middle">THERMOSTAT</text>
-    <text x="695" y="446" font-size="16" fill="#00695c" text-anchor="middle">marche &lt; 55 °C</text>
-    <text x="695" y="464" font-size="16" fill="#00695c" text-anchor="middle">arrêt &gt; 60 °C</text>
-  </g>
+  <rect x="552" y="340" width="180" height="72" rx="7" fill="#e0f2f1" stroke="#00695c" stroke-width="2.5"/>
+  <text x="642" y="366" font-size="16" font-weight="700" fill="#004d40" text-anchor="middle">THERMOSTAT</text>
+  <text x="642" y="390" font-size="15" fill="#00695c" text-anchor="middle">on &lt; 55 °C · off &gt; 60 °C</text>
 
-  <g id="losses">
-    <rect x="890" y="180" width="180" height="86" rx="8" fill="#ffffff" stroke="#6a1b9a" stroke-width="2.5"/>
-    <text x="980" y="208" font-size="18" font-weight="700" fill="#4a148c" text-anchor="middle">PERTES</text>
-    <text x="980" y="232" font-size="15" fill="#4a148c" text-anchor="middle">conduit</text>
-    <text x="980" y="254" font-size="15" fill="#546e7a" text-anchor="middle">UA · (T − 15)</text>
+  <rect x="828" y="150" width="176" height="80" rx="7" fill="#ffffff" stroke="#6a1b9a" stroke-width="2.5"/>
+  <text x="916" y="176" font-size="16" font-weight="700" fill="#4a148c" text-anchor="middle">LOSS · conduit</text>
+  <text x="916" y="200" font-size="15" fill="#546e7a" text-anchor="middle">UA · (T − 15)</text>
+  <text x="916" y="220" font-size="15" font-weight="600" fill="#4a148c" text-anchor="middle">0.0625 kW at 60 °C</text>
 
-    <rect x="890" y="300" width="180" height="60" rx="7" fill="#eceff1" stroke="#90a4ae" stroke-width="2"/>
-    <text x="980" y="336" font-size="17" font-weight="600" fill="#455a64" text-anchor="middle">AMBIANCE 15 °C</text>
-  </g>
+  <rect x="828" y="268" width="176" height="56" rx="6" fill="#eceff1" stroke="#90a4ae" stroke-width="2"/>
+  <text x="916" y="302" font-size="16" font-weight="600" fill="#455a64" text-anchor="middle">AMBIENT 15 °C</text>
 
-  <line x1="190" y1="166" x2="282" y2="166" stroke="#f57f17" stroke-width="4.5" marker-end="url(#dh-e)"/>
-  <line x1="190" y1="334" x2="282" y2="334" stroke="#f57f17" stroke-width="4.5" marker-end="url(#dh-e)"/>
+  <line x1="176" y1="128" x2="248" y2="128" stroke="#f57f17" stroke-width="4.5" marker-end="url(#dh-e)"/>
+  <line x1="176" y1="282" x2="248" y2="282" stroke="#f57f17" stroke-width="4.5" marker-end="url(#dh-e)"/>
 
-  <line x1="490" y1="166" x2="592" y2="210" stroke="#c62828" stroke-width="4.5" stroke-dasharray="9 5" marker-end="url(#dh-h)"/>
-  <text x="530" y="176" font-size="17" font-weight="700" fill="#c62828">7 kW</text>
+  <line x1="448" y1="128" x2="544" y2="176" stroke="#c62828" stroke-width="4.5" stroke-dasharray="9 5" marker-end="url(#dh-h)"/>
+  <text x="484" y="134" font-size="16" font-weight="700" fill="#c62828">7 kW</text>
+  <line x1="448" y1="282" x2="544" y2="252" stroke="#c62828" stroke-width="4.5" stroke-dasharray="9 5" marker-end="url(#dh-h)"/>
+  <text x="484" y="286" font-size="16" font-weight="700" fill="#c62828">3 kW</text>
 
-  <line x1="490" y1="334" x2="592" y2="300" stroke="#c62828" stroke-width="4.5" stroke-dasharray="9 5" marker-end="url(#dh-h)"/>
-  <text x="530" y="330" font-size="17" font-weight="700" fill="#c62828">3 kW</text>
+  <line x1="732" y1="190" x2="820" y2="190" stroke="#c62828" stroke-width="4" stroke-dasharray="9 5" marker-end="url(#dh-h)"/>
+  <line x1="916" y1="230" x2="916" y2="260" stroke="#c62828" stroke-width="4" stroke-dasharray="9 5" marker-end="url(#dh-h)"/>
 
-  <line x1="790" y1="222" x2="882" y2="222" stroke="#c62828" stroke-width="4" stroke-dasharray="9 5" marker-end="url(#dh-h)"/>
-  <text x="836" y="212" font-size="15" fill="#c62828" text-anchor="middle" font-weight="600">0,0625</text>
-  <line x1="980" y1="266" x2="980" y2="292" stroke="#c62828" stroke-width="4" stroke-dasharray="9 5" marker-end="url(#dh-h)"/>
-
-  <path d="M 600 432 L 500 432 L 500 392 L 390 392 L 390 384" fill="none" stroke="#00695c" stroke-width="3"
+  <path d="M 552 376 L 480 376 L 480 340 L 352 340 L 352 328" fill="none" stroke="#00695c" stroke-width="3"
         stroke-dasharray="2 4" marker-end="url(#dh-s)"/>
-  <path d="M 640 392 L 640 216 L 596 216" fill="none" stroke="#00695c" stroke-width="3"
+  <path d="M 592 340 L 592 186 L 548 186" fill="none" stroke="#00695c" stroke-width="3"
         stroke-dasharray="2 4" marker-end="url(#dh-s)"/>
-  <path d="M 480 216 L 540 216 L 540 388 L 490 388 L 490 380" fill="none" stroke="#00695c" stroke-width="3"
+  <path d="M 448 168 L 500 168 L 500 336 L 470 336 L 470 328" fill="none" stroke="#00695c" stroke-width="3"
         stroke-dasharray="2 4" marker-end="url(#dh-s)"/>
-  <text x="556" y="410" font-size="14" fill="#00695c">PAC saine ?</text>
+  <text x="506" y="356" font-size="14" fill="#00695c">pump healthy?</text>
 
-  <path d="M 890 216 L 860 216 L 860 150 L 700 150 L 700 176" fill="none" stroke="#00695c" stroke-width="3"
+  <path d="M 828 186 L 800 186 L 800 122 L 646 122 L 646 146" fill="none" stroke="#00695c" stroke-width="3"
         stroke-dasharray="2 4" marker-end="url(#dh-s)"/>
-  <text x="770" y="142" font-size="14" fill="#00695c">niveau</text>
-
-  <g id="expect">
-    <rect x="40" y="500" width="1100" height="172" rx="10" fill="#f5f7fa" stroke="#b0bec5" stroke-width="1.8"/>
-    <text x="64" y="530" font-size="19" font-weight="700" fill="#263238">Ce qu'une simulation doit montrer</text>
-
-    <text x="64" y="562" font-size="16" fill="#37474f">Montée à froid, PAC seule : 7 kW moins 0,0625 kW de pertes à 60 °C</text>
-    <text x="880" y="562" font-size="17" font-weight="700" fill="#1b5e20">1,4946 h</text>
-
-    <text x="64" y="592" font-size="16" fill="#37474f">Rapport chaleur produite / électricité tirée, à tout instant</text>
-    <text x="880" y="592" font-size="17" font-weight="700" fill="#1b5e20">3,5</text>
-
-    <text x="64" y="622" font-size="16" fill="#37474f">Appoint tant que la PAC est saine</text>
-    <text x="880" y="622" font-size="17" font-weight="700" fill="#1b5e20">0 kW</text>
-
-    <text x="64" y="652" font-size="16" fill="#37474f">PAC en panne : l'appoint prend le relais, même chaleur pour</text>
-    <text x="880" y="652" font-size="17" font-weight="700" fill="#b71c1c">3,5 × l'électricité</text>
-  </g>
+  <text x="714" y="114" font-size="14" fill="#00695c">level</text>
 </svg>

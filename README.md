@@ -1654,13 +1654,9 @@ Two consequences for assertions. An absolute or relative bound tighter than abou
 
 ## Worked models
 
-Five complete models, each with figures that can be checked outside MUSCADET, are documented in [`docs/USE_CASES.md`](docs/USE_CASES.md): the heated-tank dynamic-reliability benchmark, advection measured against the analytic mixing solution, a counter-flow exchanger validated against the effectiveness-NTU relation, an industrial electrolysis plant built from shipped components alone, and a domestic hot-water circuit with a heat pump backed by an electric resistance.
+[`docs/USE_CASES.md`](docs/USE_CASES.md) documents five complete models, each carrying figures computed outside MUSCADET: the heated-tank dynamic-reliability benchmark, advection against the analytic mixing solution, a counter-flow exchanger against the effectiveness-NTU relation, an industrial electrolysis plant built from shipped components alone, and a domestic hot-water circuit with a heat pump backed by an electric resistance.
 
-Two of them carry step-by-step diagrams of the exchanged flows, so a simulation can be checked against a picture rather than against prose:
-
-- [advection, at three stops](docs/images/advection-step-by-step.svg)
-- [the domestic hot-water circuit](docs/images/domestic-heating-circuit.svg)
-- [the IMDR hydrogen chain, and what each part becomes in 2.0](docs/images/h2-plant-imdr.svg)
+Each carries two figures: the installation as an engineer would draw it, and the model with the rate on every connection, so a run can be checked against a picture rather than against prose.
 
 ## More Examples
 

@@ -1,18 +1,16 @@
 # Worked models
 
-Three complete MUSCADET models, each carrying figures that can be checked
-outside the library. They exist as executable tests rather than as prose, so
-they cannot drift from the code they document: every number below is asserted.
+Five MUSCADET models, each carrying figures computed outside the library. They
+are executable tests, so they cannot drift from the code: every number below is
+asserted.
 
-| Model | What it demonstrates | Checked against |
+| Model | Demonstrates | Checked against |
 |---|---|---|
-| [Heated tank](#the-heated-tank) | discrete regulation, redundancy, feared events, and where the knowledge base stops | a published dynamic-reliability benchmark |
-| [Advection](#advection-a-quantity-travelling-with-its-carrier) | a quantity carried by its stream, in and out of a mixing volume | the analytic solution of the mixing ODE |
-| [Counter-flow exchanger](#the-counter-flow-exchanger) | transfer pairs carrying a computed quantity between two balances | a closed-form correlation from the heat-transfer literature |
-| [Industrial hydrogen chain](#the-industrial-hydrogen-chain) | an electrolysis plant composed of shipped components only, no subclass | the IMDR "Industrie 4.0" study, open data |
-| [Domestic hot water](#the-domestic-hot-water-circuit) | rules with coefficients, capacity, thermostat, redundancy and standing loss in one system | elementary physics on ordinary domestic figures |
-
-Run any of them with `pytest`:
+| [Heated tank](#heated-tank) | discrete regulation, redundancy, feared events | a published dynamic-reliability benchmark |
+| [Advection](#advection) | a quantity carried by its stream through a mixing volume | the analytic solution of the mixing ODE |
+| [Counter-flow exchanger](#counter-flow-exchanger) | transfer pairs moving a computed quantity between balances | the effectiveness-NTU relation |
+| [Electrolysis plant](#electrolysis-plant) | an industrial plant built from shipped components alone | the IMDR "Industrie 4.0" study, open data |
+| [Domestic hot water](#domestic-hot-water) | rules, capacity, thermostat, redundancy and standing loss in one system | elementary physics on ordinary domestic figures |
 
 ```sh
 .venv/bin/python -m pytest tests/test_heated_tank_001.py -v
@@ -24,103 +22,58 @@ Run any of them with `pytest`:
 
 ---
 
-## The heated tank
+## Heated tank
 
 `tests/test_heated_tank_001.py`
 
 The classical dynamic-reliability benchmark: a tank whose level is regulated
-between two thresholds by two pumps and a valve, with dry-out, overflow and
-overheating as the feared events. It is the standard case for comparing
-approaches that mix continuous dynamics with discrete failures, which is
-exactly what MUSCADET 2.0 claims to do.
+between two thresholds by two pumps and a valve, with dry-out and overflow as
+feared events. Origins, obtained through OpenAlex:
 
-**Origins**, obtained through OpenAlex rather than from memory:
-
-- T. Aldemir, "Computer-Assisted Markov Failure Modeling of Process Control
-  Systems", *IEEE Transactions on Reliability* (1987),
-  DOI `10.1109/tr.1987.5222318`
-- M. Marseguerra and E. Zio, "Monte Carlo approach to PSA for dynamic process
-  systems", *Reliability Engineering & System Safety* (1996),
+- T. Aldemir, *IEEE Transactions on Reliability* (1987), DOI `10.1109/tr.1987.5222318`
+- M. Marseguerra and E. Zio, *Reliability Engineering & System Safety* (1996),
   DOI `10.1016/0951-8320(95)00131-x`
 
-The parameter set is the one shipped with PyCATSHOO
-(`Samples/HeatedTank/S8d`), so the figures are directly comparable:
+Parameters are those of the PyCATSHOO distribution (`Samples/HeatedTank/S8d`):
+tank section 1, dry-out at 4, overflow at 10, regulation band 6 to 8, nominal
+flow 1.5 per pump and per valve, failure rates 0.0022831, 0.0028571 and
+0.0015625 per hour.
 
-| Parameter | Value |
-|---|---|
-| tank section | 1 |
-| dry-out level | 4 |
-| overflow level | 10 |
-| regulation band | 6 to 8 |
-| nominal flow, per pump and per valve | 1.5 |
-| failure rates `lambda0` (P1 / P2 / V3) | 0.0022831 / 0.0028571 / 0.0015625 per hour |
+### Results
 
-### What the model reproduces
+Both pumps run below 6 and stop above 8; the valve opens above 8 and shuts
+below 6. The level cycles with a period of **exactly 2 hours**, being 2/3.0 h
+filling against two pumps and 2/1.5 h draining through one valve. Both feared
+events are driven deterministically and arrive when the ramp predicts.
 
-The regulation is the benchmark's, deadband included: both pumps run below 6
-and stop above 8, the valve opens above 8 and shuts below 6. The level
-therefore cycles between the thresholds with a period of **exactly 2 hours**
-(2/3.0 h filling against two pumps, 2/1.5 h draining through one valve), which
-the test asserts rather than describes.
+*Stuck closed* is a derating of the continuous output to zero. *Stuck on* has no
+equivalent, since a derating can only subtract: forced production goes through a
+discrete output of the component's own, produced unconditionally with its
+availability initially false, which the failure mode clamps true and a third
+rule guard reads back.
 
-Both feared events are driven deterministically: both pumps stuck on take the
-level to overflow, and dead pumps with a stuck valve take it to dry-out, each
-arriving when the ramp says it should.
+### Limits
 
-**Stuck closed** is a derating of the continuous output to 0, the library's own
-idiom. **Stuck on** has no idiom, and the model says so: a derating can only
-subtract, so forced production goes through a discrete output of the
-component's own, produced unconditionally with its availability initially
-false, which the failure mode clamps true and a third rule guard reads back.
+The temperature-dependent failure rate is not reproduced.
+`add_exp_failure_mode` already creates a variable for the rate and hands the
+*variable object* to PyCATSHOO's `newLaw`, so the parameter is a model variable
+rather than a literal; what is missing is `ITransition.setModifiable`, without
+which the engine draws every firing time from the parameter's initial value.
 
-### What it does not reproduce, and why
+A watched threshold cannot yet name one constituent of a multi-constituent
+volume: a sensor's band is built from the `{name, op, value}` operand
+vocabulary, which names a channel and has no slot for a constituent of one. The
+reading is available (see [Advection](#advection)); the guard is not.
 
-Four boundary tests state the limits rather than papering over them. **Two of
-the four have since moved**, and the module's own docstrings are the record of
-which.
-
-One still stands:
-
-- **the temperature-dependent failure rate is not ported.** `add_exp_failure_mode`
-  already creates a real variable for the rate and hands the *variable object*
-  to PyCATSHOO's `newLaw`, so the parameter is a model variable rather than a
-  literal. What is missing is `ITransition.setModifiable`: without it the
-  engine draws every firing time from the parameter's initial value, so writing
-  the variable during a run changes nothing.
-
-**Measurement.** A channel now publishes each constituent, so `heat / water`
-is observable. What no declaration reaches yet is a *watched threshold* on one
-constituent: a sensor's band is built from the `{name, op, value}` operand
-vocabulary, which names a channel and has no slot for a constituent of one.
-
-**Advection.** The temperature ODE's `sum_i q_i (T_i - T)` term was recorded
-here as needing a carried-flow notion that had not shipped. That was true when
-it was written and is no longer, and
-[`tests/test_advection_001.py`](../tests/test_advection_001.py) proves it
-against the analytic solution. See [Advection](#advection-a-quantity-travelling-with-its-carrier)
-below: the two halves take two different mechanisms, both of which shipped in
-this release. Porting the full heated-tank temperature ODE is now a question of
-assembling them, not of a missing notion.
-
-### A note on cost
-
-The benchmark's Monte-Carlo estimate is out of reach here and is deliberately
-not attempted: one 200 h sequence costs about 37 s, so the reference's 1000
-sequences over 1000 h would run for days. What the module asserts instead is
-the deterministic sequence behind each feared event, which is what a
-regression needs.
+The benchmark's Monte-Carlo estimate is out of reach: one 200 h sequence costs
+about 37 s, so 1000 sequences over 1000 h would run for days. The module
+asserts the deterministic sequence behind each feared event instead.
 
 ---
 
-## Advection: a quantity travelling with its carrier
+## Advection
 
 `tests/test_advection_001.py`
-
-![Advection step by step](images/advection-step-by-step.svg)
-
-The figure is the model at three stops, with the rate on every connection.
-Every number in it is asserted by the test, so it doubles as the reference a
-simulation of this arrangement can be checked against.
 
 A tank fed at one temperature and drained at the same rate mixes toward the
 inlet:
@@ -129,148 +82,94 @@ inlet:
 dT/dt = q (T_in - T) / V        T(t) = T_in + (T_0 - T_in) exp(-q t / V)
 ```
 
-This is the term the heated-tank benchmark needs, and it was documented as
-inexpressible. It is not. The two halves take two different mechanisms, and
-both shipped in this release, so nothing here needs a dedicated "carried flow"
-notion.
+Two mechanisms are needed, and neither substitutes for the other.
 
-### The inflow: a rule
+**The inflow is a rule.** Coefficients are per unit consumed, so
+`cons={"water": 1}, prod={"water": 1, "heat": T_in}` produces heat exactly in
+proportion to the water it passes, at any rate. The receiving volume must
+declare a `fill_rate`, or it asks for no heat and the enthalpy never lands.
 
-A rule's coefficients are per unit consumed, so
+**The outflow is a conduit.** It carries the tank's own temperature, so its rate
+is `q x H/V` with both terms moving, where a rule coefficient and a demand
+default are constants. A transfer pair states a computed quantity, reading `H`
+and `V` separately over a per-constituent measurement channel. Without that
+channel the total of a water-plus-heat volume is neither term and the ratio is
+unreachable.
 
-```python
-self.add_rules(
-    name="carry_in",
-    rules=[dict(cons={"water": 1.0}, prod={"water": 1.0, "heat": T_IN})],
-)
-```
+![Advection: rates at three stops](images/advection-step-by-step.svg)
 
-produces heat exactly in proportion to the water it passes. The water transits
-unchanged and the enthalpy it carries appears beside it, at any rate, with
-nothing tying them by declaration.
+### Results
 
-One thing has to be declared for it to arrive: the receiving volume must
-**accept** the heat. A capacity claims for itself only what its `fill_rate`
-says, so without one the tank asks for no heat and the inlet's enthalpy never
-lands, however correctly the rule computed it.
+Fed at 80 degrees from 20, `q = 2` into `V = 100`, the model tracks the analytic
+solution at every stop and reaches **39.781 degrees at 20 h** against 39.781
+computed outside it. The figure gives the rate on every connection at three
+stops, so a run can be checked directly: the inlet carries a constant 160 while
+the meter rises 40, 61.8, 79.6 as the tank warms, and net accumulation falls
+from 120 to 80.4 per hour. Volume is conserved, temperature is monotone and
+never passes the inlet, and the energy balance closes.
 
-### The outflow: a conduit
+### Limit
 
-This is the half a rule cannot state. The outflow carries the tank's **own**
-temperature, so its enthalpy rate is `q x H/V` where both terms move. A rule
-coefficient is a constant and a demand default is a constant; what says *move
-exactly this much, which I computed* is a transfer pair:
-
-```python
-class OutletMeter(muscadet.ObjFlow):
-    def add_flows(self, **kwargs):
-        super().add_flows(**kwargs)
-        self.add_flow_continuous_in(name="heat")
-        self.add_flow_continuous_out(name="heat")
-        self.add_measurement_in(name="tank", flows=["water", "heat"])
-        self.add_transfer(
-            "carry_out",
-            flows=["heat", "heat"],
-            equation=muscadet.Transfer(fun=self.enthalpy_out, continuous=True),
-        )
-
-    def enthalpy_out(self, comp):
-        channel = comp.measurements_in["tank"]
-        water = channel.get_level("water")
-        return Q * channel.get_level("heat") / water if water > 0 else 0.0
-```
-
-Per-constituent publication is the other half of why this works now: a channel
-publishing only the total could not give `H` and `V` separately, and the total
-of a water-plus-heat volume is neither.
-
-### What it measures
-
-Fed at 80 degrees from 20, `q = 2` into `V = 100`, the model tracks the
-analytic solution at every stop and lands on **39.781 degrees at 20 h** against
-39.781 computed outside it. The volume is conserved throughout, the temperature
-is monotone and never passes the inlet, and the energy balance closes over the
-run.
-
-### What is still missing, precisely
-
-Not the physics: the **declaration**. Nothing ties the carried quantity to its
-carrier, so the modeller states the association twice, once in the rule's
-coefficients and once in the conduit's equation, and MUSCADET checks neither
-against the other. A declared association would make both automatic. Its
-absence is an ergonomic gap, not a modelling one.
+The declaration, not the physics. Nothing ties the carried quantity to its
+carrier, so the association is stated twice, once in the rule's coefficients and
+once in the conduit's equation, and MUSCADET checks neither against the other.
 
 ---
 
-## The counter-flow exchanger
+## Counter-flow exchanger
 
 `tests/test_literature_validation_001.py`
 
-A test that only compares MUSCADET to MUSCADET can be uniformly wrong. This one
-compares it to a result computed outside it: the counter-flow
-effectiveness-NTU relation of R. K. Shah and D. P. Sekulic, *Fundamentals of
-Heat Exchanger Design*, Wiley (2003), DOI `10.1002/9780470172605`.
+Compared against the counter-flow effectiveness-NTU relation of R. K. Shah and
+D. P. Sekulic, *Fundamentals of Heat Exchanger Design*, Wiley (2003),
+DOI `10.1002/9780470172605`.
 
-### What is validated, and what is assumed
-
-The distinction is easy to fudge, so the module states it. The correlation is
-an **input**: a single-node component cannot derive a counter-flow
-arrangement's effectiveness, and pretending otherwise would make the test
-circular.
-
-What is checked is everything downstream of it, and those are the properties a
-defect in the sweeps would break:
+The correlation is an **input**. A single-node component cannot derive a
+counter-flow arrangement's effectiveness, and pretending otherwise would make
+the test circular; what is checked is everything downstream of it.
 
 | Quantity | Value |
 |---|---|
-| hot stream capacity rate | 2000 W/K at 80 degrees in |
-| cold stream capacity rate | 4000 W/K at 20 degrees in |
+| hot stream | 2000 W/K at 80 degrees in |
+| cold stream | 4000 W/K at 20 degrees in |
 | `UA` | 2000 W/K, so NTU = 1 and Cr = 0.5 |
 | effectiveness | 0.5647 |
-| duty crossing the wall | 67768 W |
+| duty | 67768 W |
 | hot outlet | 46.116 degrees |
 | cold outlet | 36.942 degrees |
 
-plus: the energy balance closes, no temperature crossing occurs, and the
-smaller capacity rate swings twice as far as the larger one.
+The energy balance closes, no temperature crossing occurs, and the smaller
+capacity rate swings twice as far as the larger. The exchanger is a two-flow
+transfer pair whose equation forms both temperatures itself, from the raw
+enthalpy rates divided by the declared capacity rates.
 
-The exchanger is a two-flow transfer pair whose equation forms both
-temperatures itself, from the raw enthalpy rates the component receives divided
-by the declared capacity rates. That is the transfer-pair contract exercised on
-a real correlation rather than on a constant: MUSCADET hands the equation no
-intensive property.
-
-### What it measured about the platform
+### Precision floor
 
 A quantity crossing a PyCATSHOO variable carries about **seven significant
-digits**, not the fifteen a Python float suggests. A balance that closes
-exactly in Python reads `240000.0078125` against `240000.0`, and `0.0078125` is
-exactly half an ulp of single precision at that magnitude.
-
-Nothing leaks; it is representation. But it bounds every assertion in the
-project, and the file encodes both consequences rather than working around
-them. See the *Modelling pitfalls* section of the README.
+digits**. A balance closing exactly in Python reads `240000.0078125` against
+`240000.0`, which is half an ulp of single precision at that magnitude. Nothing
+leaks; it is representation. Two consequences: an assertion tighter than
+`rel=1e-7` measures the engine's storage, and a balance formed as the
+*difference* of two large stored quantities needs an absolute tolerance scaled
+to the operands' ulp, since the cancellation lifts that residual into the
+seventh digit.
 
 ---
 
-## The industrial hydrogen chain
+## Electrolysis plant
 
 `tests/test_h2_stack_001.py`
 
-The IMDR "Industrie 4.0" study: a water-and-electricity electrolysis plant with
-storage, redundant instruments and a membrane. Its figures are open data, so
-they appear here unaltered.
+The IMDR "Industrie 4.0" study, whose figures are open data: water and
+electricity into an electrolyser, hydrogen into a store, with a delay failure
+mode on the stack.
 
-![The IMDR hydrogen chain](images/h2-plant-imdr.svg)
+![Electrolysis plant: the installation](images/h2-plant-physical.svg)
 
-### What is ported, and what it proves
-
-The slice `S_H2O -> Electro -> Local`, with the battery `B1`, is ported and
-asserted. It earns its place for one reason above the others: **not a single
-component is subclassed**. What the original expresses by subclassing a flow
-object and overriding `compute_iflow` in Python, MUSCADET expresses as declared
-coefficients, and the whole plant is four `add_component` calls against
-`muscadet.kb.continuous`. The test asserts that, by reading back each
+**Not one component is subclassed.** What the original expresses by subclassing
+a flow object and overriding `compute_iflow` in Python, MUSCADET expresses as
+declared coefficients: the plant is four `add_component` calls against
+`muscadet.kb.continuous`, and the test asserts it by reading back each
 component's runtime type.
 
 | Component | Shipped class | Declaration |
@@ -278,82 +177,42 @@ component's runtime type.
 | `S_H2O` | `SourceContinuous` | water at a rate of 2 |
 | `B1` | `CapacityContinuous` | battery, capacity 100, stocked at 100 |
 | `Electro` | `TransformerContinuous` | `4 H2O + 1 Elec -> 1 H2 + 1 O2` |
-| `Local` | `CapacityContinuous` | tank, capacity 6, stocked at 3 |
+| `Local` | `CapacityContinuous` | store, capacity 6, stocked at 3 |
 
-`df_H2` fails the stack at t = 2 and repairs it at t = 4, derating every
-continuous output to zero in between.
+![Electrolysis plant: the model](images/h2-plant-imdr.svg)
 
-What the run shows, all of it asserted:
+### Results
 
-- **the limiting reagent as coefficients.** Water arrives at 2 against a
-  coefficient of 4, so the stack runs at scale 0.5 and produces 0.5 of
-  hydrogen, however full the battery. `min(H2O/4, Elec/1)` is what the two
-  coefficient maps state;
-- **two correlated outputs.** H2 and O2 come from one rule, so they move
-  together and one derating takes both down. That is why a rule set is declared
-  on the component rather than one output at a time;
-- **a demand bounded by what the other inputs can honour.** The stack asks its
-  battery for **0.5**, not its nominal 1. The original asked 1, was delivered 1,
-  reacted 0.5, and the missing 0.5 entered no reaction, no stock and no output.
-  MUSCADET's answer is the one the port takes as correct;
-- **a derated component draws nothing.** While the stack is down its water
-  intake reads 0, not the nominal 2. Water that is not converted, not stored and
-  not leaked simply vanishes otherwise;
-- **conservation.** The battery falls 100 to 98.5 and the tank rises 3 to 4.5:
-  1.5 of electricity for 1.5 of hydrogen.
+Water arrives at 2 against a coefficient of 4, so the stack runs at scale 0.5
+and produces 0.5 of hydrogen however full the battery: `min(H2O/4, Elec/1)` is
+what the two coefficient maps state. H2 and O2 come from one rule, so they move
+together and the failure mode takes both down between t = 2 and t = 4.
 
-### The full plant, and where it would go
-
-The complete study is 24 components, and it reads as a specification of what
-2.0 was built to express. The mapping is on the figure above; the parts not yet
-ported are the interesting ones:
-
-- **two sinusoidal sources**, solar at amplitude 25 over a 24-hour period and
-  wind at amplitude 4 over 6 hours, which is `SourceSinusoidalContinuous` and
-  the time-profile channel;
-- **six sensors in two triples**, on the low-pressure tank and on the local
-  tank. That is `combine="median"` over three publishers, where one stuck
-  instrument cannot move the vote;
-- **`C_ratio_H2_Membrane`**, which reads a *ratio* rather than a level. That
-  needs per-constituent publication, which shipped in this release;
-- **the membrane leaks**, hydrogen crossing to the oxygen side. Written in the
-  original as a percentage of production because a proportion was what the
-  formalism could say; a transfer pair is what says it properly;
-- **a distribution node** between the two electrical sources and the battery,
-  which is the allocation policies.
-
-Nothing here is blocked. The mechanisms exist and each has its own worked model
-elsewhere in this document. What is missing is the porting work itself, which
-belongs with the study rather than with the library.
+The stack asks its battery for **0.5**, not its nominal 1: asking for a full
+unit would claim electricity no reaction could use. The original asked 1, was
+delivered 1, reacted 0.5, and the missing 0.5 entered no reaction, no stock and
+no output. While the stack is down its water intake reads 0, not the nominal 2.
+Over the mission the battery falls 100 to 98.5 and the store rises 3 to 4.5:
+1.5 of electricity for 1.5 of hydrogen.
 
 ---
 
-## The domestic hot-water circuit
+## Domestic hot water
 
 `tests/test_domestic_heating_001.py`
 
-![Domestic hot-water circuit](images/domestic-heating-circuit.svg)
+A heat pump backed by an electric resistance, charging an insulated cylinder
+under thermostatic control and losing heat to the plant room.
 
-The integration case. Every mechanism the continuous layer carries meets on one
-small system that a heating engineer would recognise:
+![Domestic hot water: the installation](images/domestic-heating-physical.svg)
 
-- a **heat pump**, which is exactly a rule with two coefficients: the
-  coefficient of performance is the ratio of the produced to the consumed
-  coefficient and nothing else;
-- an **electric resistance** as backup, the same rule at COP 1, which is what
-  makes the redundancy interesting rather than cosmetic: it delivers the same
-  heat for three and a half times the electricity, and it runs only when the
-  pump is out;
-- a **capacity** holding the cylinder's stored energy, integrated by the solver;
-- a **thermostat** with a deadband, whose band is what stops the loop
-  chattering around a single setpoint;
-- a **failure mode** derating the pump's output to nothing;
-- a **transfer pair** for the standing loss, the one quantity here that moves
-  because a gradient makes it move rather than because somebody asked for it.
+Every mechanism of the continuous layer meets here: a rule with coefficients,
+where the coefficient of performance is the ratio of the produced to the
+consumed coefficient; a capacity integrating the stored energy; a sensor with a
+deadband; a failure mode derating an output; and a transfer pair for the
+standing loss, the one quantity here moving because a gradient makes it move.
 
-### The figures
-
-Ordinary domestic values, chosen so every one can be checked by hand:
+![Domestic hot water: the model](images/domestic-heating-circuit.svg)
 
 | Quantity | Value |
 |---|---|
@@ -362,48 +221,27 @@ Ordinary domestic values, chosen so every one can be checked by hand:
 | resistive backup | 3 kW electrical, COP 1 |
 | thermostat | on below 55 degrees, off above 60 |
 | standing loss | 1.5 kWh per day at a 45 K difference |
-| heat-up, 15 to 60 degrees | **1.4946 h** |
 
-The model asserts the pump's rated thermal output, the COP as a *ratio of two
-measured quantities* rather than as a value read back, that the backup stays
-off while the pump is healthy, that the standing loss follows the temperature
-difference, and that the tank heats at the net rate, measurably slower than the
-pump alone because of the loss.
+### Results
 
-### The three lessons it produced
+From a cold start at 15 degrees the pump alone reaches the 60 degree cut-out in
+**1.4946 h**, net of a 0.0625 kW standing loss at the top of the band. The
+coefficient of performance is asserted as a *ratio of two measured quantities*
+rather than read back. The backup delivers nothing while the pump is healthy;
+once it is not, the same heat costs three and a half times the electricity.
 
-Building this model was more instructive than the model. All three are now in
-the README's *Modelling pitfalls* section:
+### Modelling notes
 
-1. **The time unit decides whether a model is simulable.** In seconds, 19 s of
-   wall clock for 300 s of simulated time; in hours, the whole file in under a
-   second. Bisecting showed that removing the thermostat *and* the transfer
-   pair changed nothing.
-2. **A rule's coefficients are a ratio, not a rating.** Behind a shared supply
-   and a tank asking without bound, the 2 kW pump ran at scale 50 and delivered
-   350 kW. Each appliance now sits on its own rated supply, which is where a
-   breaker lives in the real installation.
-3. **An infinite source is not a large one.** `rate=math.inf` split between two
-   finite consumers delivered NaN into the tank level.
+The cylinder stores heat only, with the water mass a declared constant, because
+a watched threshold cannot name one constituent of a multi-constituent volume: a
+thermostat on a water-plus-heat tank would compare against the sum of a mass and
+an energy.
 
-### Two reading rules
+Two general reading rules. The initial condition is read *before* any step,
+since the first integration jumps straight to the next watched crossing. And
+stepping stops on transitions, not on dates: a helper advancing "to t = 0.7 h"
+stops at whatever crossing comes first.
 
-Both are general, and both are encoded in the file:
-
-- the **initial condition is read before any step**. The first integration
-  jumps straight to the next watched crossing, so a reading taken past it is no
-  longer a reading of a cold tank;
-- **stepping stops on transitions, not on dates.** A helper that advances "to
-  t = 0.7 h" will actually stop at whatever crossing comes first.
-
-### What it works around
-
-The cylinder stores **heat only**, with the water mass a declared constant.
-That is not convenience: a watched threshold cannot name one constituent of a
-multi-constituent volume yet, so a thermostat on a water-plus-heat tank would
-compare against the sum of a mass and an energy. Holding heat alone keeps the
-level proportional to the temperature and the thresholds exact.
-
-This is the same boundary the heated tank records, and it is the natural next
-piece of work: extending the operand vocabulary so a guard can name a
-constituent would let both models drop their workaround.
+Three lessons from building it are in the README's *Modelling pitfalls* section:
+the time unit decides whether a model is simulable, a rule's coefficients are a
+ratio rather than a rating, and an infinite source delivers NaN.

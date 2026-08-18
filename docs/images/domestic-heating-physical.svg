@@ -1,0 +1,88 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 980 500" width="980" height="500"
+     font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif">
+
+  <rect x="0" y="0" width="980" height="500" fill="#ffffff"/>
+
+  <defs>
+    <marker id="dp-r" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#c62828"/></marker>
+    <marker id="dp-e" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#f57f17"/></marker>
+    <pattern id="insul" width="10" height="10" patternUnits="userSpaceOnUse" patternTransform="rotate(45)">
+      <line x1="0" y1="0" x2="0" y2="10" stroke="#cfd8dc" stroke-width="4"/>
+    </pattern>
+  </defs>
+
+  <text x="36" y="42" font-size="24" font-weight="700" fill="#212121">Domestic hot water: the installation</text>
+
+  <g id="heat-pump">
+    <rect x="52" y="120" width="180" height="150" rx="8" fill="#eceff1" stroke="#37474f" stroke-width="2.5"/>
+    <circle cx="142" cy="182" r="42" fill="#ffffff" stroke="#37474f" stroke-width="2"/>
+    <path d="M 142 182 L 142 144 A 38 38 0 0 1 175 201 Z" fill="#b0bec5"/>
+    <path d="M 142 182 L 175 201 A 38 38 0 0 1 109 201 Z" fill="#cfd8dc"/>
+    <path d="M 142 182 L 109 201 A 38 38 0 0 1 142 144 Z" fill="#b0bec5"/>
+    <circle cx="142" cy="182" r="7" fill="#37474f"/>
+    <rect x="88" y="238" width="108" height="20" rx="4" fill="#ffffff" stroke="#37474f" stroke-width="1.6"/>
+    <text x="142" y="253" font-size="13" fill="#37474f" text-anchor="middle">compressor</text>
+    <text x="142" y="296" font-size="16" font-weight="700" fill="#263238" text-anchor="middle">HEAT PUMP</text>
+    <text x="142" y="318" font-size="15" fill="#546e7a" text-anchor="middle">2 kW absorbed</text>
+    <text x="142" y="338" font-size="15" font-weight="600" fill="#1565c0" text-anchor="middle">7 kW delivered</text>
+  </g>
+
+  <g id="cylinder">
+    <rect x="400" y="96" width="200" height="330" rx="16" fill="url(#insul)" stroke="#78909c" stroke-width="2"/>
+    <rect x="418" y="114" width="164" height="294" rx="10" fill="#e3f2fd" stroke="#1565c0" stroke-width="2.5"/>
+    <path d="M 418 168 Q 460 160 500 168 T 582 168 L 582 398 Q 582 408 572 408 L 428 408 Q 418 408 418 398 Z"
+          fill="#bbdefb" stroke="none"/>
+    <line x1="418" y1="168" x2="582" y2="168" stroke="#1565c0" stroke-width="1.6" stroke-dasharray="5 4"/>
+
+    <path d="M 448 220 q 30 -22 60 0 q 30 22 60 0" fill="none" stroke="#c62828" stroke-width="5"/>
+    <path d="M 448 250 q 30 -22 60 0 q 30 22 60 0" fill="none" stroke="#c62828" stroke-width="5"/>
+    <text x="500" y="286" font-size="13" fill="#c62828" text-anchor="middle">exchange coil</text>
+
+    <path d="M 452 330 l 14 -18 l 14 18 l 14 -18 l 14 18 l 14 -18 l 14 18" fill="none"
+          stroke="#f57f17" stroke-width="5"/>
+    <text x="500" y="362" font-size="13" fill="#e65100" text-anchor="middle">immersion heater · 3 kW</text>
+
+    <text x="500" y="454" font-size="16" font-weight="700" fill="#263238" text-anchor="middle">CYLINDER 200 L</text>
+    <text x="500" y="476" font-size="15" fill="#546e7a" text-anchor="middle">0.2325 kWh per kelvin</text>
+  </g>
+
+  <g id="thermostat">
+    <rect x="640" y="150" width="26" height="120" rx="8" fill="#ffffff" stroke="#00695c" stroke-width="2.5"/>
+    <circle cx="653" cy="282" r="22" fill="#e0f2f1" stroke="#00695c" stroke-width="2.5"/>
+    <line x1="653" y1="282" x2="653" y2="266" stroke="#00695c" stroke-width="3"/>
+    <line x1="653" y1="282" x2="666" y2="290" stroke="#00695c" stroke-width="3"/>
+    <line x1="600" y1="200" x2="636" y2="200" stroke="#00695c" stroke-width="2.5"/>
+    <text x="700" y="196" font-size="16" font-weight="700" fill="#004d40">THERMOSTAT</text>
+    <text x="700" y="220" font-size="15" fill="#00695c">on below 55 °C</text>
+    <text x="700" y="242" font-size="15" fill="#00695c">off above 60 °C</text>
+    <text x="700" y="288" font-size="15" fill="#546e7a">probe in the store</text>
+  </g>
+
+  <line x1="232" y1="180" x2="392" y2="212" stroke="#c62828" stroke-width="6" marker-end="url(#dp-r)"/>
+  <line x1="392" y1="248" x2="232" y2="216" stroke="#c62828" stroke-width="6" marker-end="url(#dp-r)"/>
+  <text x="312" y="176" font-size="14" fill="#c62828" font-weight="600" text-anchor="middle">refrigerant</text>
+
+  <line x1="142" y1="120" x2="142" y2="86" stroke="#f57f17" stroke-width="5" marker-end="url(#dp-e)"/>
+  <text x="142" y="76" font-size="15" fill="#e65100" font-weight="600" text-anchor="middle">2 kW</text>
+  <line x1="500" y1="96" x2="500" y2="66" stroke="#f57f17" stroke-width="5" marker-end="url(#dp-e)"/>
+  <text x="500" y="56" font-size="15" fill="#e65100" font-weight="600" text-anchor="middle">3 kW backup</text>
+
+  <g id="losses">
+    <path d="M 604 330 q 16 -12 32 0 q 16 12 32 0" fill="none" stroke="#6a1b9a" stroke-width="3"/>
+    <path d="M 604 352 q 16 -12 32 0 q 16 12 32 0" fill="none" stroke="#6a1b9a" stroke-width="3"/>
+    <text x="700" y="342" font-size="15" fill="#4a148c" font-weight="600">standing loss</text>
+    <text x="700" y="364" font-size="15" fill="#4a148c">0.0625 kW at 60 °C</text>
+    <text x="700" y="386" font-size="15" fill="#546e7a">plant room at 15 °C</text>
+  </g>
+
+  <g id="draw">
+    <line x1="500" y1="96" x2="500" y2="96" stroke="none"/>
+    <path d="M 582 140 L 640 140 L 640 118" fill="none" stroke="#1565c0" stroke-width="5"/>
+    <text x="660" y="124" font-size="15" fill="#1565c0" font-weight="600">hot out</text>
+    <path d="M 418 396 L 360 396 L 360 424" fill="none" stroke="#1565c0" stroke-width="5"/>
+    <text x="300" y="430" font-size="15" fill="#1565c0" font-weight="600">cold in</text>
+  </g>
+
+</svg>
