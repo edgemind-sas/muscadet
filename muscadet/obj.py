@@ -165,6 +165,7 @@ from .capacity import (
 )
 
 from .transfer import TransferPair, build_transfer
+from .common import copy_declaration
 
 # The two standalone algorithms over a component, bound as methods of ObjFlow
 # further down: the two-sweep evaluation and the derating engine. Imported as
@@ -320,6 +321,20 @@ class ObjFlow(cod3s.PycComponent):
         # memory that holds it -- a deadband is exactly a mode reading one
         # discrete output and clamping the availability of another.
         self.mode_signals = {}
+
+        # The two-state automata and the failure modes this component was
+        # DECLARED with, keyed by name and holding the arguments they were
+        # declared with. Written by ``add_atm2states`` and by the two
+        # ``add_*_failure_mode`` methods; the automata muscadet derives itself
+        # -- a discrete output's default ok/nok pair, a sensor's deadband, the
+        # pair a failure mode builds -- pass ``derived=True`` and stay out.
+        # This is what ``muscadet.declare.component_spec`` reads back: an
+        # automaton cannot be reconstructed from ``automata_d``, whose entries
+        # are built objects carrying no record of what asked for them, and
+        # emitting a derived one beside the declaration that generates it would
+        # build the automaton twice.
+        self.declared_automata = {}
+        self.declared_failure_modes = {}
 
         # True once ``compute_capacities`` was registered as a PDMP equation
         # method for this component: one registration covers every capacity.
@@ -2036,6 +2051,7 @@ class ObjFlow(cod3s.PycComponent):
                     occ_law_21={"cls": "exp", "rate": 1e-100},
                     occ_interruptible_21=True,
                     effects_21=[],
+                    derived=True,
                 )
 
         # Declaration is over: the two sweeps may now read the continuous-flow
@@ -2164,6 +2180,7 @@ class ObjFlow(cod3s.PycComponent):
         occ_law_21=None,
         occ_interruptible_21=True,
         effects_21=[],
+        derived=False,
     ):
         """
         Adds a two-state automaton to the component.
@@ -2194,6 +2211,14 @@ class ObjFlow(cod3s.PycComponent):
             Indicates if the transition from the second state to the first state is interruptible (default is True).
         effects_21 : list of tuples, optional
             The effects of the transition from the second state to the first state (default is []).
+        derived : bool, optional
+            Internal. ``True`` marks an automaton muscadet builds ITSELF from
+            another declaration -- a discrete output's default ok/nok pair, a
+            sensor's deadband, the pair a failure mode builds -- so that it is
+            kept out of :attr:`declared_automata` and therefore out of the spec
+            :func:`muscadet.declare.component_spec` reads back. Emitting it
+            there would build it twice, once from the declaration that
+            generates it and once from the copy.
 
         Notes
         -----
@@ -2209,16 +2234,55 @@ class ObjFlow(cod3s.PycComponent):
         variable basenames, and a boolean clamped while the state holds.
         """
 
+        # What the caller declared, captured HERE because the occurrence laws
+        # are consumed below, and recorded at the end of the method beside the
+        # other bookkeeping, so that an automaton refused halfway leaves no
+        # record of itself. Kept for ``muscadet.declare.component_spec``, which
+        # cannot recover it from the built automaton.
+        declaration = (
+            None
+            if derived
+            else copy_declaration(
+                dict(
+                    name=name,
+                    st1=st1,
+                    st2=st2,
+                    init_st2=init_st2,
+                    cond_occ_12=cond_occ_12,
+                    occ_law_12=occ_law_12,
+                    occ_interruptible_12=occ_interruptible_12,
+                    effects_12=effects_12,
+                    cond_occ_21=cond_occ_21,
+                    occ_law_21=occ_law_21,
+                    occ_interruptible_21=occ_interruptible_21,
+                    effects_21=effects_21,
+                )
+            )
+        )
+
         # Normalise the occurrence-law sentinels, exactly as
         # ``cod3s.PycComponent.add_aut2st`` does. They MUST be rebuilt on every
         # call: ``TransitionModel.sanitize_occ_law`` rewrites their ``cls``
         # entry in place and ``ObjCOD3S.from_dict`` then pops it, so a shared
         # default mapping is emptied by its first use and the second defaulted
         # call raises "Missing attribute 'cls'".
+        #
+        # A law the CALLER supplies is consumed the same way, and that is not a
+        # theoretical concern: a declaration held in data -- a spec built once
+        # and used to raise two systems, which is what
+        # :func:`muscadet.declare.build_component` and the COD3S Platform
+        # importer both do -- is emptied by its first use and refused on its
+        # second with the same "Missing attribute 'cls'". The copy below is
+        # what keeps a declaration reusable; the underlying rewrite lives in
+        # ``cod3s.pycatshoo.automaton.TransitionModel.sanitize_occ_law``.
         if occ_law_12 is None:
             occ_law_12 = {"cls": "delay", "time": 0}
+        else:
+            occ_law_12 = copy_declaration(occ_law_12)
         if occ_law_21 is None:
             occ_law_21 = {"cls": "delay", "time": 0}
+        else:
+            occ_law_21 = copy_declaration(occ_law_21)
 
         st1_name = f"{name}_{st1}"
         st2_name = f"{name}_{st2}"
@@ -2323,6 +2387,9 @@ class ObjFlow(cod3s.PycComponent):
         # --------------------
         self.automata_d[aut.name] = aut
 
+        if declaration is not None:
+            self.declared_automata[name] = declaration
+
         # What this mode reads and what it writes, for the loop analysis of
         # ``muscadet.ordering``. A boolean condition reads nothing.
         self.mode_signals[name] = {
@@ -2379,6 +2446,28 @@ class ObjFlow(cod3s.PycComponent):
         (R18): see :meth:`add_atm2states`, which this funnels through.
         """
 
+        # What the caller declared, for ``muscadet.declare.component_spec``:
+        # the built automaton carries the RATES but not the mode that asked for
+        # them, so a spec read back from ``automata_d`` would rebuild a bare
+        # automaton and lose the two parameter variables downstream indicators
+        # reference by name.
+        self.declared_failure_modes[name] = copy_declaration(
+            dict(
+                cls="exp",
+                name=name,
+                failure_state=failure_state,
+                failure_cond=failure_cond,
+                failure_rate=failure_rate,
+                failure_effects=failure_effects,
+                failure_param_name=failure_param_name,
+                repair_state=repair_state,
+                repair_cond=repair_cond,
+                repair_rate=repair_rate,
+                repair_effects=repair_effects,
+                repair_param_name=repair_param_name,
+            )
+        )
+
         # Create lambda/mu parameter for failure mode name
         failure_rate_name = f"{name}_{failure_param_name}"
         self.params[failure_rate_name] = self.addVariable(
@@ -2402,6 +2491,7 @@ class ObjFlow(cod3s.PycComponent):
             occ_law_21={"cls": "exp", "rate": self.params[repair_rate_name]},
             occ_interruptible_21=True,
             effects_21=repair_effects,
+            derived=True,
         )
 
     def add_delay_failure_mode(
@@ -2448,6 +2538,24 @@ class ObjFlow(cod3s.PycComponent):
         (R18): see :meth:`add_atm2states`, which this funnels through.
         """
 
+        # Same as the exponential mode above, and for the same reason.
+        self.declared_failure_modes[name] = copy_declaration(
+            dict(
+                cls="delay",
+                name=name,
+                failure_state=failure_state,
+                failure_cond=failure_cond,
+                failure_time=failure_time,
+                failure_effects=failure_effects,
+                failure_param_name=failure_param_name,
+                repair_state=repair_state,
+                repair_cond=repair_cond,
+                repair_time=repair_time,
+                repair_effects=repair_effects,
+                repair_param_name=repair_param_name,
+            )
+        )
+
         # Create lambda/mu parameter for failure mode name
         failure_time_name = f"{name}_{failure_param_name}"
         self.params[failure_time_name] = self.addVariable(
@@ -2471,4 +2579,5 @@ class ObjFlow(cod3s.PycComponent):
             occ_law_21={"cls": "delay", "time": self.params[repair_time_name]},
             occ_interruptible_21=True,
             effects_21=repair_effects,
+            derived=True,
         )

@@ -757,6 +757,16 @@ class SensorContinuous(ContinuousComponent):
             cond_occ_21=f"{control}_release_fed_out",
             effects_12=[(available, True)],
             effects_21=[(available, False)],
+            # NOT ``derived``, unlike the ok/nok pair of a discrete output or
+            # the pair a failure mode builds. Those two are recreated by a
+            # declaration a spec carries -- the flow, the failure mode -- so
+            # emitting them into one would build them twice. This band is
+            # recreated by ``activate`` / ``release``, which are declaration
+            # keys of THIS class and which
+            # ``muscadet.declare.component_spec`` does not keep: it expands a
+            # component onto ObjFlow. Marked derived, the band would be
+            # dropped from the spec and the sensor read back would chatter
+            # around a single setpoint instead of holding its band.
         )
 
 

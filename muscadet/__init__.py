@@ -45,4 +45,10 @@ from .capacity import (
     combine_sum,
 )
 from .obj_logic import LogicOr, LogicAnd, ObjLogicGate
+from .declare import (
+    check_spec,
+    ComponentSpecError,
+    build_component,
+    component_spec,
+)
 from .version import __version__

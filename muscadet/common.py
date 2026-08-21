@@ -21,6 +21,34 @@ def fresh_instant_occ_law():
     return dict(INSTANT_OCC_LAW)
 
 
+def copy_declaration(value):
+    """Copy a declaration's CONTAINERS, sharing its leaves.
+
+    A declaration held in data is a caller's own object, and muscadet hands
+    parts of it to cod3s, which rewrites mappings in place -- see
+    :func:`fresh_instant_occ_law` for the same rewrite on a shared constant.
+    Copying the containers is what keeps such a declaration reusable, so that a
+    spec builds two systems instead of being emptied by the first.
+
+    ``copy.deepcopy`` is NOT usable here and the reason is not obvious: an
+    occurrence law may legitimately hold a PyCATSHOO variable rather than a
+    number -- ``add_exp_failure_mode`` writes ``{"cls": "exp", "rate":
+    self.params[...]}``, whose value is the ``t_double`` the mode's rate lives
+    in, so that an indicator can reference it by name -- and deep-copying that
+    raises ``Pickling of "Pycatshoo.IVariable" instances is not enabled``.
+    Sharing the leaves is also correct, not merely expedient: an engine handle
+    identifies one variable, and copying it would be wrong even if it were
+    possible.
+    """
+    if isinstance(value, dict):
+        return {key: copy_declaration(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [copy_declaration(item) for item in value]
+    if isinstance(value, tuple):
+        return tuple(copy_declaration(item) for item in value)
+    return value
+
+
 def entity_label(kind, info, quote=False):
     """``kind`` followed by the entity's own name, when validation already has it.
 

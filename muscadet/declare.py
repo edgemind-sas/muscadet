@@ -1,0 +1,665 @@
+"""Building a component from a declaration held in DATA, and reading one back.
+
+A muscadet component is normally a subclass of :class:`muscadet.ObjFlow`
+overriding ``add_flows``. That subclass is almost never *behaviour*: it declares
+flows, rule sets, capacities, measurement channels and transfer pairs, and every
+one of those is a declaration a mapping can carry. What the subclass really
+provides is a **place to write the declaration** and, less visibly, the right
+ORDER to write it in.
+
+This module is that place, for a caller whose declaration arrives as data -- a
+COD3S Platform export, a YAML knowledge base, a generated study. It owns the two
+directions:
+
+- :func:`build_component` turns a spec into a live component;
+- :func:`component_spec` reads a live component back into a spec.
+
+**The order is the whole difficulty, and it is not guessable.** ``set_flows()``
+is what creates the PyCATSHOO variables and message boxes, it runs once, and it
+cannot be re-run. The three ways of getting it wrong all fail far from their
+cause:
+
+=========================================  ==========================================
+Mistake                                    What the caller sees
+=========================================  ==========================================
+``set_flows()`` never called               ``La boîte de messages X_in est
+                                           introuvable``, at ``connect`` time, on
+                                           another component
+``set_flows()`` called twice               ``La variable X_fed_in existe déjà``
+Rules declared before their flows          ``KeyError`` on a flow the spec declares
+=========================================  ==========================================
+
+:data:`DECLARATION_SECTIONS` is the order, written down once. It is not
+alphabetical and not arbitrary: a rule refuses a capacity or a measurement
+channel in its ``cons`` map, and a conduit refuses a flow a rule already
+consumes, so the thing doing the refusing has to exist first. Declaring
+capacities and measurements before the rules, and the rules before the transfer
+pairs, is what makes those three refusals reachable instead of dead.
+
+**A shipped class stays usable as a template.** ``cls`` names any component
+class; ``params`` is its own declaration (``rate``, ``capacity``, ``activate``
+...). The class declares its ports first and the spec's sections are added on
+top, so ``SourceContinuous`` plus one discrete output is a spec and not a
+subclass.
+
+Examples
+--------
+>>> comp = build_component(system, {                        # doctest: +SKIP
+...     "name": "PUMP",
+...     "flows": [
+...         {"cls": "FlowContinuousIn", "name": "elec"},
+...         {"cls": "FlowContinuousOut", "name": "heat"},
+...         {"cls": "FlowIn", "name": "call", "logic": "or"},
+...         {"cls": "FlowOut", "name": "healthy", "var_prod_default": True},
+...     ],
+...     "rules": [{"name": "heat_pump", "rules": [
+...         {"cond": ["call"], "cons": {"elec": 2.0}, "prod": {"heat": 7.0}},
+...     ]}],
+... })
+"""
+
+import copy
+import inspect
+
+from .profile import PROFILE_CLASSES, Profile
+from .transfer import TRANSFER_CLASSES, Transfer
+
+#: Keys the component CONSTRUCTOR consumes, in the order it takes them.
+#: ``partial_init`` is deliberately absent: this module always builds partially
+#: and calls ``set_flows()`` itself, which is the point of it existing.
+CONSTRUCTOR_KEYS = (
+    "name",
+    "cls",
+    "label",
+    "description",
+    "metadata",
+    "create_default_out_automata",
+)
+
+#: The declaration sections, IN THE ORDER THEY MUST BE DECLARED, each with the
+#: method that consumes one entry. Every dependency below is one a declaration
+#: actually has, and the order is what makes three refusals reachable instead of
+#: dead:
+#:
+#: - ``measurements_in`` first, and NOT after the flows: a discrete output may
+#:   compare a level, which is how a sensor thresholds one
+#:   (``var_prod_cond=[{"name": channel, "op": ">=", "value": x}]``), and the
+#:   channel has to exist for that operand to resolve. The channel itself
+#:   depends on nothing -- its own ``flows`` are constituent names of the remote
+#:   volume, not flows of this component;
+#: - ``capacities`` name flows, so they follow them;
+#: - ``measurements_out`` may take their ``source`` from a capacity or from an
+#:   imported channel, so they follow both;
+#: - ``rules`` refuse a capacity name and a measurement channel name in a
+#:   ``cons`` map, which is only refusable once those exist;
+#: - ``transfers`` last: a conduit refuses a flow a rule already consumes.
+#:
+#: Every one of these runs BEFORE ``set_flows()``. The two sections that run
+#: after it are handled apart, in :data:`POST_SET_FLOWS_SECTIONS`, because they
+#: need the variables their effects clamp to exist.
+DECLARATION_SECTIONS = (
+    ("measurements_in", "add_measurement_in"),
+    ("flows", "add_flow"),
+    ("capacities", "add_capacity"),
+    ("measurements_out", "add_measurement_out"),
+    ("rules", "add_rules"),
+    ("transfers", "add_transfer"),
+)
+
+#: The sections declared AFTER ``set_flows()``. An automaton's effects are
+#: resolved against the component's variables, which do not exist until then.
+POST_SET_FLOWS_SECTIONS = ("automata", "failure_modes")
+
+#: ``cls`` values a ``failure_modes`` entry may carry, and the method each maps
+#: to. A failure mode declared on a component is one of exactly two shapes; the
+#: standalone ``ObjFailureMode*`` objects are components in their own right and
+#: are declared as components, not inside one.
+FAILURE_MODE_METHODS = {
+    "exp": "add_exp_failure_mode",
+    "delay": "add_delay_failure_mode",
+}
+
+#: Informational key :func:`component_spec` writes and :func:`build_component`
+#: ignores: the class the spec was READ BACK from. A spec is always expanded
+#: onto ``ObjFlow``, so the original class name would otherwise be lost, and it
+#: is worth keeping -- a template picker wants to show it.
+SOURCE_CLS_KEY = "source_cls"
+
+#: Every key a spec may carry.
+COMPONENT_KEYS = frozenset(
+    CONSTRUCTOR_KEYS
+    + ("params", SOURCE_CLS_KEY)
+    + tuple(section for section, _ in DECLARATION_SECTIONS)
+    + POST_SET_FLOWS_SECTIONS
+)
+
+#: Field-name prefixes marking a RUNTIME HANDLE rather than a declaration: the
+#: PyCATSHOO variables and references a flow is wired to at ``set_flows()``, and
+#: the sensitive methods bound with them. They hold engine objects, they are
+#: rebuilt on every construction, and they are dropped from a spec rather than
+#: refused. Anything else that will not serialise is refused instead, because it
+#: is then a declaration being silently lost.
+RUNTIME_FIELD_PREFIXES = ("var_", "sm_")
+
+#: Fields carrying ``exclude=True`` that are DERIVED, and are therefore dropped
+#: from a spec like a runtime handle. Everything else excluded is treated as a
+#: declaration and must survive or be refused -- which is the safe default,
+#: because ``model_dump`` does not show an excluded field at all and a
+#: declaration hidden that way would otherwise vanish without a trace. That is
+#: not hypothetical: ``allocation_fun`` and ``combine_fun`` are excluded, and a
+#: spec that dropped one would rebuild a component splitting an insufficient
+#: supply by a different policy.
+#:
+#: ``comp_name`` is written at wiring, ``allocated`` / ``derating`` /
+#: ``demand_required`` are per-evaluation state, ``automaton`` / ``state_empty``
+#: / ``state_full`` are a capacity's built bound automaton, ``mode`` is the
+#: automaton a rule set's guards compile into, and ``flow`` is the object a
+#: guard operand resolved onto. Every one is rebuilt by the declaration it comes
+#: from.
+DERIVED_EXCLUDED_FIELDS = frozenset(
+    {
+        "comp_name",
+        "demand_required",
+        "allocated",
+        "derating",
+        "automaton",
+        "state_empty",
+        "state_full",
+        "mode",
+        "flow",
+    }
+)
+
+
+class ComponentSpecError(ValueError):
+    """A component declaration muscadet refuses to build or to read back."""
+
+
+def _is_serialisable(value):
+    """True when ``value`` is made only of JSON-native parts.
+
+    ``float('inf')`` counts: a capacity's ``fill_rate`` is routinely infinite
+    and ``json`` writes it, so refusing it here would refuse the default
+    spelling of "whatever the producer delivers".
+    """
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return True
+    if isinstance(value, (list, tuple)):
+        return all(_is_serialisable(item) for item in value)
+    if isinstance(value, dict):
+        return all(
+            isinstance(key, str) and _is_serialisable(item)
+            for key, item in value.items()
+        )
+    return False
+
+
+def _as_data(value):
+    """Normalise a read-back declaration to what a JSON round trip gives back.
+
+    Tuples become lists. A mode's effects are declared as
+    ``[(pattern, value), ...]`` and kept that way, so a spec holding them would
+    compare unequal to the same spec written out and read back -- the one
+    difference a caller keeping declarations on disk would meet first. The
+    library reads an effect by unpacking it, which a two-element list satisfies
+    exactly as a tuple does.
+    """
+    if isinstance(value, dict):
+        return {key: _as_data(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_as_data(item) for item in value]
+    return value
+
+
+def _declared_object_spec(obj, registry, where):
+    """Serialise a declared-continuous object (a profile, a transfer equation).
+
+    Both families follow the same pattern deliberately: a plain class, a
+    registry of the shapes a ``{"cls": ...}`` mapping may name, and a builder
+    refusing anything else. A shape absent from its registry has no mapping
+    form BY CONSTRUCTION -- ``Transfer`` is left out of
+    :data:`~muscadet.transfer.TRANSFER_CLASSES` precisely because its whole
+    content is a Python function -- so it is refused here rather than dropped.
+
+    The keys written are the constructor's own parameter names, read off the
+    signature, so a shape added to a registry serialises without touching this
+    module.
+    """
+    clsname = type(obj).__name__
+
+    if clsname not in registry:
+        raise ComponentSpecError(
+            f"{where}: {clsname} carries a Python function and has no mapping "
+            f"form, so this declaration cannot be read back as data. The "
+            f"shapes that can are {', '.join(sorted(registry))}"
+        )
+
+    spec = {"cls": clsname}
+    for param in inspect.signature(type(obj).__init__).parameters:
+        if param == "self" or not hasattr(obj, param):
+            continue
+        value = getattr(obj, param)
+        if not _is_serialisable(value):
+            raise ComponentSpecError(
+                f"{where}: parameter {param!r} of {clsname} holds "
+                f"{type(value).__name__}, which cannot be written to a spec"
+            )
+        spec[param] = value
+
+    return spec
+
+
+#: The three fields a discrete output's production condition is STORED in, all
+#: of them post-resolution and none of them a declaration. Handled together by
+#: :func:`_prod_cond_spec` and never dumped as they stand.
+PROD_COND_FIELDS = (
+    "var_prod_cond",
+    "var_prod_cond_negate",
+    "var_prod_cond_compare",
+)
+
+
+def _matrix_at(matrix, row, column):
+    """One cell of a parallel matrix that may be empty or short.
+
+    ``var_prod_cond_negate`` is attached only when at least one operand is
+    negated, so the common case leaves it empty rather than filled with False.
+    """
+    try:
+        return matrix[row][column]
+    except (IndexError, TypeError):
+        return None
+
+
+def _prod_cond_spec(comp, flow):
+    """The DECLARATION form of a discrete output's production condition.
+
+    ``postprocess_flow_specs`` RESOLVES a condition as it is declared: the
+    operand names are replaced by the flow (or measurement channel) objects
+    themselves, and the negation and the comparison are lifted out into two
+    parallel matrices beside them. What the flow then holds is not a
+    declaration and cannot be re-declared: fed back as it stands, an operand
+    reads as a mapping with a ``name`` and no ``op``, and the resolution refuses
+    it -- a boolean operand never resolves onto a measurement channel, since a
+    level carries no state to read, so a sensor's threshold comes back as
+    ``Flow store does not exist as input nor output flow``.
+
+    This walks the three fields back to the canonical
+    ``{name, port, negate, op, value}`` operands. ``port`` is written
+    explicitly for a flow, because the resolution that produced this one
+    searched the inputs first and a component carrying the same name on both
+    sides would otherwise come back resolved to the other side. It is
+    deliberately NOT written for a measurement channel: that branch of the
+    resolution is only reachable with no ``port`` at all.
+    """
+    groups = getattr(flow, "var_prod_cond", None) or []
+    negates = getattr(flow, "var_prod_cond_negate", None) or []
+    compares = getattr(flow, "var_prod_cond_compare", None) or []
+
+    spec = []
+    for row, group in enumerate(groups):
+        operands = []
+        for column, operand in enumerate(group):
+            name = operand.name
+            entry = {"name": name}
+
+            if name in comp.measurements_in and comp.measurements_in[name] is operand:
+                pass  # no port: the measurement branch needs it absent
+            elif comp.flows_in.get(name) is operand:
+                entry["port"] = "in"
+            elif comp.flows_out.get(name) is operand:
+                entry["port"] = "out"
+
+            if _matrix_at(negates, row, column):
+                entry["negate"] = True
+
+            compare = _matrix_at(compares, row, column)
+            if compare:
+                entry["op"] = compare["op"]
+                entry["value"] = compare["value"]
+
+            operands.append(entry)
+        spec.append(operands)
+
+    return spec
+
+
+def _declaration_fields(obj, where):
+    """The declaration fields of one pydantic declaration object.
+
+    Drops the runtime handles (see :data:`RUNTIME_FIELD_PREFIXES`), serialises a
+    declared profile or transfer equation through its registry, and REFUSES
+    anything else that will not serialise, naming the field. The refusal is the
+    point: an ``allocation_fun`` or a ``combine_fun`` is a real declaration that
+    a mapping cannot carry, and a spec that quietly dropped it would rebuild a
+    component splitting its supply by a different policy.
+    """
+    fields = {}
+
+    def classify(key, value):
+        if _is_serialisable(value):
+            fields[key] = value
+            return
+
+        if isinstance(value, (Profile, Transfer)):
+            registry = (
+                PROFILE_CLASSES if isinstance(value, Profile) else TRANSFER_CLASSES
+            )
+            fields[key] = _declared_object_spec(value, registry, f"{where}.{key}")
+            return
+
+        if key.startswith(RUNTIME_FIELD_PREFIXES):
+            return
+
+        raise ComponentSpecError(
+            f"{where}: field {key!r} holds {type(value).__name__}, which "
+            f"cannot be written to a spec. A Python callable is a declaration "
+            f"no mapping can carry -- declare the equivalent shape instead, or "
+            f"keep this component a subclass"
+        )
+
+    for key, value in obj.model_dump().items():
+        classify(key, value)
+
+    # The dump shows no excluded field at all, so a declaration carrying
+    # ``exclude=True`` -- ``allocation_fun``, ``combine_fun``, ``profile`` --
+    # has to be read off the object itself. Everything excluded that is not
+    # listed as derived is treated as a declaration, so a field added later
+    # trips the refusal above instead of disappearing.
+    for key, field in type(obj).model_fields.items():
+        if not field.exclude or key in fields:
+            continue
+        if key.startswith(RUNTIME_FIELD_PREFIXES) or key in DERIVED_EXCLUDED_FIELDS:
+            continue
+        value = getattr(obj, key, None)
+        if value is not None:
+            classify(key, value)
+
+    return fields
+
+
+def _check_keys(spec):
+    """Refuse a spec key muscadet does not read, by name.
+
+    The same discipline as ``ContinuousComponent.DECLARATION_KEYS`` (R-3) and
+    ``FlowContinuous.check_declaration_keys`` (R-15), and for the same reason: a
+    misspelled section is otherwise swallowed whole, and a component silently
+    missing its rule set is indistinguishable from one that never had any.
+    """
+    if not isinstance(spec, dict):
+        raise ComponentSpecError(
+            f"A component declaration is a mapping, got {type(spec).__name__}"
+        )
+
+    name = spec.get("name")
+    if not name:
+        raise ComponentSpecError(f"Component declaration without a 'name': {spec!r}")
+
+    unknown = sorted(set(spec) - COMPONENT_KEYS)
+    if unknown:
+        plural = "s" if len(unknown) > 1 else ""
+        raise ComponentSpecError(
+            f"Component {name}: unknown declaration key{plural} "
+            f"{', '.join(repr(key) for key in unknown)}; it accepts "
+            f"{', '.join(sorted(COMPONENT_KEYS))}"
+        )
+
+    return name
+
+
+def _entries(spec, section, name):
+    """One declaration section, as a list, refusing a value that is not one."""
+    entries = spec.get(section) or []
+
+    if isinstance(entries, dict):
+        entries = [entries]
+
+    if not isinstance(entries, (list, tuple)):
+        raise ComponentSpecError(
+            f"Component {name}: section {section!r} is a list of declarations, "
+            f"got {type(entries).__name__}"
+        )
+
+    return entries
+
+
+def _failure_mode_method(entry, name):
+    """The method one ``failure_modes`` entry maps to, or a refusal."""
+    kind = entry.get("cls")
+    method_name = FAILURE_MODE_METHODS.get(kind)
+
+    if method_name is None:
+        raise ComponentSpecError(
+            f"Component {name}: failure mode {entry.get('name')!r} has "
+            f"cls={kind!r}; a failure mode declared on a component is one of "
+            f"{', '.join(sorted(FAILURE_MODE_METHODS))}. A standalone "
+            f"ObjFailureMode is a component of its own and is declared as one"
+        )
+
+    return method_name
+
+
+def check_spec(spec):
+    """Validate a declaration WITHOUT building anything, and return its name.
+
+    Everything checkable from the mapping alone is checked here, before the
+    component exists: an engine object is expensive, a half-built one is worse
+    than none, and a caller validating a batch of declarations should not have
+    to raise a system to find out that one of them is misspelled.
+
+    What is left to the build is what only the engine can answer -- that a rule
+    names a declared flow, that a conduit does not meter what a rule already
+    carries.
+    """
+    name = _check_keys(spec)
+
+    for section in [key for key, _ in DECLARATION_SECTIONS] + list(
+        POST_SET_FLOWS_SECTIONS
+    ):
+        for entry in _entries(spec, section, name):
+            if not isinstance(entry, dict):
+                raise ComponentSpecError(
+                    f"Component {name}: every entry of section {section!r} is "
+                    f"a mapping, got {type(entry).__name__}"
+                )
+            if section == "failure_modes":
+                _failure_mode_method(entry, name)
+
+    return name
+
+
+def build_component(system, spec):
+    """Build one component from a declaration held in data.
+
+    Parameters
+    ----------
+    system : muscadet.System
+        The system the component is added to.
+    spec : dict
+        The declaration. ``name`` is required; ``cls`` defaults to
+        ``"ObjFlow"``. ``params`` is the declaration of the named class itself
+        -- ``rate``, ``capacity``, ``activate`` and so on -- and the sections
+        listed in :data:`DECLARATION_SECTIONS` and
+        :data:`POST_SET_FLOWS_SECTIONS` are added on top of what that class
+        declared.
+
+    Returns
+    -------
+    muscadet.ObjFlow
+        The built component, ``set_flows()`` already called, ready to connect.
+
+    Raises
+    ------
+    ComponentSpecError
+        For a missing ``name``, an unknown key, a section that is not a list, or
+        ``params`` on a class that reads none.
+
+    Notes
+    -----
+    The component is built with ``partial_init=True`` and ``set_flows()`` is
+    called here, once, after every section that needs to precede it. That is why
+    a spec never carries ``partial_init``: a caller who set it would either get
+    a component built twice or one never wired to the engine.
+    """
+    name = check_spec(spec)
+    clsname = spec.get("cls", "ObjFlow")
+    params = spec.get("params") or {}
+
+    if params and clsname == "ObjFlow":
+        raise ComponentSpecError(
+            f"Component {name}: 'params' names the declaration of a component "
+            f"CLASS, and ObjFlow reads none -- its add_flows does nothing. The "
+            f"keys {', '.join(sorted(params))} would be silently dropped. "
+            f"Declare them in the sections instead, or name a class that reads "
+            f"them"
+        )
+
+    comp = system.add_component(
+        cls=clsname,
+        name=name,
+        label=spec.get("label"),
+        description=spec.get("description"),
+        metadata=spec.get("metadata", {}),
+        create_default_out_automata=spec.get("create_default_out_automata", False),
+        partial_init=True,
+    )
+
+    # The named class's own declaration. ``partial_init`` skipped the
+    # constructor's call, so it is made here instead, which is what lets a
+    # shipped class serve as a template the spec then adds to. ``metadata`` is
+    # passed back the way ``ObjFlow.__init__`` passes it, since the continuous
+    # KB accepts it as a declaration key.
+    class_params = dict(params, metadata=comp.metadata)
+    comp.add_flows(**class_params)
+
+    for section, method_name in DECLARATION_SECTIONS:
+        method = getattr(comp, method_name)
+        for entry in _entries(spec, section, name):
+            # ``add_flow`` takes the whole mapping positionally, the others take
+            # it as keywords. Copied either way: a spec is data the caller keeps
+            # and may build twice.
+            if section == "flows":
+                method(copy.deepcopy(entry))
+            else:
+                method(**copy.deepcopy(entry))
+
+    # The SAME arguments ``add_flows`` was given, exactly as
+    # ``ObjFlow.__init__`` hands them to both. A class may override
+    # ``set_flows`` and read its own declaration keys there:
+    # ``SensorContinuous`` builds its deadband automaton in that override,
+    # because the automaton reads state variables only ``set_flows`` creates.
+    # Called bare, the override finds no ``activate`` in its kwargs, returns
+    # early, and the sensor is built without the memory that holds its output
+    # inside the band -- a component that thresholds but chatters.
+    comp.set_flows(**class_params)
+
+    for entry in _entries(spec, "automata", name):
+        comp.add_atm2states(**copy.deepcopy(entry))
+
+    for entry in _entries(spec, "failure_modes", name):
+        method_name = _failure_mode_method(entry, name)
+        entry = copy.deepcopy(entry)
+        entry.pop("cls", None)
+        getattr(comp, method_name)(**entry)
+
+    return comp
+
+
+def component_spec(comp):
+    """Read a live component back into a declaration.
+
+    What a spec can hold, it holds: the flows with their declaration fields, the
+    capacities, the measurement channels, the rule sets, the transfer pairs, and
+    the automata and failure modes the component was DECLARED with.
+
+    Two things it deliberately does not hold, and both are absences worth
+    knowing about:
+
+    - the automata muscadet DERIVES -- a discrete output's default ok/nok pair,
+      a sensor's deadband, the pair a failure mode builds. They are recreated by
+      the declaration that generates them, so emitting them here would build
+      each one twice. This is why ``ObjFlow.declared_automata`` exists rather
+      than reading ``automata_d``, whose entries carry no record of what asked
+      for them;
+    - anything holding a Python callable, which is refused rather than dropped
+      (see :func:`_declaration_fields`).
+
+    The spec is always expanded onto ``ObjFlow``: reading back a
+    ``SensorContinuous`` gives its three discrete outputs and its measurement
+    channel, not the five parameters it was declared with. The class name is
+    kept under :data:`SOURCE_CLS_KEY` for a caller that wants to show it.
+
+    Parameters
+    ----------
+    comp : muscadet.ObjFlow
+
+    Returns
+    -------
+    dict
+        A spec :func:`build_component` accepts.
+
+    Raises
+    ------
+    ComponentSpecError
+        When a declaration holds something no mapping can carry.
+    """
+    where = f"Component {comp.basename()}"
+
+    flows = []
+    for side, flow_dict in (("in", comp.flows_in), ("out", comp.flows_out)):
+        for flow_name, flow in flow_dict.items():
+            fields = _declaration_fields(flow, f"{where}, flow {flow_name} {side}")
+
+            # The production condition is stored resolved, so it is rebuilt
+            # rather than dumped, and the two matrices derived from it are
+            # dropped: ``postprocess_flow_specs`` recomputes them, and a stale
+            # copy beside a rebuilt condition is worse than none.
+            for field in PROD_COND_FIELDS:
+                fields.pop(field, None)
+            prod_cond = _prod_cond_spec(comp, flow)
+            if prod_cond:
+                fields["var_prod_cond"] = prod_cond
+
+            # ``model_dump`` writes ``cls`` already, through the ObjCOD3S dump
+            # hook; setting it explicitly keeps the spec correct if that ever
+            # changes, and costs nothing.
+            fields["cls"] = type(flow).__name__
+            flows.append(fields)
+
+    def dump_all(objects, kind):
+        out = []
+        for obj_name, obj in objects.items():
+            fields = _declaration_fields(obj, f"{where}, {kind} {obj_name}")
+            fields.pop("cls", None)
+            out.append(fields)
+        return out
+
+    transfers = []
+    for pair_name, pair in comp.transfers.items():
+        transfers.append(
+            {
+                "name": pair.name,
+                "flows": list(pair.flows),
+                "equation": _declared_object_spec(
+                    pair.equation,
+                    TRANSFER_CLASSES,
+                    f"{where}, transfer {pair_name}",
+                ),
+            }
+        )
+
+    return _as_data(
+        {
+            "name": comp.basename(),
+            "cls": "ObjFlow",
+            SOURCE_CLS_KEY: type(comp).__name__,
+            "flows": flows,
+            "capacities": dump_all(comp.capacities, "capacity"),
+            "measurements_in": dump_all(comp.measurements_in, "measurement in"),
+            "measurements_out": dump_all(comp.measurements_out, "measurement out"),
+            "rules": dump_all(comp.rule_sets, "rule set"),
+            "transfers": transfers,
+            "automata": list(comp.declared_automata.values()),
+            "failure_modes": list(comp.declared_failure_modes.values()),
+        }
+    )
