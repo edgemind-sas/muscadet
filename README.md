@@ -1622,9 +1622,128 @@ python examples/continuous_01/continuous_01.py
 
 It prints one row per event the solver stopped at, and a summary of what the trace shows.
 
+## Interactive simulation
+
+`simulate()` runs a mission and gives back indicators. An interactive session
+walks one trajectory instead, stopping so the state can be read and the next
+event chosen. Two things move the clock there, and a continuous model needs
+the second one.
+
+### Two ways to advance the clock
+
+| Call | Advances to | Use it to |
+|---|---|---|
+| `isimu_step_forward()` | the next **dated** transition | answer "what happens next, and when?" |
+| `isimu_step_to(date)` | the date you name, stopping on every event due before it | answer "what do the continuous variables do in between?" |
+
+`isimu_step_forward` integrates the PDMP on the way to the next dated
+transition, and interrupts early on a watched threshold. It follows that a
+model with **no** dated transition never moves: a source feeding a tank, with
+no failure mode and no automaton, sits at t=0 reporting its declared initial
+values. Nothing is wrong with the model; there is simply no event to advance
+towards.
+
+`isimu_step_to` supplies that date itself. A source of 10 filling a tank of
+capacity 200 from 20, drawn at 4, with not a single transition in the model:
+
+```python
+system.isimu_start()
+
+t = 0.0
+for _ in range(64):
+    t += 0.5
+    system.isimu_step_to(t)
+    print(t, system.comp["TANK"].capacities["tank"].get_quantity("w"))
+```
+
+The level rises by 6 per unit and saturates at 200 at t = 30.
+
+### Events keep their own dates
+
+Naming a date does not flatten the events onto that grid. `isimu_step_to`
+lands on each one first, then covers the rest of the stretch in one go. With a
+failure mode planned at 5.25 and an observation step of 0.5:
+
+```
+[grid ] t=5.0000  level=50.0000  rate=1.00
+[event] t=5.2500  level=51.5000  rate=0.10   <- wear
+[grid ] t=5.5000  level=50.7500  rate=0.10
+```
+
+The stop at 5.25 is exact, and it is recorded in `isimu_sequence` like any
+fired transition. Each stop is a `(kind, time, transitions)` tuple, `kind`
+being `"event"` or `"grid"`.
+
+**Read the state through `on_stop`, not from the returned list.** The list is
+complete when the call returns, so a level read while looping over it is the
+level at `date` for every row, including the rows that name an earlier date:
+
+```python
+def report(kind, at, transitions):
+    print(kind, at, tank.get_quantity("w"))   # the state AT this stop
+
+system.isimu_step_to(t, on_stop=report)
+```
+
+### A step that would run the clock to infinity is refused
+
+Interactive sessions do not sample non-deterministic laws: an exponential
+transition carries an end-time of `inf` until the operator plans one. When
+that is the only thing active, `isimu_step_forward` refuses with a warning
+rather than carrying the clock — and every integrated level with it — to
+infinity, which no later call can undo.
+
+Give the transition a date, and it fires there:
+
+```python
+system.isimu_set_transition(trans_id="SRC.wear_rep_occ", date=5.25)
+```
+
+`isimu_next_due()` returns the earliest finite end-time, or `None` when
+nothing is scheduled. `isimu_step_to` is unaffected either way: its date comes
+from the caller.
+
+### Watching it run: `cod3s-isimu`
+
+```sh
+cod3s-isimu --factory mymodule:build_system
+```
+
+Beyond firing a transition with Enter, the session plays:
+
+| Key | |
+|---|---|
+| `space` | play / pause |
+| `+` `-` | wall-clock cadence between ticks |
+| `d` | observation step, the simulated time one tick advances |
+| `i` | integration knobs, `dtMax` and `dtCond` |
+
+The three settings are independent and all three are read together in the
+header. The observation step is how often the model is **looked at**; the
+cadence is how fast those looks are replayed; the integration knobs are how
+finely the ODEs are **computed** between them. A fine observation of a
+coarsely integrated run is sampled often and wrong.
+
+`dtCond` is the one worth knowing: it is the precision of the crossing search,
+and it decides how far past a bound the solver stops. A tank of capacity 60
+stops at 60.001378 with the default of 0.001, and at 60.000000 with 1e-7.
+
+### Two things it does not do
+
+A **watched threshold** has no date until its condition turns true, so
+`isimu_step_to` cannot land on it: the crossing happens inside a span and is
+only locatable between two observations. A tank filling to its bound at
+t = 6.6667 is seen full at the 7.0 observation, not at 6.6667. A finer
+observation step narrows the bracket.
+
+**Stepping back** does not undo an observation. `isimu_step_backward` walks
+the sequence, and a grid point is not in it, so the session returns to its
+start rather than to the previous observation. The TUI refuses the key after
+a playback and points at reset.
+
 ## Modelling pitfalls
 
-Four things measured on real models, none of them visible from the API, each of which cost a debugging cycle.
+Five things measured on real models, none of them visible from the API, each of which cost a debugging cycle.
 
 ### The time unit decides whether a model is simulable
 
@@ -1645,6 +1764,31 @@ What caps a machine is what it can **draw**. A rated machine therefore needs a r
 ### An infinite source is not a large one
 
 `rate=math.inf` split between two finite consumers goes through `inf` arithmetic and delivers **NaN**, which then propagates into every level downstream and reads as `nan` where a temperature should be. Use a large finite rate.
+
+### A repair that never happens is an integration horizon
+
+The `1e6` idiom for "never repaired" is free in a discrete model and expensive
+in a continuous one:
+
+```python
+comp.add_delay_failure_mode(name="wear", failure_time=8.0, repair_time=1e6)
+```
+
+Once that repair is the only transition left, the next step integrates a
+million time units. Measured on a three-component chain, after two steps that
+took 0.4 s and 1.0 s, the third had not returned when it was killed at 150 s.
+
+Write the mode as one that cannot be repaired instead, so the session is left
+with nothing to integrate towards:
+
+```python
+comp.add_delay_failure_mode(name="wear", failure_time=8.0, repair_cond=False)
+```
+
+`repair_time=math.inf` is not the fix either: it makes the repair the
+infinite-end-time transition described under
+[Interactive simulation](#a-step-that-would-run-the-clock-to-infinity-is-refused),
+so the session stops advancing on its own and warns at every step.
 
 ### A quantity carries about seven significant digits
 

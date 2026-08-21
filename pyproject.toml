@@ -29,8 +29,11 @@ dependencies = [
     # cod3s is pinned to a tag (rather than a floating branch ref) so a
     # downstream consumer (cod3s-platform) gets a deterministic transitive
     # version. Bump in lockstep with the muscadet release that requires
-    # new cod3s features (here: cod3s.specs / cod3s.scripts.study_runner).
-    "cod3s @ git+https://github.com/edgemind-sas/cod3s.git@1.14.4",
+    # new cod3s features (here: PycSystem.isimu_step_to, which is what lets an
+    # interactive session advance a model whose continuous variables are the
+    # only thing moving -- stepForward alone has no event to advance towards
+    # and leaves such a model at t=0).
+    "cod3s @ git+https://github.com/edgemind-sas/cod3s.git@1.16.0",
     "graphviz==0.20.1",
 ]
 
