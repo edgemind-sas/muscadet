@@ -165,6 +165,7 @@ from .capacity import (
 )
 
 from .transfer import TransferPair, build_transfer
+from .profile import build_profile
 from .common import copy_declaration
 
 # The two standalone algorithms over a component, bound as methods of ObjFlow
@@ -754,6 +755,25 @@ class ObjFlow(cod3s.PycComponent):
                 occ_clsname = occ.get("cls")
                 if occ_clsname and "OccDistribution" not in occ_clsname:
                     occ["cls"] = occ_clsname.capitalize() + "OccDistribution"
+
+        # A declared time profile is resolved HERE, for the opposite reason to
+        # the occurrence laws above: those are normalised so ``from_dict`` can
+        # resolve them, this one is resolved so ``from_dict`` never tries.
+        # ``from_dict`` recurses into every nested mapping and resolves any
+        # ``cls`` it finds against the ObjCOD3S registry, and a Profile is not
+        # an ObjCOD3S -- it is muscadet's own declared-continuous wrapper. So
+        # ``{"cls": "SinusoidalProfile", ...}``, the mapping form the rest of
+        # the declaration API uses and which muscadet documents as working
+        # wherever the object does, was refused outright with "SinusoidalProfile
+        # is not a subclass of ObjCOD3S". That hit a hand-written flow mapping
+        # as much as one read back by ``muscadet.declare``, which is why
+        # SourceSinusoidalContinuous -- a shipped component -- had no round trip.
+        # Resolved to the object, it is a leaf ``from_dict`` passes through, and
+        # ``FlowContinuousOut.profile`` is typed ``Any`` and takes it as it is.
+        if "profile" in flow_specs:
+            flow_specs["profile"] = build_profile(
+                flow_specs["profile"], flow_specs.get("name")
+            )
 
         return flow_specs
 
