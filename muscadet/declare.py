@@ -61,6 +61,9 @@ Examples
 import copy
 import inspect
 
+import pydantic
+
+from .common import copy_declaration
 from .profile import PROFILE_CLASSES, Profile
 from .transfer import TRANSFER_CLASSES, Transfer
 
@@ -358,7 +361,24 @@ def _declaration_fields(obj, where):
             f"keep this component a subclass"
         )
 
-    for key, value in obj.model_dump().items():
+    dumped = obj.model_dump()
+
+    # A field DECLARED as a union with a model base, but HOLDING a subclass of
+    # it, is serialised by the parent through the declared member: pydantic
+    # dumps ``FlowOutTempo.occ_enable_flow``, typed ``Union[dict,
+    # OccurrenceDistributionModel]``, through that base -- which carries no
+    # fields -- so ``DelayOccDistribution(time=7)`` came out ``{"cls":
+    # "DelayOccDistribution"}`` and rebuilt at ``time=0``. A seven-unit
+    # temporisation became instantaneous, with nothing in the spec pointing at
+    # the loss. Dumping such a value from the object it actually is restores
+    # what it declares. The dict spelling of the same law was never affected,
+    # which is what made this narrow enough to go unnoticed.
+    for key, value in list(dumped.items()):
+        live = getattr(obj, key, None)
+        if isinstance(live, pydantic.BaseModel) and isinstance(value, dict):
+            dumped[key] = live.model_dump()
+
+    for key, value in dumped.items():
         classify(key, value)
 
     # The dump shows no excluded field at all, so a declaration carrying
@@ -524,6 +544,20 @@ def build_component(system, spec):
         partial_init=True,
     )
 
+    # ``cod3s.PycSystem.add_component`` WARNS on a name the system already
+    # holds and returns None, so every line below dereferenced None and the
+    # caller got ``'NoneType' object has no attribute 'metadata'`` -- a
+    # traceback naming neither the spec nor the name that collided. A duplicate
+    # instance name is the single most likely defect in a platform export or a
+    # generated study, which is the input this module exists for, so it is the
+    # one shape that has to name itself.
+    if comp is None:
+        raise ComponentSpecError(
+            f"Component {name}: the system already holds a component of that "
+            f"name. A spec builds a NEW component; give this one a distinct "
+            f"'name', or read the existing one back with component_spec"
+        )
+
     # The named class's own declaration. ``partial_init`` skipped the
     # constructor's call, so it is made here instead, which is what lets a
     # shipped class serve as a template the spec then adds to. ``metadata`` is
@@ -553,12 +587,20 @@ def build_component(system, spec):
     # inside the band -- a component that thresholds but chatters.
     comp.set_flows(**class_params)
 
+    # ``copy_declaration``, not ``copy.deepcopy``, and this is the one section
+    # where the difference bites. An occurrence law legitimately holds the
+    # PyCATSHOO variable its rate lives in -- ``{"cls": "exp", "rate":
+    # <IVariable>}``, which is what ``add_exp_failure_mode`` writes so an
+    # indicator can reference the rate by name -- and deep-copying that raises
+    # ``Pickling of "Pycatshoo.IVariable" instances is not enabled``. Copying
+    # the containers and sharing the leaves is also the correct semantics, not
+    # merely the one that runs: an engine handle identifies one variable.
     for entry in _entries(spec, "automata", name):
-        comp.add_atm2states(**copy.deepcopy(entry))
+        comp.add_atm2states(**copy_declaration(entry))
 
     for entry in _entries(spec, "failure_modes", name):
         method_name = _failure_mode_method(entry, name)
-        entry = copy.deepcopy(entry)
+        entry = copy_declaration(entry)
         entry.pop("cls", None)
         getattr(comp, method_name)(**entry)
 
