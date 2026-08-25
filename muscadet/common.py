@@ -15,8 +15,12 @@ INSTANT_OCC_LAW = {"cls": "delay", "time": 0}
 def fresh_instant_occ_law():
     """A private copy of :data:`INSTANT_OCC_LAW`.
 
-    ``TransitionModel.sanitize_occ_law`` rewrites the ``cls`` entry in place,
-    so a shared mapping would be capitalised twice.
+    Written when ``TransitionModel.sanitize_occ_law`` rewrote the ``cls`` entry
+    in place, so a shared mapping was capitalised twice. cod3s 1.16.1 builds on
+    a copy instead and no longer does that -- verified rather than assumed --
+    so this copy is now a guard rather than a necessity. It is kept because a
+    module-level constant handed to another library is worth protecting on its
+    own terms, and because the cost is one dict.
     """
     return dict(INSTANT_OCC_LAW)
 
@@ -24,11 +28,16 @@ def fresh_instant_occ_law():
 def copy_declaration(value):
     """Copy a declaration's CONTAINERS, sharing its leaves.
 
-    A declaration held in data is a caller's own object, and muscadet hands
-    parts of it to cod3s, which rewrites mappings in place -- see
-    :func:`fresh_instant_occ_law` for the same rewrite on a shared constant.
-    Copying the containers is what keeps such a declaration reusable, so that a
-    spec builds two systems instead of being emptied by the first.
+    A declaration held in data is a caller's own object, and building from it
+    must not empty it: a spec has to build two systems, not one. muscadet's own
+    build is what makes the copy load-bearing today -- ``declare.build_component``
+    pops ``cls`` off a failure-mode entry to choose the method to call, and
+    without a copy that pop lands in the caller's spec.
+
+    It was ALSO cod3s that consumed a declaration, ``ObjCOD3S.from_dict`` and
+    ``TransitionModel.sanitize_occ_law`` both writing through the mapping they
+    were given. cod3s 1.16.1 fixed that upstream, so the muscadet-side reason is
+    now the only one.
 
     ``copy.deepcopy`` is NOT usable here and the reason is not obvious: an
     occurrence law may legitimately hold a PyCATSHOO variable rather than a
@@ -77,12 +86,11 @@ def entity_label(kind, info, quote=False):
 
 
 def get_pyc_type(var_type):
-    if var_type == 'bool':
+    if var_type == "bool":
         return (bool, pyc.TVarType.t_bool)
-    elif var_type == 'int':
+    elif var_type == "int":
         return (int, pyc.TVarType.t_integer)
-    elif var_type == 'float':
+    elif var_type == "float":
         return (float, pyc.TVarType.t_double)
     else:
-        raise ValueError(
-            f"Type {var_type} not supported by PyCATSHOO")
+        raise ValueError(f"Type {var_type} not supported by PyCATSHOO")
