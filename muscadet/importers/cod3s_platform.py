@@ -31,11 +31,20 @@ Usage::
 Phase 1 scope : topology only (components + flows in/out + connections).
 Failure modes, business attributes wiring, and indicators are
 explicitly out of scope and deferred to later phases.
+
+Flow families (2026-08) : a KB interface carries a ``flow_family``
+discriminator selecting the muscadet flow family — ``'discrete'`` (the
+default, and the whole of the 1.x schema) or ``'continuous'``. The two
+families share no declaration key and are built from two separate kwargs
+dictionaries; an unknown family is refused rather than read as discrete.
+``_SUPPORTS_CONTINUOUS_FLOW_FAMILY`` is the marker the platform probes to
+know this muscadet understands the field at all.
 """
 
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
@@ -130,10 +139,15 @@ class FlowSpec:
     init_value: Optional[bool] = None
     # Value of an INPUT flow when it is NOT connected, set by the parse
     # layer when an ``instance.attribute(role=var_in_default)`` override
-    # exists. ``None`` means "leave the muscadet default" (False). True
-    # marks an always-fed boundary input (external source). Mirrors
-    # ``logic`` (role=logic_in) ; passed to ``FlowIn.var_in_default``.
-    var_in_default: Optional[bool] = None
+    # exists (discrete family) or read off the KB interface (continuous
+    # family). ``None`` means "leave the muscadet default" (``False`` on a
+    # discrete input, ``0.0`` on a continuous one). On a DISCRETE flow it is a
+    # bool and True marks an always-fed boundary input (external source); on a
+    # CONTINUOUS flow it is the real value the input reads while nothing is
+    # connected. One field because it is one property -- the platform names the
+    # attribute role ``var_in_default`` on both families for the same reason.
+    # Passed to ``FlowIn.var_in_default`` / ``FlowContinuousIn.var_in_default``.
+    var_in_default: Optional[Union[bool, float]] = None
     # Service-function dormancy default for an OUTPUT flow, set by the parse
     # layer when an ``instance.attribute(role=active_init)`` override exists.
     # ``None`` means "leave the muscadet default" (``var_is_active_default`` =
@@ -188,6 +202,35 @@ class FlowSpec:
     # is not emitted by this importer yet — an unwired on_trigger flow builds
     # and simulates but follows the automaton default until wired.
     trigger_logic: Optional[Union[str, int]] = None
+
+    # --- Flow FAMILY (2026-08, continuous flows chantier) -------------------
+    # Which muscadet flow family this interface belongs to: ``'discrete'``
+    # (``FlowIn`` / ``FlowOut`` and friends) or ``'continuous'``
+    # (``FlowContinuousIn`` / ``FlowContinuousOut``). Deliberately DISTINCT
+    # from ``flow_type`` above, which stays a discrete-only discriminator
+    # (classic / tempo / on_trigger): the two answer different questions and
+    # collapsing them would make ``tempo`` look like a family. Kept a plain
+    # string defaulting to ``'discrete'`` so a KB predating the field parses
+    # exactly as it did before.
+    flow_family: str = "discrete"
+    # CONTINUOUS family only — the nominal rate of the port, decomposed by the
+    # parse layer from its profile attribute (``production_profile`` on an
+    # output, ``demand_profile`` on an input). ``None`` leaves the muscadet
+    # default (0.0), which is what a port a recipe or a capacity serves wants.
+    # Target: ``FlowContinuousOut.var_fed_default`` on an output,
+    # ``FlowContinuousIn.var_demand_default`` on an input.
+    nominal_rate: Optional[float] = None
+    # CONTINUOUS output only — the MODULATION half of the profile
+    # decomposition, in muscadet's own ``{"cls": "SinusoidalProfile", ...}``
+    # mapping form, or ``None`` for a constant shape. muscadet's profile is a
+    # multiplicative FACTOR on ``var_fed_default`` and its shape library holds
+    # no constant shape, so a constant profile lives entirely in
+    # ``nominal_rate`` and never reaches ``muscadet.build_profile``.
+    profile_spec: Optional[dict] = None
+    # CONTINUOUS output only — how an insufficient supply is split among the
+    # consumers. v1 exposes proportional sharing only (muscadet's own default);
+    # ``None`` on a discrete flow, where the notion does not exist.
+    allocation: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -350,6 +393,367 @@ _SUPPORTS_PROD_COND_PORT = True
 # chantier (2026-07).
 _SUPPORTS_INSTANCE_TEMPO_OVERRIDE = True
 
+# Capability marker (jumeau of _SUPPORTS_INSTANCE_TEMPO_OVERRIDE): this muscadet
+# reads the ``flow_family`` interface discriminator and builds a CONTINUOUS flow
+# (``FlowContinuousIn`` / ``FlowContinuousOut``) for the ``"continuous"`` value,
+# with its nominal rate, its allocation policy and its production profile. An
+# older muscadet lacks this attribute, so the platform can refuse to simulate a
+# KB carrying continuous ports rather than importing them as discrete ones --
+# which is what an unknown interface key silently degrades to. Probed as
+# ``getattr(module, "_SUPPORTS_CONTINUOUS_FLOW_FAMILY", False)``. Cf. the
+# continuous flows chantier (2026-08).
+_SUPPORTS_CONTINUOUS_FLOW_FAMILY = True
+
+# ---------------------------------------------------------------------------
+# Flow families (2026-08)
+# ---------------------------------------------------------------------------
+#
+# ``flow_family`` selects the muscadet flow FAMILY and is orthogonal to
+# ``flow_type``, which selects the discrete flow CLASS. A discrete interface is
+# the historical shape and stays the default, so a KB predating the field is
+# read exactly as before. There is no fallback the other way: an unknown family
+# is refused, because reading it as discrete would build a boolean port where a
+# rate was declared and report nothing.
+
+DISCRETE_FAMILY = "discrete"
+CONTINUOUS_FAMILY = "continuous"
+_VALID_FLOW_FAMILIES = frozenset({DISCRETE_FAMILY, CONTINUOUS_FAMILY})
+
+# Allocation policies exposed by v1. muscadet also implements ``shares`` and
+# ``priority``, both of which need a per-consumer map the platform has no
+# surface for yet; declaring one here would build a flow whose split is decided
+# by a map nothing fills. Proportional is muscadet's own default.
+_ALLOCATION_PROPORTIONAL = "proportional"
+_VALID_ALLOCATIONS = frozenset({_ALLOCATION_PROPORTIONAL})
+
+# Interface keys that belong to the DISCRETE family alone. Refused on a
+# continuous interface, by name, at parse time. The three that matter most --
+# ``prod_cond``, ``negate``, ``logic_inner_mode`` -- are also refused by
+# ``FlowContinuous.check_declaration_keys`` downstream, but that refusal names a
+# muscadet field on a muscadet class: it tells a platform user nothing about the
+# port they declared. Refusing here names the PLATFORM key, and refusing at
+# parse time keeps the diagnostic reachable without a runtime.
+_DISCRETE_ONLY_INTERFACE_KEYS: Tuple[str, ...] = (
+    "input_logic",
+    "prod_cond",
+    "logic_inner_mode",
+    "negate",
+    "flow_type",
+    "occ_enable",
+    "occ_disable",
+    "init_enable",
+    "trigger_time_up",
+    "trigger_time_down",
+    "trigger_logic",
+)
+
+# The mirror: keys that belong to the CONTINUOUS family alone, refused on a
+# discrete interface. A profile written on a boolean port is a declaration that
+# could never take effect, and the silent drop is what the family discriminator
+# exists to make impossible in both directions.
+_CONTINUOUS_ONLY_INTERFACE_KEYS: Tuple[str, ...] = (
+    "production_profile",
+    "demand_profile",
+    "allocation",
+)
+
+# Values a key may carry while saying NOTHING, beside ``None`` and the empty
+# containers handled generically below. The platform serialises its interface
+# model whole, and two of its discrete fields are declared with a non-null
+# default (``negate=False``, ``logic_inner_mode="and"``): every exported
+# interface carries them, continuous ones included, without anyone having
+# declared anything. Refusing those would refuse a payload that means what the
+# absence of the key means. Anything ELSE written under these names was chosen,
+# and is refused -- ``negate=True`` on a continuous port is a modeller
+# believing in a negation that will never be applied.
+_NEUTRAL_INTERFACE_VALUES: Dict[str, Tuple[Any, ...]] = {
+    "input_logic": ("or",),
+    "logic_inner_mode": ("and",),
+    "negate": (False,),
+    "flow_type": ("classic",),
+    "allocation": (_ALLOCATION_PROPORTIONAL,),
+}
+
+# ---------------------------------------------------------------------------
+# Profile decomposition (2026-08)
+# ---------------------------------------------------------------------------
+#
+# The platform declares the quantity of a continuous port as a PROFILE: a named
+# shape and its parameters, on the model of the occurrence laws it already
+# carries, whose ``value`` is ALWAYS the nominal rate of the port. muscadet
+# reads that declaration in two separate places, and the split is not optional:
+#
+# * ``var_fed_default`` is the nominal rate;
+# * ``profile`` is a multiplicative FACTOR on it (``muscadet/profile.py``), and
+#   ``PROFILE_CLASSES`` holds ``Profile`` and ``SinusoidalProfile`` only -- there
+#   is NO constant shape, because a constant factor is the absence of a profile.
+#
+# So the importer decomposes: the ``value`` projects onto the nominal rate for
+# every shape, and a profile OBJECT is emitted only for a modulated one. A
+# constant shape must never reach ``build_profile`` -- there is nothing there
+# for it to build, and routing it through ``Profile(lambda t: v)`` would fold
+# the rate into the factor, where a derating composes with it by MINIMUM instead
+# of by product (cf. the composition rule in ``muscadet/profile.py``).
+
+_PROFILE_CONSTANT_SHAPE = "constant"
+
+# {platform shape name: muscadet PROFILE_CLASSES entry}. ``None`` marks the
+# shape that yields no profile object at all.
+_PROFILE_SHAPE_CLASSES: Dict[str, Optional[str]] = {
+    _PROFILE_CONSTANT_SHAPE: None,
+    "sinusoidal": "SinusoidalProfile",
+}
+
+# Modulation parameters each shape accepts, beside ``cls`` and ``value``. An
+# allowlist rather than a passthrough: an unknown parameter reaching muscadet
+# would raise a TypeError from a constructor signature, which names neither the
+# port nor the platform shape.
+_PROFILE_SHAPE_PARAMS: Dict[str, frozenset] = {
+    _PROFILE_CONSTANT_SHAPE: frozenset(),
+    "sinusoidal": frozenset(
+        {"amplitude", "period", "phase_shift", "offset", "value_min", "value_max"}
+    ),
+}
+
+
+def _declared_interface_keys(
+    interface: Dict[str, Any], keys: Tuple[str, ...]
+) -> List[str]:
+    """Return the ``keys`` the interface carries with an actual declaration.
+
+    ``None``, an empty container and the value listed in
+    :data:`_NEUTRAL_INTERFACE_VALUES` are information-free: a platform that
+    serialises its interface model whole emits ``prod_cond: []`` on a port
+    carrying no production condition and ``negate: false`` on every port at
+    all, and refusing those would refuse a payload saying nothing. Anything
+    else was written on purpose and is a declaration the modeller can be wrong
+    about.
+    """
+    declared = []
+    for key in keys:
+        if key not in interface:
+            continue
+        value = interface[key]
+        if value is None or value == [] or value == {}:
+            continue
+        if any(
+            value == neutral and isinstance(value, type(neutral))
+            for neutral in _NEUTRAL_INTERFACE_VALUES.get(key, ())
+        ):
+            continue
+        declared.append(key)
+    return declared
+
+
+def _check_family_keys(
+    interface: Dict[str, Any],
+    *,
+    name: str,
+    family: str,
+    forbidden: Tuple[str, ...],
+    other_family: str,
+) -> None:
+    """Refuse, by name, a key belonging to the other flow family."""
+    declared = _declared_interface_keys(interface, forbidden)
+    if not declared:
+        return
+
+    plural = "s" if len(declared) > 1 else ""
+    keys = ", ".join(repr(key) for key in declared)
+    raise Cod3sPlatformImportError(
+        f"Interface {name!r}: flow_family={family!r} does not accept "
+        f"{other_family} declaration key{plural} {keys}. Either drop "
+        f"{'them' if len(declared) > 1 else 'it'} or declare the port as "
+        f"flow_family={other_family!r}."
+    )
+
+
+def _parse_profile(
+    raw: Any,
+    *,
+    flow_name: str,
+    key: str,
+    allow_modulated: bool,
+) -> Tuple[Optional[float], Optional[dict]]:
+    """Decompose a platform profile into ``(nominal rate, profile mapping)``.
+
+    Returns ``(None, None)`` when nothing is declared -- the port is then served
+    by a recipe or by a capacity, and the muscadet defaults must stand.
+
+    ``allow_modulated`` is False on an input: muscadet carries a profile channel
+    on a continuous OUTPUT only, so a modulated demand would be flattened to its
+    nominal rate with nothing to signal the loss.
+    """
+    if raw is None:
+        return None, None
+
+    where = f"Interface {flow_name!r}: {key}"
+
+    if not isinstance(raw, dict):
+        raise Cod3sPlatformImportError(
+            f"{where} must be a mapping {{'cls': <shape>, 'value': <rate>, "
+            f"...}}, got {type(raw).__name__}"
+        )
+
+    params = dict(raw)
+    shape = params.pop("cls", None)
+
+    if shape is None:
+        raise Cod3sPlatformImportError(
+            f"{where} carries no 'cls' key naming its shape; expected one of "
+            f"{sorted(_PROFILE_SHAPE_CLASSES)}"
+        )
+
+    if shape not in _PROFILE_SHAPE_CLASSES:
+        raise Cod3sPlatformImportError(
+            f"{where}: unsupported profile shape cls={shape!r} (expected one "
+            f"of {sorted(_PROFILE_SHAPE_CLASSES)})"
+        )
+
+    if params.get("value") is None:
+        raise Cod3sPlatformImportError(
+            f"{where}: a profile carries a 'value', which is the NOMINAL RATE "
+            "of the port -- a profile is a multiplicative factor, so one "
+            "declared over no rate would produce nothing without signalling it"
+        )
+
+    raw_value = params.pop("value")
+    try:
+        rate = float(raw_value)
+    except (TypeError, ValueError):
+        raise Cod3sPlatformImportError(
+            f"{where}: value must be a real number, got {raw_value!r}"
+        ) from None
+
+    if not math.isfinite(rate):
+        raise Cod3sPlatformImportError(
+            f"{where}: value must be a finite real number, got {raw_value!r}"
+        )
+
+    unknown = sorted(set(params) - _PROFILE_SHAPE_PARAMS[shape])
+    if unknown:
+        plural = "s" if len(unknown) > 1 else ""
+        keys = ", ".join(repr(k) for k in unknown)
+        accepted = sorted(_PROFILE_SHAPE_PARAMS[shape])
+        raise Cod3sPlatformImportError(
+            f"{where}: shape {shape!r} does not accept parameter{plural} "
+            f"{keys}; it accepts {accepted}"
+        )
+
+    cls_name = _PROFILE_SHAPE_CLASSES[shape]
+    if cls_name is None:
+        # Constant shape: the whole declaration IS the nominal rate. No profile
+        # object, so nothing reaches build_profile.
+        return rate, None
+
+    if not allow_modulated:
+        raise Cod3sPlatformImportError(
+            f"{where}: shape {shape!r} is a modulated profile, and muscadet "
+            "carries a time profile on a continuous OUTPUT only -- there is no "
+            "profile channel on a continuous input. Declare a "
+            f"{_PROFILE_CONSTANT_SHAPE!r} shape here."
+        )
+
+    return rate, {"cls": cls_name, **params}
+
+
+def _parse_continuous_rate(raw: Any, *, flow_name: str, key: str) -> Optional[float]:
+    """Coerce a bare numeric field of a continuous interface."""
+    if raw is None:
+        return None
+
+    if isinstance(raw, bool):
+        # A bool here is a discrete default that survived a family switch: it
+        # would coerce to 0.0/1.0 and read as a plausible rate.
+        raise Cod3sPlatformImportError(
+            f"Interface {flow_name!r}: {key} must be a real number on a "
+            f"continuous port, got the boolean {raw!r}"
+        )
+
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        raise Cod3sPlatformImportError(
+            f"Interface {flow_name!r}: {key} must be a real number, got {raw!r}"
+        ) from None
+
+    if not math.isfinite(value):
+        raise Cod3sPlatformImportError(
+            f"Interface {flow_name!r}: {key} must be a finite real number, "
+            f"got {raw!r}"
+        )
+
+    return value
+
+
+def _parse_allocation(raw: Any, *, flow_name: str) -> str:
+    """Validate the allocation policy of a continuous output."""
+    if raw is None:
+        return _ALLOCATION_PROPORTIONAL
+
+    if raw not in _VALID_ALLOCATIONS:
+        raise Cod3sPlatformImportError(
+            f"Interface {flow_name!r}: unsupported allocation={raw!r} "
+            f"(expected one of {sorted(_VALID_ALLOCATIONS)})"
+        )
+
+    return raw
+
+
+def _parse_continuous_interface(
+    interface: Dict[str, Any], *, name: str, port_type: str
+) -> FlowSpec:
+    """Translate one CONTINUOUS KB interface into a :class:`FlowSpec`.
+
+    ``logic`` is set to an empty list on both directions: the continuous family
+    reads no boolean production condition and no input aggregation logic, and
+    the empty list is what keeps the intra-component output ordering (which
+    walks ``logic``) a no-op rather than a special case.
+    """
+    _check_family_keys(
+        interface,
+        name=name,
+        family=CONTINUOUS_FAMILY,
+        forbidden=_DISCRETE_ONLY_INTERFACE_KEYS,
+        other_family=DISCRETE_FAMILY,
+    )
+
+    if port_type == "input":
+        rate, _ = _parse_profile(
+            interface.get("demand_profile"),
+            flow_name=name,
+            key="demand_profile",
+            allow_modulated=False,
+        )
+        return FlowSpec(
+            name=name,
+            direction="input",
+            logic=[],
+            flow_family=CONTINUOUS_FAMILY,
+            var_in_default=_parse_continuous_rate(
+                interface.get("var_in_default"),
+                flow_name=name,
+                key="var_in_default",
+            ),
+            nominal_rate=rate,
+        )
+
+    rate, profile_spec = _parse_profile(
+        interface.get("production_profile"),
+        flow_name=name,
+        key="production_profile",
+        allow_modulated=True,
+    )
+    return FlowSpec(
+        name=name,
+        direction="output",
+        logic=[],
+        flow_family=CONTINUOUS_FAMILY,
+        nominal_rate=rate,
+        profile_spec=profile_spec,
+        allocation=_parse_allocation(interface.get("allocation"), flow_name=name),
+    )
+
 
 def _parse_interface(interface: Dict[str, Any]) -> FlowSpec:
     """Translate one KB interface dict into a :class:`FlowSpec`.
@@ -366,6 +770,12 @@ def _parse_interface(interface: Dict[str, Any]) -> FlowSpec:
     The legacy ambiguous ``logic`` field is rejected outright (no
     fallback) per Resolved Arbitrations #4 — re-export from a
     post-3.0.0 platform instance to upgrade the file.
+
+    A ``flow_family`` discriminator selects the muscadet flow FAMILY before any
+    of the above is read: ``'discrete'`` (the default, and the whole of the
+    schema described here) or ``'continuous'``, which is parsed by
+    :func:`_parse_continuous_interface` and shares none of the discrete keys.
+    An unknown family is refused rather than read as discrete.
     """
     name = interface.get("name")
     if not name:
@@ -382,6 +792,27 @@ def _parse_interface(interface: Dict[str, Any]) -> FlowSpec:
             f"Interface {name!r}: unsupported port_type.general={port_type!r} "
             "(expected 'input' or 'output')"
         )
+
+    # Flow family first: it decides which schema the rest of the interface is
+    # read under. No fallback on an unknown value — reading a continuous port as
+    # discrete builds a boolean where a rate was declared.
+    flow_family = interface.get("flow_family") or DISCRETE_FAMILY
+    if flow_family not in _VALID_FLOW_FAMILIES:
+        raise Cod3sPlatformImportError(
+            f"Interface {name!r}: unsupported flow_family={flow_family!r} "
+            f"(expected one of {sorted(_VALID_FLOW_FAMILIES)})"
+        )
+    if flow_family == CONTINUOUS_FAMILY:
+        return _parse_continuous_interface(interface, name=name, port_type=port_type)
+
+    _check_family_keys(
+        interface,
+        name=name,
+        family=DISCRETE_FAMILY,
+        forbidden=_CONTINUOUS_ONLY_INTERFACE_KEYS,
+        other_family=CONTINUOUS_FAMILY,
+    )
+
     if port_type == "input":
         return FlowSpec(
             name=name,
@@ -762,6 +1193,20 @@ def _apply_instance_overrides(
                 f"{other.direction} (snapshot corruption)"
             )
         flow = out[idx]
+        if flow.flow_family == CONTINUOUS_FAMILY:
+            # Every role in _ROLE_TO_DIRECTION is a DISCRETE one: they carry
+            # booleans, an aggregation logic or a tempo law, and none of them
+            # has a continuous counterpart to be applied to. Applied anyway,
+            # role=var_in_default would coerce its bool to a plausible rate of
+            # 1.0 and the others would be dropped by the continuous kwargs
+            # builders without a word. Refused instead, by name -- the platform
+            # gains its continuous override roles in the unit that emits them.
+            raise Cod3sPlatformImportError(
+                f"Component {comp_name!r}: instance override role={role} is a "
+                f"discrete-family override and flow {name!r} is continuous. "
+                "No continuous instance override is carried yet; declare the "
+                "value on the KB interface."
+            )
         if role == "logic_in":
             new_logic = _parse_input_logic_value(
                 value, flow_name=name, comp_name=comp_name
@@ -1313,6 +1758,50 @@ def _create_logic_gate(
         )
 
 
+def _continuous_in_kwargs(flow: FlowSpec) -> Dict[str, Any]:
+    """Declaration kwargs of a continuous INPUT flow.
+
+    A dictionary of its own, sharing not one line with the discrete builder.
+    That separation is what guarantees no production condition, no inner mode
+    and no negation can reach a continuous flow: there is no code path putting
+    them here. ``FlowContinuous.check_declaration_keys`` would refuse them, but
+    a refusal is a last line of defence, not a design.
+    """
+    kwargs: Dict[str, Any] = {
+        "cls": "FlowContinuousIn",
+        "name": flow.name,
+    }
+    # Only pass what was declared; None leaves the muscadet default (0.0 for
+    # both), which is what a port fed by a recipe or a capacity wants.
+    if flow.var_in_default is not None:
+        kwargs["var_in_default"] = float(flow.var_in_default)
+    if flow.nominal_rate is not None:
+        kwargs["var_demand_default"] = flow.nominal_rate
+
+    return kwargs
+
+
+def _continuous_out_kwargs(flow: FlowSpec) -> Dict[str, Any]:
+    """Declaration kwargs of a continuous OUTPUT flow.
+
+    The profile arrives already decomposed by the parse layer: ``nominal_rate``
+    is the declared rate and ``profile_spec`` the modulation, absent for a
+    constant shape. So ``profile`` is written here only when there is a factor
+    to build, and a constant shape never reaches ``muscadet.build_profile``.
+    """
+    kwargs: Dict[str, Any] = {
+        "cls": "FlowContinuousOut",
+        "name": flow.name,
+        "allocation": flow.allocation or _ALLOCATION_PROPORTIONAL,
+    }
+    if flow.nominal_rate is not None:
+        kwargs["var_fed_default"] = flow.nominal_rate
+    if flow.profile_spec is not None:
+        kwargs["profile"] = dict(flow.profile_spec)
+
+    return kwargs
+
+
 def apply_to_system(
     ctx: ImporterContext,
     system: Any,
@@ -1326,7 +1815,10 @@ def apply_to_system(
     1. For each component, instantiate via ``system.add_component(cls='ObjFlow',
        name=...)``.
     2. Add **all input flows first** (output ``var_prod_cond`` may reference
-       them).
+       them). Each flow is dispatched on its ``flow_family``: a continuous one
+       is built from :func:`_continuous_in_kwargs` /
+       :func:`_continuous_out_kwargs`, which share no key with the discrete
+       builders below.
     3. Add output flows in **dependency order** — outputs whose
        ``var_prod_cond`` references another output of the same component
        are created after their dependencies (the COD3S Platform KB uses
@@ -1405,15 +1897,19 @@ def apply_to_system(
         input_names = set()
         for flow in spec.flows:
             if flow.direction == "input":
-                flow_in_kwargs = {
-                    "cls": "FlowIn",
-                    "name": flow.name,
-                    "logic": flow.logic,
-                }
-                # Only pass var_in_default when explicitly set (role=var_in_default
-                # instance override) ; None leaves the muscadet FlowIn default (False).
-                if flow.var_in_default is not None:
-                    flow_in_kwargs["var_in_default"] = flow.var_in_default
+                if flow.flow_family == CONTINUOUS_FAMILY:
+                    flow_in_kwargs = _continuous_in_kwargs(flow)
+                else:
+                    flow_in_kwargs = {
+                        "cls": "FlowIn",
+                        "name": flow.name,
+                        "logic": flow.logic,
+                    }
+                    # Only pass var_in_default when explicitly set
+                    # (role=var_in_default instance override) ; None leaves the
+                    # muscadet FlowIn default (False).
+                    if flow.var_in_default is not None:
+                        flow_in_kwargs["var_in_default"] = flow.var_in_default
                 try:
                     comp.add_flow(flow_in_kwargs)
                 except Exception as e:
@@ -1428,6 +1924,15 @@ def apply_to_system(
         # for diagnostic flows mirroring primary outputs).
         outputs = [f for f in spec.flows if f.direction == "output"]
         for flow in _order_outputs_by_deps(outputs, input_names, spec.name):
+            if flow.flow_family == CONTINUOUS_FAMILY:
+                try:
+                    comp.add_flow(_continuous_out_kwargs(flow))
+                except Exception as e:
+                    raise Cod3sPlatformImportError(
+                        f"Failed to add continuous output flow {flow.name!r} "
+                        f"to component {spec.name!r}: {e}"
+                    ) from e
+                continue
             # Dynamic flow-out dispatch (2026-07-10). All three classes derive
             # from FlowOut, so var_prod_cond / inner_mode / negate apply to each.
             flow_type = flow.flow_type or "classic"
