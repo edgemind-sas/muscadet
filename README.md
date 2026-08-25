@@ -1622,6 +1622,13 @@ python examples/continuous_01/continuous_01.py
 
 It prints one row per event the solver stopped at, and a summary of what the trace shows.
 
+The same model opens in the interactive simulator, where playback runs it
+rather than printing it:
+
+```sh
+cod3s-isimu --factory examples.continuous_01.continuous_01:build_system
+```
+
 ## Interactive simulation
 
 `simulate()` runs a mission and gives back indicators. An interactive session

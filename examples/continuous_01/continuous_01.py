@@ -325,10 +325,17 @@ def report(trace):
     return "\n".join(lines)
 
 
-my_line = build_system()
+# Guarded, because this module is also a ``cod3s-isimu --factory`` target and a
+# factory is IMPORTED before it is called. Unguarded, the import built a system
+# and drove it, and the factory call then tried to build a second one: PyCATSHOO
+# holds one system at a time, so the session died on "Il existe deja un systeme"
+# before the TUI ever opened. Every module in examples/isimu/ is guarded for the
+# same reason.
+if __name__ == "__main__":
+    my_line = build_system()
 
-my_line.isimu_start()
-trace = walk(my_line)
-my_line.isimu_stop()
+    my_line.isimu_start()
+    trace = walk(my_line)
+    my_line.isimu_stop()
 
-print(report(trace))
+    print(report(trace))
