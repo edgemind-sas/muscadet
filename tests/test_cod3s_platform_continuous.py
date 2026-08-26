@@ -22,6 +22,8 @@ What this file locks:
 - a purely discrete KB builds exactly what it built before the change.
 """
 
+import logging
+
 import pytest
 
 from muscadet.importers.cod3s_platform import (
@@ -830,3 +832,938 @@ class TestDiscreteNonRegression:
         for flow in spec["flows"]:
             assert "profile" not in flow
             assert "allocation" not in flow
+
+
+# ===========================================================================
+# U2 — capacities, rule sets, per-instance capacity overrides, deratings
+# ===========================================================================
+#
+# The three declarations below live at the CLASS TEMPLATE level, beside
+# ``interfaces`` and never inside it: a capacity is held over several flows and
+# a rule set correlates several outputs, so neither is a property of one port.
+# The fourth, the derating pairs, lives on the MODEL COMPONENT: a failure mode
+# is declared per instance, and the variable it will clamp has to be allocated
+# on the component that carries it.
+
+from muscadet.importers.cod3s_platform import (  # noqa: E402
+    CAPACITY_CONTENT_INIT_ROLE,
+    CAPACITY_FILL_RATE_ROLE,
+    CAPACITY_VOLUME_ROLE,
+    _build_kb_capacities,
+    _build_kb_lookup,
+    _build_kb_rule_sets,
+)
+
+
+def _template_payload(
+    interfaces,
+    sys_name,
+    *,
+    capacities=None,
+    rule_sets=None,
+    components=None,
+):
+    """Canonical payload whose class template may carry the U2 sections.
+
+    ``components`` overrides the single default instance, so a test can declare
+    two components of the same class and give each its own overrides.
+    """
+    template = {"interfaces": interfaces}
+    if capacities is not None:
+        template["capacities"] = capacities
+    if rule_sets is not None:
+        template["rule_sets"] = rule_sets
+
+    if components is None:
+        components = {
+            "c1": {"name": "C1", "class_name": "Cls", "attributes": []},
+        }
+
+    return {
+        "model": {
+            "name": sys_name,
+            "kb": {"name": "KB", "version": "1.0.0"},
+            "elements": {"components": components, "connections": {}},
+        },
+        "kb": {"component_templates": {"Cls": template}},
+    }
+
+
+def _cont_in(name):
+    return {
+        "name": name,
+        "port_type": {"general": "input"},
+        "flow_family": "continuous",
+    }
+
+
+def _cont_out(name, value=None):
+    iface = {
+        "name": name,
+        "port_type": {"general": "output"},
+        "flow_family": "continuous",
+    }
+    if value is not None:
+        iface["production_profile"] = {"cls": "constant", "value": value}
+    return iface
+
+
+def _capacities_of(payload, class_name="Cls"):
+    """Parse-layer capacities of one class, without going through a component."""
+    kb = payload["kb"]
+    return _build_kb_capacities(kb, _build_kb_lookup(kb))[class_name]
+
+
+def _rule_sets_of(payload, class_name="Cls"):
+    kb = payload["kb"]
+    return _build_kb_rule_sets(
+        kb, _build_kb_lookup(kb), _build_kb_capacities(kb, _build_kb_lookup(kb))
+    )[class_name]
+
+
+# ---------------------------------------------------------------------------
+# Capability markers — the four contracts the platform translator probes
+# ---------------------------------------------------------------------------
+
+
+class TestU2CapabilityMarkers:
+    @pytest.mark.parametrize(
+        "marker",
+        [
+            "_SUPPORTS_CONTINUOUS_CAPACITIES",
+            "_SUPPORTS_CONTINUOUS_RULE_SETS",
+            "_SUPPORTS_INSTANCE_CAPACITY_OVERRIDE",
+            "_SUPPORTS_DERATING_PREALLOCATION",
+        ],
+    )
+    def test_marker_is_declared_true(self, marker):
+        from muscadet.importers import cod3s_platform
+
+        assert getattr(cod3s_platform, marker) is True
+
+
+# ---------------------------------------------------------------------------
+# Parse layer — capacities declared on the class template
+# ---------------------------------------------------------------------------
+
+
+class TestParseCapacities:
+    def test_single_flow_capacity_carries_volume_side_and_content(self):
+        payload = _template_payload(
+            {"o": _cont_out("H2")},
+            sys_name="Mcap_one",
+            capacities=[
+                {
+                    "name": "tank",
+                    "flows": [{"name": "H2"}],
+                    "volume": 6.0,
+                    "side": "out",
+                    "content_init": {"H2": 3.0},
+                }
+            ],
+        )
+        (cap,) = _capacities_of(payload)
+        assert cap.name == "tank"
+        assert cap.volume == 6.0
+        assert cap.side == "out"
+        assert cap.content_init == {"H2": 3.0}
+        assert [(f.name, f.weight) for f in cap.flows] == [("H2", 1.0)]
+        # Not declared: the muscadet default must stand, so nothing is carried.
+        assert cap.fill_rate is None
+
+    def test_multi_flow_capacity_defaults_the_weight_to_one(self):
+        payload = _template_payload(
+            {"a": _cont_in("H2O"), "b": _cont_in("additif")},
+            sys_name="Mcap_multi",
+            capacities=[
+                {
+                    "name": "cuve",
+                    "flows": [{"name": "H2O"}, {"name": "additif", "weight": 2.0}],
+                    "volume": 1000.0,
+                }
+            ],
+        )
+        (cap,) = _capacities_of(payload)
+        assert [(f.name, f.weight) for f in cap.flows] == [
+            ("H2O", 1.0),
+            ("additif", 2.0),
+        ]
+        assert cap.side is None  # left to muscadet's own resolution
+
+    def test_flow_shorthand_string_is_accepted(self):
+        payload = _template_payload(
+            {"o": _cont_out("H2")},
+            sys_name="Mcap_short",
+            capacities=[{"name": "tank", "flows": "H2", "volume": 6.0}],
+        )
+        (cap,) = _capacities_of(payload)
+        assert [(f.name, f.weight) for f in cap.flows] == [("H2", 1.0)]
+
+    def test_fill_rate_accepts_the_unbounded_spelling(self):
+        payload = _template_payload(
+            {"o": _cont_out("H2")},
+            sys_name="Mcap_inf",
+            capacities=[
+                {"name": "tank", "flows": "H2", "volume": 6.0, "fill_rate": "inf"}
+            ],
+        )
+        (cap,) = _capacities_of(payload)
+        assert cap.fill_rate == float("inf")
+
+    def test_unknown_flow_is_refused_and_named(self):
+        payload = _template_payload(
+            {"o": _cont_out("H2")},
+            sys_name="Mcap_unknown",
+            capacities=[{"name": "tank", "flows": "H2O", "volume": 6.0}],
+        )
+        with pytest.raises(Cod3sPlatformImportError) as excinfo:
+            _capacities_of(payload)
+        message = str(excinfo.value)
+        assert "'H2O'" in message
+        assert "tank" in message
+
+    def test_discrete_flow_is_refused(self):
+        payload = _template_payload(
+            {
+                "o": _cont_out("H2"),
+                "d": {"name": "signal", "port_type": {"general": "output"}},
+            },
+            sys_name="Mcap_discrete",
+            capacities=[{"name": "tank", "flows": "signal", "volume": 6.0}],
+        )
+        with pytest.raises(Cod3sPlatformImportError) as excinfo:
+            _capacities_of(payload)
+        message = str(excinfo.value)
+        assert "signal" in message
+        assert "discrete" in message
+
+    def test_capacity_without_volume_is_refused(self):
+        payload = _template_payload(
+            {"o": _cont_out("H2")},
+            sys_name="Mcap_novol",
+            capacities=[{"name": "tank", "flows": "H2"}],
+        )
+        with pytest.raises(Cod3sPlatformImportError) as excinfo:
+            _capacities_of(payload)
+        assert "volume" in str(excinfo.value)
+
+    def test_capacity_on_a_class_with_no_continuous_flow_is_refused(self):
+        payload = _template_payload(
+            {"d": {"name": "signal", "port_type": {"general": "output"}}},
+            sys_name="Mcap_nocont",
+            capacities=[{"name": "tank", "flows": "signal", "volume": 6.0}],
+        )
+        with pytest.raises(Cod3sPlatformImportError) as excinfo:
+            _capacities_of(payload)
+        message = str(excinfo.value)
+        assert "Cls" in message
+        assert "continuous" in message
+
+    def test_duplicate_capacity_name_is_refused(self):
+        payload = _template_payload(
+            {"o": _cont_out("H2")},
+            sys_name="Mcap_dup",
+            capacities=[
+                {"name": "tank", "flows": "H2", "volume": 6.0},
+                {"name": "tank", "flows": "H2", "volume": 7.0},
+            ],
+        )
+        with pytest.raises(Cod3sPlatformImportError) as excinfo:
+            _capacities_of(payload)
+        assert "tank" in str(excinfo.value)
+
+    def test_content_init_naming_a_flow_the_capacity_does_not_hold_is_refused(self):
+        payload = _template_payload(
+            {"o": _cont_out("H2"), "p": _cont_out("O2")},
+            sys_name="Mcap_content_alien",
+            capacities=[
+                {
+                    "name": "tank",
+                    "flows": "H2",
+                    "volume": 6.0,
+                    "content_init": {"O2": 1.0},
+                }
+            ],
+        )
+        with pytest.raises(Cod3sPlatformImportError) as excinfo:
+            _capacities_of(payload)
+        assert "O2" in str(excinfo.value)
+
+    def test_capacities_reach_the_component_spec(self):
+        payload = _template_payload(
+            {"o": _cont_out("H2")},
+            sys_name="Mcap_ctx",
+            capacities=[{"name": "tank", "flows": "H2", "volume": 6.0}],
+        )
+        ctx = parse_platform_export(payload)
+        (cap,) = ctx.components[0].capacities
+        assert cap.name == "tank"
+
+
+# ---------------------------------------------------------------------------
+# Parse layer — rule sets declared on the class template
+# ---------------------------------------------------------------------------
+
+
+class TestParseRuleSets:
+    def test_single_unguarded_rule_carries_its_coefficients(self):
+        payload = _template_payload(
+            {"i": _cont_in("H2O"), "o": _cont_out("H2")},
+            sys_name="Mrules_one",
+            rule_sets=[
+                {
+                    "name": "transform",
+                    "rules": [
+                        {
+                            "name": "electrolysis",
+                            "cons": {"H2O": 4.0},
+                            "prod": {"H2": 1.0},
+                        }
+                    ],
+                }
+            ],
+        )
+        (rule_set,) = _rule_sets_of(payload)
+        assert rule_set.name == "transform"
+        (rule,) = rule_set.rules
+        assert rule.name == "electrolysis"
+        assert rule.cons == {"H2O": 4.0}
+        assert rule.prod == {"H2": 1.0}
+        assert rule.cond == ()
+
+    def test_guard_operands_are_parsed(self):
+        payload = _template_payload(
+            {
+                "c": {"name": "ctrl", "port_type": {"general": "input"}},
+                "i": _cont_in("H2O"),
+                "o": _cont_out("H2"),
+            },
+            sys_name="Mrules_guard",
+            rule_sets=[
+                {
+                    "name": "transform",
+                    "rules": [
+                        {
+                            "name": "run",
+                            "cond": [{"name": "ctrl", "port": "in"}],
+                            "cons": {"H2O": 4.0},
+                            "prod": {"H2": 1.0},
+                        },
+                        {"name": "idle", "prod": {"H2": 0.0}},
+                    ],
+                }
+            ],
+        )
+        (rule_set,) = _rule_sets_of(payload)
+        run, idle = rule_set.rules
+        (operand,) = run.cond
+        assert operand.name == "ctrl"
+        assert operand.port == "in"
+        assert operand.negate is False
+        assert idle.cond == ()
+
+    def test_numeric_guard_operand_is_parsed(self):
+        payload = _template_payload(
+            {"i": _cont_in("H2O"), "o": _cont_out("H2")},
+            sys_name="Mrules_numeric",
+            rule_sets=[
+                {
+                    "name": "transform",
+                    "rules": [
+                        {
+                            "cond": [{"name": "H2O", "op": ">=", "value": 10.0}],
+                            "prod": {"H2": 1.0},
+                        },
+                        {"prod": {"H2": 0.0}},
+                    ],
+                }
+            ],
+        )
+        (rule_set,) = _rule_sets_of(payload)
+        (operand,) = rule_set.rules[0].cond
+        assert (operand.op, operand.value) == (">=", 10.0)
+
+    def test_two_unguarded_rules_are_refused(self):
+        payload = _template_payload(
+            {"o": _cont_out("H2")},
+            sys_name="Mrules_two_defaults",
+            rule_sets=[
+                {
+                    "name": "transform",
+                    "rules": [
+                        {"name": "a", "prod": {"H2": 1.0}},
+                        {"name": "b", "prod": {"H2": 2.0}},
+                    ],
+                }
+            ],
+        )
+        with pytest.raises(Cod3sPlatformImportError) as excinfo:
+            _rule_sets_of(payload)
+        message = str(excinfo.value)
+        assert "transform" in message
+        assert "a" in message and "b" in message
+
+    def test_rule_referencing_an_unknown_flow_is_refused(self):
+        payload = _template_payload(
+            {"o": _cont_out("H2")},
+            sys_name="Mrules_unknown",
+            rule_sets=[
+                {"name": "transform", "rules": [{"cons": {"H2O": 4.0}}]},
+            ],
+        )
+        with pytest.raises(Cod3sPlatformImportError) as excinfo:
+            _rule_sets_of(payload)
+        assert "H2O" in str(excinfo.value)
+
+    def test_consumed_name_must_be_an_input(self):
+        payload = _template_payload(
+            {"o": _cont_out("H2")},
+            sys_name="Mrules_cons_out",
+            rule_sets=[{"name": "transform", "rules": [{"cons": {"H2": 1.0}}]}],
+        )
+        with pytest.raises(Cod3sPlatformImportError) as excinfo:
+            _rule_sets_of(payload)
+        assert "H2" in str(excinfo.value)
+
+    def test_produced_name_must_be_an_output(self):
+        payload = _template_payload(
+            {"i": _cont_in("H2O")},
+            sys_name="Mrules_prod_in",
+            rule_sets=[{"name": "transform", "rules": [{"prod": {"H2O": 1.0}}]}],
+        )
+        with pytest.raises(Cod3sPlatformImportError) as excinfo:
+            _rule_sets_of(payload)
+        assert "H2O" in str(excinfo.value)
+
+    def test_expression_string_guard_is_refused(self):
+        payload = _template_payload(
+            {
+                "c": {"name": "ctrl", "port_type": {"general": "input"}},
+                "o": _cont_out("H2"),
+            },
+            sys_name="Mrules_expr",
+            rule_sets=[
+                {
+                    "name": "transform",
+                    "rules": [{"cond": "ctrl", "prod": {"H2": 1.0}}],
+                }
+            ],
+        )
+        with pytest.raises(Cod3sPlatformImportError) as excinfo:
+            _rule_sets_of(payload)
+        assert "cond" in str(excinfo.value)
+
+    def test_rule_naming_a_capacity_is_refused_as_such(self):
+        payload = _template_payload(
+            {"i": _cont_in("H2O"), "o": _cont_out("H2")},
+            sys_name="Mrules_capname",
+            capacities=[{"name": "cuve", "flows": "H2O", "volume": 10.0}],
+            rule_sets=[{"name": "transform", "rules": [{"cons": {"cuve": 1.0}}]}],
+        )
+        with pytest.raises(Cod3sPlatformImportError) as excinfo:
+            _rule_sets_of(payload)
+        message = str(excinfo.value)
+        assert "cuve" in message
+        assert "capacity" in message
+
+    def test_duplicate_rule_set_name_is_refused(self):
+        payload = _template_payload(
+            {"o": _cont_out("H2")},
+            sys_name="Mrules_dup",
+            rule_sets=[
+                {"name": "transform", "rules": [{"prod": {"H2": 1.0}}]},
+                {"name": "transform", "rules": [{"prod": {"H2": 2.0}}]},
+            ],
+        )
+        with pytest.raises(Cod3sPlatformImportError) as excinfo:
+            _rule_sets_of(payload)
+        assert "transform" in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
+# Parse layer — per-instance capacity overrides
+# ---------------------------------------------------------------------------
+
+
+def _two_instance_payload(attributes_1, attributes_2, *, capacities, sys_name):
+    return _template_payload(
+        {"o": _cont_out("H2")},
+        sys_name=sys_name,
+        capacities=capacities,
+        components={
+            "c1": {"name": "C1", "class_name": "Cls", "attributes": attributes_1},
+            "c2": {"name": "C2", "class_name": "Cls", "attributes": attributes_2},
+        },
+    )
+
+
+class TestInstanceCapacityOverrides:
+    def test_two_components_of_one_class_carry_their_own_volume(self):
+        payload = _two_instance_payload(
+            [{"name": "tank", "role": CAPACITY_VOLUME_ROLE, "value": 12.0}],
+            [{"name": "tank", "role": CAPACITY_VOLUME_ROLE, "value": 30.0}],
+            capacities=[{"name": "tank", "flows": "H2", "volume": 6.0}],
+            sys_name="Mov_two",
+        )
+        ctx = parse_platform_export(payload)
+        volumes = {c.name: c.capacities[0].volume for c in ctx.components}
+        assert volumes == {"C1": 12.0, "C2": 30.0}
+
+    def test_a_component_without_override_keeps_the_template_volume(self):
+        payload = _two_instance_payload(
+            [{"name": "tank", "role": CAPACITY_VOLUME_ROLE, "value": 12.0}],
+            [],
+            capacities=[{"name": "tank", "flows": "H2", "volume": 6.0}],
+            sys_name="Mov_bare",
+        )
+        ctx = parse_platform_export(payload)
+        volumes = {c.name: c.capacities[0].volume for c in ctx.components}
+        assert volumes == {"C1": 12.0, "C2": 6.0}
+
+    def test_content_init_override_on_a_single_flow_capacity(self):
+        payload = _template_payload(
+            {"o": _cont_out("H2")},
+            sys_name="Mov_content",
+            capacities=[
+                {
+                    "name": "tank",
+                    "flows": "H2",
+                    "volume": 6.0,
+                    "content_init": {"H2": 1.0},
+                }
+            ],
+            components={
+                "c1": {
+                    "name": "C1",
+                    "class_name": "Cls",
+                    "attributes": [
+                        {
+                            "name": "tank",
+                            "role": CAPACITY_CONTENT_INIT_ROLE,
+                            "value": 4.0,
+                        }
+                    ],
+                }
+            },
+        )
+        ctx = parse_platform_export(payload)
+        assert ctx.components[0].capacities[0].content_init == {"H2": 4.0}
+
+    def test_content_init_override_on_a_multi_flow_capacity_is_refused(self):
+        payload = _template_payload(
+            {"a": _cont_out("H2"), "b": _cont_out("O2")},
+            sys_name="Mov_content_multi",
+            capacities=[
+                {"name": "tank", "flows": ["H2", "O2"], "volume": 6.0},
+            ],
+            components={
+                "c1": {
+                    "name": "C1",
+                    "class_name": "Cls",
+                    "attributes": [
+                        {
+                            "name": "tank",
+                            "role": CAPACITY_CONTENT_INIT_ROLE,
+                            "value": 4.0,
+                        }
+                    ],
+                }
+            },
+        )
+        with pytest.raises(Cod3sPlatformImportError) as excinfo:
+            parse_platform_export(payload)
+        message = str(excinfo.value)
+        assert "tank" in message
+        assert "single-flow" in message.lower()
+
+    def test_override_naming_an_unknown_capacity_is_refused(self):
+        payload = _template_payload(
+            {"o": _cont_out("H2")},
+            sys_name="Mov_unknown",
+            capacities=[{"name": "tank", "flows": "H2", "volume": 6.0}],
+            components={
+                "c1": {
+                    "name": "C1",
+                    "class_name": "Cls",
+                    "attributes": [
+                        {"name": "cuve", "role": CAPACITY_VOLUME_ROLE, "value": 4.0}
+                    ],
+                }
+            },
+        )
+        with pytest.raises(Cod3sPlatformImportError) as excinfo:
+            parse_platform_export(payload)
+        message = str(excinfo.value)
+        assert "cuve" in message
+        assert "tank" in message
+
+    def test_fill_rate_is_explicitly_not_overridable(self):
+        # The plan freezes the fill rate at the template. An unregistered role
+        # would be logged and dropped, so the refusal has to be explicit.
+        payload = _template_payload(
+            {"o": _cont_out("H2")},
+            sys_name="Mov_fill",
+            capacities=[{"name": "tank", "flows": "H2", "volume": 6.0}],
+            components={
+                "c1": {
+                    "name": "C1",
+                    "class_name": "Cls",
+                    "attributes": [
+                        {"name": "tank", "role": CAPACITY_FILL_RATE_ROLE, "value": 1.0}
+                    ],
+                }
+            },
+        )
+        with pytest.raises(Cod3sPlatformImportError) as excinfo:
+            parse_platform_export(payload)
+        assert "fill" in str(excinfo.value).lower()
+
+    def test_capacity_roles_are_registered_and_never_silently_dropped(self, caplog):
+        # A role absent from the registry is warned about and ignored, so the
+        # override would vanish without an error. This pins the registration.
+        payload = _template_payload(
+            {"o": _cont_out("H2")},
+            sys_name="Mov_registered",
+            capacities=[{"name": "tank", "flows": "H2", "volume": 6.0}],
+            components={
+                "c1": {
+                    "name": "C1",
+                    "class_name": "Cls",
+                    "attributes": [
+                        {"name": "tank", "role": CAPACITY_VOLUME_ROLE, "value": 9.0}
+                    ],
+                }
+            },
+        )
+        with caplog.at_level(logging.WARNING):
+            ctx = parse_platform_export(payload)
+        assert ctx.components[0].capacities[0].volume == 9.0
+        assert "Unknown attribute role" not in caplog.text
+
+    def test_non_numeric_volume_override_is_refused(self):
+        payload = _template_payload(
+            {"o": _cont_out("H2")},
+            sys_name="Mov_badvalue",
+            capacities=[{"name": "tank", "flows": "H2", "volume": 6.0}],
+            components={
+                "c1": {
+                    "name": "C1",
+                    "class_name": "Cls",
+                    "attributes": [
+                        {"name": "tank", "role": CAPACITY_VOLUME_ROLE, "value": True}
+                    ],
+                }
+            },
+        )
+        with pytest.raises(Cod3sPlatformImportError):
+            parse_platform_export(payload)
+
+
+# ---------------------------------------------------------------------------
+# Parse layer — derating pairs on the model component
+# ---------------------------------------------------------------------------
+
+
+def _derating_payload(deratings, sys_name, interfaces=None):
+    payload = _template_payload(
+        interfaces or {"o": _cont_out("H2"), "p": _cont_out("O2")},
+        sys_name=sys_name,
+    )
+    payload["model"]["elements"]["components"]["c1"]["deratings"] = deratings
+    return payload
+
+
+class TestParseDeratings:
+    def test_pairs_reach_the_component_spec(self):
+        ctx = parse_platform_export(
+            _derating_payload(
+                [{"mode": "df_H2", "flow": "H2"}, {"mode": "df_H2", "flow": "O2"}],
+                sys_name="Mder_ok",
+            )
+        )
+        assert [(d.mode, d.flow) for d in ctx.components[0].deratings] == [
+            ("df_H2", "H2"),
+            ("df_H2", "O2"),
+        ]
+
+    def test_targeting_a_continuous_input_is_refused_and_named(self):
+        payload = _derating_payload(
+            [{"mode": "df", "flow": "water"}],
+            sys_name="Mder_in",
+            interfaces={"i": _cont_in("water"), "o": _cont_out("H2")},
+        )
+        with pytest.raises(Cod3sPlatformImportError) as excinfo:
+            parse_platform_export(payload)
+        message = str(excinfo.value)
+        assert "water" in message
+        assert "output" in message
+
+    def test_targeting_a_discrete_output_is_refused_and_named(self):
+        payload = _derating_payload(
+            [{"mode": "df", "flow": "signal"}],
+            sys_name="Mder_discrete",
+            interfaces={
+                "o": _cont_out("H2"),
+                "d": {"name": "signal", "port_type": {"general": "output"}},
+            },
+        )
+        with pytest.raises(Cod3sPlatformImportError) as excinfo:
+            parse_platform_export(payload)
+        message = str(excinfo.value)
+        assert "signal" in message
+        assert "continuous" in message
+
+    def test_targeting_an_unknown_flow_is_refused(self):
+        payload = _derating_payload(
+            [{"mode": "df", "flow": "nope"}], sys_name="Mder_unknown"
+        )
+        with pytest.raises(Cod3sPlatformImportError) as excinfo:
+            parse_platform_export(payload)
+        assert "nope" in str(excinfo.value)
+
+    def test_entry_without_a_mode_is_refused(self):
+        payload = _derating_payload([{"flow": "H2"}], sys_name="Mder_nomode")
+        with pytest.raises(Cod3sPlatformImportError) as excinfo:
+            parse_platform_export(payload)
+        assert "mode" in str(excinfo.value)
+
+    def test_duplicate_pair_is_collapsed(self):
+        # register_derating is idempotent; the spec follows so that a payload
+        # naming the same pair twice does not read as two variables.
+        ctx = parse_platform_export(
+            _derating_payload(
+                [{"mode": "df", "flow": "H2"}, {"mode": "df", "flow": "H2"}],
+                sys_name="Mder_dup",
+            )
+        )
+        assert [(d.mode, d.flow) for d in ctx.components[0].deratings] == [("df", "H2")]
+
+
+# ---------------------------------------------------------------------------
+# Runtime layer — the sections are built in the library's own order
+# ---------------------------------------------------------------------------
+
+
+class TestRuntimeCapacitiesRulesAndDeratings:
+    def test_capacity_is_built_on_the_component(self, cleanup_system):
+        system = system_from_export(
+            _template_payload(
+                {"i": _cont_in("H2"), "o": _cont_out("H2")},
+                sys_name="Rcap_build",
+                capacities=[
+                    {
+                        "name": "tank",
+                        "flows": [{"name": "H2", "weight": 2.0}],
+                        "volume": 6.0,
+                        "side": "out",
+                        "content_init": {"H2": 3.0},
+                        "fill_rate": 1.0,
+                    }
+                ],
+            )
+        )
+        cleanup_system.append(system)
+        capacity = system.comp["C1"].capacities["tank"]
+        assert capacity.capacity == 6.0
+        assert capacity.side == "out"
+        assert capacity.content_init == {"H2": 3.0}
+        assert capacity.fill_rate == 1.0
+        assert [(f.name, f.weight) for f in capacity.flows] == [("H2", 2.0)]
+
+    def test_rule_set_is_built_with_its_coefficients(self, cleanup_system):
+        system = system_from_export(
+            _template_payload(
+                {
+                    "a": _cont_in("H2O"),
+                    "b": _cont_in("Elec"),
+                    "c": _cont_out("H2"),
+                    "d": _cont_out("O2"),
+                },
+                sys_name="Rrules_build",
+                rule_sets=[
+                    {
+                        "name": "transform",
+                        "rules": [
+                            {
+                                "name": "electrolysis",
+                                "cons": {"H2O": 4.0, "Elec": 1.0},
+                                "prod": {"H2": 1.0, "O2": 1.0},
+                            }
+                        ],
+                    }
+                ],
+            )
+        )
+        cleanup_system.append(system)
+        rule_set = system.comp["C1"].rule_sets["transform"]
+        (rule,) = rule_set.rules
+        assert rule.name == "electrolysis"
+        assert rule.cons == {"H2O": 4.0, "Elec": 1.0}
+        assert rule.prod == {"H2": 1.0, "O2": 1.0}
+
+    def test_a_guarded_rule_set_compiles_its_mode(self, cleanup_system):
+        system = system_from_export(
+            _template_payload(
+                {
+                    "c": {"name": "ctrl", "port_type": {"general": "input"}},
+                    "o": _cont_out("H2"),
+                },
+                sys_name="Rrules_guard",
+                rule_sets=[
+                    {
+                        "name": "gate",
+                        "rules": [
+                            {
+                                "name": "on",
+                                "cond": [{"name": "ctrl"}],
+                                "prod": {"H2": 2.0},
+                            },
+                            {"name": "off", "prod": {"H2": 0.0}},
+                        ],
+                    }
+                ],
+            )
+        )
+        cleanup_system.append(system)
+        rule_set = system.comp["C1"].rule_sets["gate"]
+        assert rule_set.mode is not None
+
+    def test_declaration_order_is_read_from_the_library(self):
+        from muscadet.declare import DECLARATION_SECTIONS
+
+        order = [section for section, _ in DECLARATION_SECTIONS]
+        assert order.index("flows") < order.index("capacities")
+        assert order.index("capacities") < order.index("rules")
+
+    def test_a_rule_consuming_a_buffered_flow_builds(self, cleanup_system):
+        # Only reachable when the capacity is declared BEFORE the rule set: the
+        # rule's counterparty substitution rests on the capacity index.
+        system = system_from_export(
+            _template_payload(
+                {"i": _cont_in("H2O"), "o": _cont_out("H2")},
+                sys_name="Rorder_build",
+                capacities=[{"name": "cuve", "flows": "H2O", "volume": 10.0}],
+                rule_sets=[
+                    {
+                        "name": "transform",
+                        "rules": [{"cons": {"H2O": 2.0}, "prod": {"H2": 1.0}}],
+                    }
+                ],
+            )
+        )
+        cleanup_system.append(system)
+        comp = system.comp["C1"]
+        assert comp.get_capacity_of_flow("H2O", "in") is comp.capacities["cuve"]
+        assert comp.rule_sets["transform"].rules[0].cons == {"H2O": 2.0}
+
+    def test_derating_variable_is_allocated_at_the_nominal_rate(self, cleanup_system):
+        from muscadet.flow_continuous import NOMINAL_RATE
+
+        system = system_from_export(
+            _derating_payload(
+                [{"mode": "df_H2", "flow": "H2"}, {"mode": "df_H2", "flow": "O2"}],
+                sys_name="Rder_alloc",
+            )
+        )
+        cleanup_system.append(system)
+        comp = system.comp["C1"]
+        for flow_name in ("H2", "O2"):
+            flow = comp.flows_out[flow_name]
+            assert "df_H2" in flow.derating
+            assert flow.derating["df_H2"].basename() == f"df_H2_derating_{flow_name}"
+            assert flow.derating["df_H2"].value() == NOMINAL_RATE
+            assert flow.get_effective_rate() == NOMINAL_RATE
+
+    def test_preallocation_is_idempotent_with_a_declared_failure_mode(
+        self, cleanup_system
+    ):
+        system = system_from_export(
+            _derating_payload([{"mode": "df_H2", "flow": "H2"}], sys_name="Rder_idem")
+        )
+        cleanup_system.append(system)
+        comp = system.comp["C1"]
+        before = comp.flows_out["H2"].derating["df_H2"]
+        comp.add_delay_failure_mode(
+            name="df_H2",
+            failure_time=1.0,
+            repair_time=1.0,
+            failure_effects=[("H2", 0.0)],
+        )
+        assert comp.flows_out["H2"].derating["df_H2"] is before
+
+    def test_capacity_override_reaches_the_built_component(self, cleanup_system):
+        payload = _template_payload(
+            {"o": _cont_out("H2")},
+            sys_name="Rov_build",
+            capacities=[{"name": "tank", "flows": "H2", "volume": 6.0}],
+            components={
+                "c1": {
+                    "name": "C1",
+                    "class_name": "Cls",
+                    "attributes": [
+                        {"name": "tank", "role": CAPACITY_VOLUME_ROLE, "value": 42.0}
+                    ],
+                },
+                "c2": {"name": "C2", "class_name": "Cls", "attributes": []},
+            },
+        )
+        system = system_from_export(payload)
+        cleanup_system.append(system)
+        assert system.comp["C1"].capacities["tank"].capacity == 42.0
+        assert system.comp["C2"].capacities["tank"].capacity == 6.0
+
+
+# ---------------------------------------------------------------------------
+# Refusals reaching the class template as a whole
+# ---------------------------------------------------------------------------
+
+
+class TestTemplateSectionShapes:
+    def test_capacities_must_be_a_list(self):
+        payload = _template_payload(
+            {"o": _cont_out("H2")},
+            sys_name="Mshape_cap",
+            capacities={"name": "tank", "flows": "H2", "volume": 6.0},
+        )
+        with pytest.raises(Cod3sPlatformImportError) as excinfo:
+            _capacities_of(payload)
+        assert "capacities" in str(excinfo.value)
+
+    def test_rule_sets_must_be_a_list(self):
+        payload = _template_payload(
+            {"o": _cont_out("H2")},
+            sys_name="Mshape_rules",
+            rule_sets={"name": "transform", "rules": []},
+        )
+        with pytest.raises(Cod3sPlatformImportError) as excinfo:
+            _rule_sets_of(payload)
+        assert "rule_sets" in str(excinfo.value)
+
+    def test_a_logic_gate_template_carries_neither_section(self):
+        payload = _template_payload(
+            {"o": _cont_out("H2")},
+            sys_name="Mshape_gate",
+            capacities=[{"name": "tank", "flows": "H2", "volume": 6.0}],
+        )
+        payload["kb"]["component_templates"]["Cls"]["metadata"] = {"logic_gate": "or"}
+        with pytest.raises(Cod3sPlatformImportError) as excinfo:
+            parse_platform_export(payload)
+        assert "logic gate" in str(excinfo.value).lower()
+
+    def test_a_discrete_only_template_is_untouched(self):
+        payload = _template_payload(
+            {
+                "i": {"name": "a", "port_type": {"general": "input"}},
+                "o": {
+                    "name": "b",
+                    "port_type": {"general": "output"},
+                    "prod_cond": [["a"]],
+                },
+            },
+            sys_name="Mshape_discrete",
+        )
+        ctx = parse_platform_export(payload)
+        component = ctx.components[0]
+        assert component.capacities == ()
+        assert component.rule_sets == ()
+        assert component.deratings == ()
