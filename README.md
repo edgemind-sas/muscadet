@@ -863,6 +863,34 @@ tank.get_inflow("water"), tank.get_outflow("water")
 tank.weight_of("water")
 ```
 
+#### Crossing a bound
+
+A tank drained faster than it is filled empties at a definite instant, and from
+that instant its consumer gets exactly what transits the volume. The empty and
+full bounds are **watched**: the solver root-finds the crossing rather than
+noticing it at the next integration step.
+
+```
+  t=  9.75   level= 0.500000   served= 6.000
+  t= 10.00   level= 0.003333   served= 6.000     <- 20 units at -2 per unit
+  t= 10.25   level= 0.000000   served= 4.000     <- what the source delivers
+```
+
+The search resolves to `dtCond`, so the solver stops just past the bound. What
+it leaves there is taken back: the state is put **exactly on** the bound, once,
+when the automaton fires. A level therefore never reads outside the volume its
+model declares.
+
+That costs a conservation error of the size of the overshoot, `dtCond` times
+the crossing rate, paid once per crossing. Tighten `dtCond` to shrink it, at
+the usual cost in integration time.
+
+**On a volume holding several constituents, the excess is charged to the ones
+that were flowing in**, at their weighted share of that inflow. A constituent
+at rest pays nothing: scaling every constituent back would take matter from one
+that never moved, which no balance records and which accumulates over every
+crossing.
+
 ### Allocation policies
 
 When the demands of several consumers exceed what a producer can supply, the output flow decides how to split what there is. The policy is declared on the continuous output:

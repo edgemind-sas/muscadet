@@ -697,6 +697,14 @@ class Capacity(cod3s.ObjCOD3S):
         self.state_empty = aut.get_state_by_name(st_empty)._bkd
         self.state_full = aut.get_state_by_name(st_full)._bkd
 
+        # The reset map, on the automaton rather than on either state: it fires
+        # on every change, and both directions may need it. Named per capacity
+        # AND per component, two components being free to hold a capacity of
+        # the same name.
+        aut._bkd.addSensitiveMethod(
+            f"clamp_{comp.name()}_{self.name}", self.clamp_to_bounds
+        )
+
         comp.automata_d[aut.name] = aut
 
         return aut
@@ -831,6 +839,73 @@ class Capacity(cod3s.ObjCOD3S):
         if self.state_full is None:
             return self.total_fill() >= 1.0
         return bool(self.state_full.isActive())
+
+    def clamp_to_bounds(self) -> None:
+        """Put the integrated state back ON a bound the solver just crossed.
+
+        The PDMP reset map of this capacity, called when the empty/full
+        automaton changes state. The crossing is root-found to ``dtCond``, so
+        the solver stops just PAST the bound and leaves a residue there: a tank
+        of 60 settles at 60.0026 with the default 0.001, and a tank draining to
+        empty at -0.00086. Left alone the residue is permanent -- nothing pulls
+        the level back -- so a level a modeller reads, an indicator, and the
+        share clamp in :meth:`split_draw` all face a state outside the volume
+        the model declares.
+
+        Taking it back costs a conservation error of the same size, bounded by
+        ``dtCond`` times the crossing rate and paid once per crossing. That
+        trade is deliberate: a bound violation propagates, a one-off local
+        error does not.
+
+        **Who pays, at the full bound, is not "everyone".** The volume is
+        shared, so scaling every constituent back is the tempting rule and it
+        is wrong: it takes matter from a constituent that never moved. Measured
+        on a tank holding water and syrup where only water flows in, scaling
+        removed 0.0013 of syrup that no consumer ever received and no balance
+        records -- small, but cumulative over every crossing and inexplicable
+        by any flow. The excess is therefore charged to the constituents that
+        were flowing IN, at their weighted share of that inflow. A constituent
+        at rest pays nothing.
+
+        **The empty bound needs no such rule.** ``total_fill() <= 0`` requires
+        every constituent to be at or below zero, so there is no bystander to
+        protect, and only the negative ones are lifted -- which is the per-flow
+        guard :meth:`serve_limit` already describes, applied to the state
+        rather than to the draw.
+        """
+        if self.is_empty:
+            for entry in self.flows:
+                var = self.var_qty[entry.name]
+                if var.value() < 0.0:
+                    var.setValue(0.0)
+            return
+
+        if not self.is_full:
+            return
+
+        fill = self.total_fill()
+        if fill <= 1.0:
+            return
+
+        excess = (fill - 1.0) * self.capacity  # weighted volume in excess
+
+        # The constituents that were entering, at their weighted contribution.
+        weighted_inflow = {
+            entry.name: max(self.get_inflow(entry.name), 0.0) * entry.weight
+            for entry in self.flows
+        }
+        total_inflow = sum(weighted_inflow.values())
+        if total_inflow <= 0.0:
+            # Nothing was flowing in, so nothing caused the excess and there is
+            # no defensible payer. Leaving the residue beats inventing one.
+            return
+
+        for entry in self.flows:
+            share = weighted_inflow[entry.name] / total_inflow
+            if share <= 0.0:
+                continue
+            var = self.var_qty[entry.name]
+            var.setValue(var.value() - excess * share / entry.weight)
 
     def serve_limit(self, flow_name=None) -> float:
         """What the capacity can serve onward.

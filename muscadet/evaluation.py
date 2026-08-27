@@ -1704,17 +1704,30 @@ def draw_from_capacity(comp, capacity, requests):
     several constituents therefore cannot serve a pure one: asking for more
     of one than its share of the draw allows serves only that share.
 
-    **Conservation is enforced here**: what comes out of the stock is capped
-    at what the stock HOLDS, so a capacity never serves more than it holds
-    plus what transits it. That cap is what makes an unbounded request
-    answerable at all -- :meth:`~muscadet.capacity.Capacity.serve_limit`
-    reports a stocked capacity as unbounded, which is a statement about the
-    absence of a bound and not a quantity -- and it holds per constituent as
-    well as per volume, since :meth:`~muscadet.capacity.Capacity.split_draw`
-    apportions the capped draw at each one's raw share.
+    **An UNBOUNDED request is answered out of the stock**, capped at what the
+    stock holds: :meth:`~muscadet.capacity.Capacity.serve_limit` reports a
+    stocked capacity as unbounded, which is a statement about the absence of a
+    bound and not a quantity, and this is where that statement becomes one.
+    :meth:`~muscadet.capacity.Capacity.split_draw` apportions the capped draw
+    at each constituent's raw share, so the cap holds per constituent too.
+
+    **A FINITE request is not capped, and the difference is the whole point.**
+    Capping it compared a rate (the shortfall per unit time) with a quantity
+    (what the volume holds), which is only meaningful if the quantity is
+    implicitly divided by one unit of time. That implicit unit turned the
+    emptying of a tank into an exponential relaxation whose time constant was
+    ONE TIME UNIT, whatever the physics: measured on one model at three speeds,
+    a tank emptying in 10, 5 and 1 time units took the same 4.5 units to reach
+    its degraded regime every time. The bound is a property of the integrated
+    state and the empty/full automaton watches it, so the crossing belongs to
+    the solver, which stops on it exactly (R7) and leaves at most one
+    ``dtCond``-sized overshoot for
+    :meth:`~muscadet.capacity.Capacity.clamp_to_bounds` to take back.
 
     Reduces exactly to "an empty capacity serves what transits through it,
-    a stocked one serves what is asked for" when it holds a single flow.
+    a stocked one serves what is asked for" when it holds a single flow -- which
+    it did NOT while a finite request was capped: a tank holding 1 and short of
+    2 served transit + 1, being stocked and yet serving less than it was asked.
 
     Parameters
     ----------
@@ -1730,10 +1743,13 @@ def draw_from_capacity(comp, capacity, requests):
     """
     transit = {name: capacity.get_inflow(name) for name in requests}
 
-    # What the stock is asked for, over and above what transits -- and never
-    # more than the stock holds.
+    # What the stock is asked for, over and above what transits. Capped by what
+    # the stock holds ONLY when the ask is unbounded, that being the one case
+    # where a quantity has to stand in for a rate -- see the docstring.
     beyond = sum(max(requests[name] - transit[name], 0.0) for name in requests)
-    draw = capacity.split_draw(min(beyond, capacity.total_quantity()))
+    draw = capacity.split_draw(
+        beyond if math.isfinite(beyond) else capacity.total_quantity()
+    )
 
     return {
         name: max(min(requests[name], transit[name] + draw.get(name, 0.0)), 0.0)
