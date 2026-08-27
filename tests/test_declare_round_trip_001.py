@@ -168,11 +168,57 @@ def test_an_automaton_whose_rate_is_a_variable_rebuilds():
             effects_12=[("f", False)],
         )
 
+        # The declaration as the component recorded it, handle and all. Taken
+        # from ``declared_automata`` rather than from ``component_spec``, which
+        # refuses to WRITE OUT an engine handle -- see the test below. Building
+        # from one is supported, and this is the path that raised "Pickling of
+        # Pycatshoo.IVariable instances is not enabled".
+        declared = comp.declared_automata["m"]
         rebuilt = muscadet.build_component(
-            system, dict(muscadet.component_spec(comp), name="C2")
+            system,
+            {
+                "name": "C2",
+                "flows": [{"cls": "FlowOut", "name": "f", "var_prod_default": True}],
+                "automata": [declared],
+            },
         )
 
         assert "C2_m" in rebuilt.automata_d
+        # And the caller's own declaration is not emptied by the build.
+        assert comp.declared_automata["m"]["occ_law_12"]["rate"] is rate
+    finally:
+        system.deleteSys()
+        cod3s.terminate_session()
+
+
+def test_reading_back_an_engine_handle_is_refused_by_name():
+    """A spec is data, and a PyCATSHOO variable is not.
+
+    It reached the spec unchallenged because ``automata`` and ``failure_modes``
+    are recorded verbatim rather than dumped field by field, so they skipped the
+    gate every other section goes through. The failure then landed at
+    ``json.dumps``, naming a type and no declaration.
+    """
+    system = muscadet.System(name="DclRtVarRefuse")
+    try:
+        system.add_component(name="C", cls="RtDiscrete")
+        comp = system.comp["C"]
+        comp.add_atm2states(
+            name="m",
+            occ_law_12={
+                "cls": "exp",
+                "rate": comp.addVariable("lb", Pyc.TVarType.t_double, EXP_RATE),
+            },
+            effects_12=[("f", False)],
+        )
+
+        with pytest.raises(ComponentSpecError) as error:
+            muscadet.component_spec(comp)
+
+        message = str(error.value)
+        assert "automaton m" in message
+        assert "occ_law_12" in message
+        assert "rate" in message
     finally:
         system.deleteSys()
         cod3s.terminate_session()
@@ -209,3 +255,60 @@ def test_a_duplicate_name_is_refused_by_name():
 def test_delete():
     """Each test deletes its own system; this closes the session."""
     cod3s.terminate_session()
+
+
+# ---------------------------------------------------------------------------
+# The constructor's own declaration
+# ---------------------------------------------------------------------------
+def test_the_constructor_keys_survive_a_round_trip():
+    """Four keys ``build_component`` reads that ``component_spec`` never wrote.
+
+    ``create_default_out_automata`` is the one that matters: it is behaviour,
+    not decoration. Dropped, the rebuilt component had no ok/nok automaton on
+    its discrete outputs and any indicator naming one was silently gone.
+    ``metadata`` is where a platform export attaches what it knows about an
+    instance, and losing it discards the provenance of an imported model.
+    """
+    system = muscadet.System(name="DclRtCtor")
+    try:
+        system.add_component(
+            name="C",
+            cls="RtDiscrete",
+            label="Etiquette",
+            description="Une description",
+            metadata={"origin": "platform", "platform_id": "id-42"},
+            create_default_out_automata=True,
+        )
+        comp = system.comp["C"]
+        assert "C_f" in comp.automata_d, "the default out automaton was not built"
+
+        spec = muscadet.component_spec(comp)
+        assert spec["label"] == "Etiquette"
+        assert spec["description"] == "Une description"
+        assert spec["metadata"] == {"origin": "platform", "platform_id": "id-42"}
+        assert spec["create_default_out_automata"] is True
+
+        rebuilt = muscadet.build_component(system, dict(spec, name="C2"))
+        assert rebuilt.label == "Etiquette"
+        assert rebuilt.description == "Une description"
+        assert rebuilt.metadata == {"origin": "platform", "platform_id": "id-42"}
+        assert "C2_f" in rebuilt.automata_d
+    finally:
+        system.deleteSys()
+        cod3s.terminate_session()
+
+
+def test_a_bare_component_carries_no_decoration():
+    """``label`` defaults to the name and ``description`` to the label, so
+    writing them unconditionally would fill every spec with its own name
+    twice. A spec says what was declared, not what was defaulted."""
+    system = muscadet.System(name="DclRtBare")
+    try:
+        system.add_component(name="C", cls="RtDiscrete")
+        spec = muscadet.component_spec(system.comp["C"])
+
+        for key in ("label", "description", "metadata", "create_default_out_automata"):
+            assert key not in spec, key
+    finally:
+        system.deleteSys()
+        cod3s.terminate_session()
