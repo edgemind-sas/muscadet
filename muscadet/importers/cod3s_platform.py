@@ -31,11 +31,34 @@ Usage::
 Phase 1 scope : topology only (components + flows in/out + connections).
 Failure modes, business attributes wiring, and indicators are
 explicitly out of scope and deferred to later phases.
+
+Flow families (2026-08) : a KB interface carries a ``flow_family``
+discriminator selecting the muscadet flow family — ``'discrete'`` (the
+default, and the whole of the 1.x schema) or ``'continuous'``. The two
+families share no declaration key and are built from two separate kwargs
+dictionaries; an unknown family is refused rather than read as discrete.
+``_SUPPORTS_CONTINUOUS_FLOW_FAMILY`` is the marker the platform probes to
+know this muscadet understands the field at all.
+
+Capacities and recipes (2026-08) : a continuous plant is not made of ports
+alone. A KB class template carries two further sections, ``capacities`` and
+``rule_sets``, PARALLEL to ``interfaces`` and never nested inside it -- a volume
+is held over several flows at once, and a rule correlates several outputs, so
+neither is a property of a single port. A MODEL COMPONENT carries the numbers
+that differ between two instances of one class, as ``attributes`` under the
+``capacity_volume`` / ``capacity_content_init`` roles, plus a ``deratings``
+list of ``(mode, continuous output)`` pairs whose variable is allocated after
+``set_flows()``. The declaration ORDER is read from
+``muscadet.declare.DECLARATION_SECTIONS`` rather than restated here: it belongs
+to the library, and three of its refusals are only reachable when the thing
+doing the refusing exists first.
 """
 
 from __future__ import annotations
 
+import copy
 import logging
+import math
 from dataclasses import dataclass, field, replace
 from typing import Any, Dict, List, Literal, Optional, Tuple, Union
 
@@ -130,10 +153,15 @@ class FlowSpec:
     init_value: Optional[bool] = None
     # Value of an INPUT flow when it is NOT connected, set by the parse
     # layer when an ``instance.attribute(role=var_in_default)`` override
-    # exists. ``None`` means "leave the muscadet default" (False). True
-    # marks an always-fed boundary input (external source). Mirrors
-    # ``logic`` (role=logic_in) ; passed to ``FlowIn.var_in_default``.
-    var_in_default: Optional[bool] = None
+    # exists (discrete family) or read off the KB interface (continuous
+    # family). ``None`` means "leave the muscadet default" (``False`` on a
+    # discrete input, ``0.0`` on a continuous one). On a DISCRETE flow it is a
+    # bool and True marks an always-fed boundary input (external source); on a
+    # CONTINUOUS flow it is the real value the input reads while nothing is
+    # connected. One field because it is one property -- the platform names the
+    # attribute role ``var_in_default`` on both families for the same reason.
+    # Passed to ``FlowIn.var_in_default`` / ``FlowContinuousIn.var_in_default``.
+    var_in_default: Optional[Union[bool, float]] = None
     # Service-function dormancy default for an OUTPUT flow, set by the parse
     # layer when an ``instance.attribute(role=active_init)`` override exists.
     # ``None`` means "leave the muscadet default" (``var_is_active_default`` =
@@ -189,6 +217,141 @@ class FlowSpec:
     # and simulates but follows the automaton default until wired.
     trigger_logic: Optional[Union[str, int]] = None
 
+    # --- Flow FAMILY (2026-08, continuous flows chantier) -------------------
+    # Which muscadet flow family this interface belongs to: ``'discrete'``
+    # (``FlowIn`` / ``FlowOut`` and friends) or ``'continuous'``
+    # (``FlowContinuousIn`` / ``FlowContinuousOut``). Deliberately DISTINCT
+    # from ``flow_type`` above, which stays a discrete-only discriminator
+    # (classic / tempo / on_trigger): the two answer different questions and
+    # collapsing them would make ``tempo`` look like a family. Kept a plain
+    # string defaulting to ``'discrete'`` so a KB predating the field parses
+    # exactly as it did before.
+    flow_family: str = "discrete"
+    # CONTINUOUS family only — the nominal rate of the port, decomposed by the
+    # parse layer from its profile attribute (``production_profile`` on an
+    # output, ``demand_profile`` on an input). ``None`` leaves the muscadet
+    # default (0.0), which is what a port a recipe or a capacity serves wants.
+    # Target: ``FlowContinuousOut.var_fed_default`` on an output,
+    # ``FlowContinuousIn.var_demand_default`` on an input.
+    nominal_rate: Optional[float] = None
+    # CONTINUOUS output only — the MODULATION half of the profile
+    # decomposition, in muscadet's own ``{"cls": "SinusoidalProfile", ...}``
+    # mapping form, or ``None`` for a constant shape. muscadet's profile is a
+    # multiplicative FACTOR on ``var_fed_default`` and its shape library holds
+    # no constant shape, so a constant profile lives entirely in
+    # ``nominal_rate`` and never reaches ``muscadet.build_profile``.
+    profile_spec: Optional[dict] = None
+    # CONTINUOUS output only — how an insufficient supply is split among the
+    # consumers. v1 exposes proportional sharing only (muscadet's own default);
+    # ``None`` on a discrete flow, where the notion does not exist.
+    allocation: Optional[str] = None
+
+
+# ---------------------------------------------------------------------------
+# Capacities and rule sets (2026-08) — CLASS-TEMPLATE sections
+# ---------------------------------------------------------------------------
+#
+# Both live on ``component_templates[<class>]``, PARALLEL to ``interfaces`` and
+# never nested inside it. That placement is the contract, and it follows from
+# what each declaration is:
+#
+# * a capacity is a volume held over one or more flows AT ONCE, with a weight
+#   per constituent -- a mixture in one tank is not a property of any single
+#   port;
+# * a rule set states a transformation whose outputs are CORRELATED -- the
+#   electrolysis rule produces H2 and O2 together, so a derating takes both
+#   down -- and a recipe written one output at a time would state something
+#   else entirely.
+#
+# Both name flows, so both are validated against the template's own interfaces
+# at parse time: a name that is not a declared flow, or a discrete flow where a
+# rate is required, is refused here rather than at ``add_capacity`` time, where
+# the message would name a muscadet field on a muscadet class and tell a
+# platform user nothing about the class they wrote.
+
+
+@dataclass(frozen=True)
+class CapacityFlowSpec:
+    """One flow held by a capacity, and the volume a unit of it occupies."""
+
+    name: str
+    # Volume one unit of this flow occupies. Governs OCCUPANCY only, never how
+    # a withdrawal is composed. muscadet's own default, restated here so a
+    # capacity read back from a spec carries the number rather than an absence.
+    weight: float = 1.0
+
+
+@dataclass(frozen=True)
+class CapacitySpec:
+    """One capacity declared on a KB class template."""
+
+    name: str
+    flows: Tuple[CapacityFlowSpec, ...]
+    # The volume the held flows SHARE, strictly positive. Named ``volume`` on
+    # the platform side and mapped onto muscadet's ``capacity`` keyword: inside
+    # an entry of a ``capacities`` list, a key called ``capacity`` reads as the
+    # capacity itself rather than as its size.
+    volume: float
+    # ``'in'`` places the whole capacity upstream of the component's rules,
+    # ``'out'`` downstream. ``None`` leaves muscadet to resolve it from the
+    # sides the held flows are carried on.
+    side: Optional[str] = None
+    # Initial raw quantity per held flow; an omitted flow starts empty.
+    content_init: Dict[str, float] = field(default_factory=dict)
+    # Rate the volume claims for ITSELF while it has room, over and above the
+    # demand crossing it. ``None`` leaves the muscadet default (0.0, a pure
+    # buffer). ``math.inf`` means "whatever the producer can deliver" and is
+    # spelled ``"inf"`` as well as ``Infinity``, JSON having no literal for it.
+    fill_rate: Optional[float] = None
+
+
+@dataclass(frozen=True)
+class RuleOperandSpec:
+    """One operand of a rule guard: a boolean flow state, or a comparison."""
+
+    name: str
+    negate: bool = False
+    # ``'in'`` / ``'out'`` force the side the name resolves against. ``None``
+    # keeps muscadet's input-first resolution.
+    port: Optional[str] = None
+    # Comparison operator of a numeric operand; ``None`` for a boolean one.
+    op: Optional[str] = None
+    value: Optional[float] = None
+
+
+@dataclass(frozen=True)
+class RuleSpec:
+    """One transformation rule: a guard, a ``cons`` map and a ``prod`` map."""
+
+    # Optional, and used to designate the rule in muscadet's error messages.
+    name: Optional[str] = None
+    # Conjunction of operands. EMPTY makes this the default rule of its set,
+    # and a set carries at most one of those.
+    cond: Tuple[RuleOperandSpec, ...] = ()
+    cons: Dict[str, float] = field(default_factory=dict)
+    prod: Dict[str, float] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class RuleSetSpec:
+    """One ordered set of transformation rules declared on a class template."""
+
+    name: str
+    rules: Tuple[RuleSpec, ...] = ()
+
+
+@dataclass(frozen=True)
+class DeratingSpec:
+    """One ``(mode, continuous output)`` pair to pre-allocate a variable for.
+
+    Carried by the MODEL COMPONENT and not by the class template: a failure
+    mode is declared per instance, and the variable a mode clamps belongs to
+    the component that carries it.
+    """
+
+    mode: str
+    flow: str
+
 
 @dataclass(frozen=True)
 class ComponentSpec:
@@ -224,6 +387,18 @@ class ComponentSpec:
     # ``is_fed`` channel (``<flow>_fed_out``), ``False`` → the
     # availability channel (``<flow>_fed_available_out``).
     gate_check_fed: bool = True
+    # Capacities of the referenced class template, WITH this instance's
+    # overrides already folded in (cf. _apply_capacity_overrides). Resolved per
+    # component rather than once per class precisely because of those: two
+    # components of one class routinely hold different volumes.
+    capacities: Tuple[CapacitySpec, ...] = ()
+    # Rule sets of the referenced class template, verbatim. No per-instance
+    # override channel exists for a recipe: a coefficient that differs between
+    # two instances is a different reaction, hence a different class.
+    rule_sets: Tuple[RuleSetSpec, ...] = ()
+    # ``(mode, continuous output)`` pairs whose derating variable this
+    # component allocates after ``set_flows()``.
+    deratings: Tuple[DeratingSpec, ...] = ()
 
 
 @dataclass(frozen=True)
@@ -350,6 +525,404 @@ _SUPPORTS_PROD_COND_PORT = True
 # chantier (2026-07).
 _SUPPORTS_INSTANCE_TEMPO_OVERRIDE = True
 
+# Capability marker (jumeau of _SUPPORTS_INSTANCE_TEMPO_OVERRIDE): this muscadet
+# reads the ``flow_family`` interface discriminator and builds a CONTINUOUS flow
+# (``FlowContinuousIn`` / ``FlowContinuousOut``) for the ``"continuous"`` value,
+# with its nominal rate, its allocation policy and its production profile. An
+# older muscadet lacks this attribute, so the platform can refuse to simulate a
+# KB carrying continuous ports rather than importing them as discrete ones --
+# which is what an unknown interface key silently degrades to. Probed as
+# ``getattr(module, "_SUPPORTS_CONTINUOUS_FLOW_FAMILY", False)``. Cf. the
+# continuous flows chantier (2026-08).
+_SUPPORTS_CONTINUOUS_FLOW_FAMILY = True
+
+# Capability marker (jumeau of _SUPPORTS_CONTINUOUS_FLOW_FAMILY): this muscadet
+# reads a ``capacities`` section on a KB CLASS TEMPLATE, beside ``interfaces``
+# and never inside it, and declares each entry through ``ObjFlow.add_capacity``.
+# A volume is held over SEVERAL flows and is therefore not a property of one
+# port, which is why it cannot live on an interface. An older muscadet lacks
+# this attribute, so the platform can refuse to simulate a KB carrying buffers
+# rather than importing a plant whose tanks are missing. Cf. the continuous
+# flows chantier (2026-08).
+_SUPPORTS_CONTINUOUS_CAPACITIES = True
+
+# Capability marker (jumeau of _SUPPORTS_CONTINUOUS_CAPACITIES): this muscadet
+# reads a ``rule_sets`` section on a KB class template and declares each entry
+# through ``ObjFlow.add_rules``. Same reason it is not an interface key: a rule
+# correlates several outputs -- H2 and O2 come out of one reaction and scale
+# together -- so a recipe stated one output at a time would state something
+# else. Cf. the continuous flows chantier (2026-08).
+_SUPPORTS_CONTINUOUS_RULE_SETS = True
+
+# Capability marker (jumeau of _SUPPORTS_CONTINUOUS_RULE_SETS): this muscadet
+# applies PER-INSTANCE capacity overrides -- the ``capacity_volume`` and
+# ``capacity_content_init`` attribute roles, keyed by CAPACITY name rather than
+# by flow name -- so two components of one class can hold different volumes
+# without splitting the class in two. An older muscadet lacks this attribute,
+# so the platform can refuse rather than build every tank at the template's
+# volume. Cf. the continuous flows chantier (2026-08).
+_SUPPORTS_INSTANCE_CAPACITY_OVERRIDE = True
+
+# Capability marker (jumeau of _SUPPORTS_INSTANCE_CAPACITY_OVERRIDE): this
+# muscadet PRE-ALLOCATES the derating variable of a (mode, continuous output)
+# pair carried by a model component, through the public ``add_derating``, after
+# ``set_flows()``. A mode declared outside the component -- a standalone
+# ``cod3s.ObjFM*`` naming variables by their exact basename -- needs the
+# variable to exist before it can target it. An older muscadet lacks this
+# attribute, so the platform can refuse rather than emit a mode clamping a
+# variable nothing created. Cf. the continuous flows chantier (2026-08).
+_SUPPORTS_DERATING_PREALLOCATION = True
+
+# ---------------------------------------------------------------------------
+# Flow families (2026-08)
+# ---------------------------------------------------------------------------
+#
+# ``flow_family`` selects the muscadet flow FAMILY and is orthogonal to
+# ``flow_type``, which selects the discrete flow CLASS. A discrete interface is
+# the historical shape and stays the default, so a KB predating the field is
+# read exactly as before. There is no fallback the other way: an unknown family
+# is refused, because reading it as discrete would build a boolean port where a
+# rate was declared and report nothing.
+
+DISCRETE_FAMILY = "discrete"
+CONTINUOUS_FAMILY = "continuous"
+_VALID_FLOW_FAMILIES = frozenset({DISCRETE_FAMILY, CONTINUOUS_FAMILY})
+
+# Allocation policies exposed by v1. muscadet also implements ``shares`` and
+# ``priority``, both of which need a per-consumer map the platform has no
+# surface for yet; declaring one here would build a flow whose split is decided
+# by a map nothing fills. Proportional is muscadet's own default.
+_ALLOCATION_PROPORTIONAL = "proportional"
+_VALID_ALLOCATIONS = frozenset({_ALLOCATION_PROPORTIONAL})
+
+# Interface keys that belong to the DISCRETE family alone. Refused on a
+# continuous interface, by name, at parse time. The three that matter most --
+# ``prod_cond``, ``negate``, ``logic_inner_mode`` -- are also refused by
+# ``FlowContinuous.check_declaration_keys`` downstream, but that refusal names a
+# muscadet field on a muscadet class: it tells a platform user nothing about the
+# port they declared. Refusing here names the PLATFORM key, and refusing at
+# parse time keeps the diagnostic reachable without a runtime.
+_DISCRETE_ONLY_INTERFACE_KEYS: Tuple[str, ...] = (
+    "input_logic",
+    "prod_cond",
+    "logic_inner_mode",
+    "negate",
+    "flow_type",
+    "occ_enable",
+    "occ_disable",
+    "init_enable",
+    "trigger_time_up",
+    "trigger_time_down",
+    "trigger_logic",
+)
+
+# The mirror: keys that belong to the CONTINUOUS family alone, refused on a
+# discrete interface. A profile written on a boolean port is a declaration that
+# could never take effect, and the silent drop is what the family discriminator
+# exists to make impossible in both directions.
+_CONTINUOUS_ONLY_INTERFACE_KEYS: Tuple[str, ...] = (
+    "production_profile",
+    "demand_profile",
+    "allocation",
+)
+
+# Values a key may carry while saying NOTHING, beside ``None`` and the empty
+# containers handled generically below. The platform serialises its interface
+# model whole, and two of its discrete fields are declared with a non-null
+# default (``negate=False``, ``logic_inner_mode="and"``): every exported
+# interface carries them, continuous ones included, without anyone having
+# declared anything. Refusing those would refuse a payload that means what the
+# absence of the key means. Anything ELSE written under these names was chosen,
+# and is refused -- ``negate=True`` on a continuous port is a modeller
+# believing in a negation that will never be applied.
+_NEUTRAL_INTERFACE_VALUES: Dict[str, Tuple[Any, ...]] = {
+    "input_logic": ("or",),
+    "logic_inner_mode": ("and",),
+    "negate": (False,),
+    "flow_type": ("classic",),
+    "allocation": (_ALLOCATION_PROPORTIONAL,),
+}
+
+# ---------------------------------------------------------------------------
+# Profile decomposition (2026-08)
+# ---------------------------------------------------------------------------
+#
+# The platform declares the quantity of a continuous port as a PROFILE: a named
+# shape and its parameters, on the model of the occurrence laws it already
+# carries, whose ``value`` is ALWAYS the nominal rate of the port. muscadet
+# reads that declaration in two separate places, and the split is not optional:
+#
+# * ``var_fed_default`` is the nominal rate;
+# * ``profile`` is a multiplicative FACTOR on it (``muscadet/profile.py``), and
+#   ``PROFILE_CLASSES`` holds ``Profile`` and ``SinusoidalProfile`` only -- there
+#   is NO constant shape, because a constant factor is the absence of a profile.
+#
+# So the importer decomposes: the ``value`` projects onto the nominal rate for
+# every shape, and a profile OBJECT is emitted only for a modulated one. A
+# constant shape must never reach ``build_profile`` -- there is nothing there
+# for it to build, and routing it through ``Profile(lambda t: v)`` would fold
+# the rate into the factor, where a derating composes with it by MINIMUM instead
+# of by product (cf. the composition rule in ``muscadet/profile.py``).
+
+_PROFILE_CONSTANT_SHAPE = "constant"
+
+# {platform shape name: muscadet PROFILE_CLASSES entry}. ``None`` marks the
+# shape that yields no profile object at all.
+_PROFILE_SHAPE_CLASSES: Dict[str, Optional[str]] = {
+    _PROFILE_CONSTANT_SHAPE: None,
+    "sinusoidal": "SinusoidalProfile",
+}
+
+# Modulation parameters each shape accepts, beside ``cls`` and ``value``. An
+# allowlist rather than a passthrough: an unknown parameter reaching muscadet
+# would raise a TypeError from a constructor signature, which names neither the
+# port nor the platform shape.
+_PROFILE_SHAPE_PARAMS: Dict[str, frozenset] = {
+    _PROFILE_CONSTANT_SHAPE: frozenset(),
+    "sinusoidal": frozenset(
+        {"amplitude", "period", "phase_shift", "offset", "value_min", "value_max"}
+    ),
+}
+
+
+def _declared_interface_keys(
+    interface: Dict[str, Any], keys: Tuple[str, ...]
+) -> List[str]:
+    """Return the ``keys`` the interface carries with an actual declaration.
+
+    ``None``, an empty container and the value listed in
+    :data:`_NEUTRAL_INTERFACE_VALUES` are information-free: a platform that
+    serialises its interface model whole emits ``prod_cond: []`` on a port
+    carrying no production condition and ``negate: false`` on every port at
+    all, and refusing those would refuse a payload saying nothing. Anything
+    else was written on purpose and is a declaration the modeller can be wrong
+    about.
+    """
+    declared = []
+    for key in keys:
+        if key not in interface:
+            continue
+        value = interface[key]
+        if value is None or value == [] or value == {}:
+            continue
+        if any(
+            value == neutral and isinstance(value, type(neutral))
+            for neutral in _NEUTRAL_INTERFACE_VALUES.get(key, ())
+        ):
+            continue
+        declared.append(key)
+    return declared
+
+
+def _check_family_keys(
+    interface: Dict[str, Any],
+    *,
+    name: str,
+    family: str,
+    forbidden: Tuple[str, ...],
+    other_family: str,
+) -> None:
+    """Refuse, by name, a key belonging to the other flow family."""
+    declared = _declared_interface_keys(interface, forbidden)
+    if not declared:
+        return
+
+    plural = "s" if len(declared) > 1 else ""
+    keys = ", ".join(repr(key) for key in declared)
+    raise Cod3sPlatformImportError(
+        f"Interface {name!r}: flow_family={family!r} does not accept "
+        f"{other_family} declaration key{plural} {keys}. Either drop "
+        f"{'them' if len(declared) > 1 else 'it'} or declare the port as "
+        f"flow_family={other_family!r}."
+    )
+
+
+def _parse_profile(
+    raw: Any,
+    *,
+    flow_name: str,
+    key: str,
+    allow_modulated: bool,
+) -> Tuple[Optional[float], Optional[dict]]:
+    """Decompose a platform profile into ``(nominal rate, profile mapping)``.
+
+    Returns ``(None, None)`` when nothing is declared -- the port is then served
+    by a recipe or by a capacity, and the muscadet defaults must stand.
+
+    ``allow_modulated`` is False on an input: muscadet carries a profile channel
+    on a continuous OUTPUT only, so a modulated demand would be flattened to its
+    nominal rate with nothing to signal the loss.
+    """
+    if raw is None:
+        return None, None
+
+    where = f"Interface {flow_name!r}: {key}"
+
+    if not isinstance(raw, dict):
+        raise Cod3sPlatformImportError(
+            f"{where} must be a mapping {{'cls': <shape>, 'value': <rate>, "
+            f"...}}, got {type(raw).__name__}"
+        )
+
+    params = dict(raw)
+    shape = params.pop("cls", None)
+
+    if shape is None:
+        raise Cod3sPlatformImportError(
+            f"{where} carries no 'cls' key naming its shape; expected one of "
+            f"{sorted(_PROFILE_SHAPE_CLASSES)}"
+        )
+
+    if shape not in _PROFILE_SHAPE_CLASSES:
+        raise Cod3sPlatformImportError(
+            f"{where}: unsupported profile shape cls={shape!r} (expected one "
+            f"of {sorted(_PROFILE_SHAPE_CLASSES)})"
+        )
+
+    if params.get("value") is None:
+        raise Cod3sPlatformImportError(
+            f"{where}: a profile carries a 'value', which is the NOMINAL RATE "
+            "of the port -- a profile is a multiplicative factor, so one "
+            "declared over no rate would produce nothing without signalling it"
+        )
+
+    raw_value = params.pop("value")
+    try:
+        rate = float(raw_value)
+    except (TypeError, ValueError):
+        raise Cod3sPlatformImportError(
+            f"{where}: value must be a real number, got {raw_value!r}"
+        ) from None
+
+    if not math.isfinite(rate):
+        raise Cod3sPlatformImportError(
+            f"{where}: value must be a finite real number, got {raw_value!r}"
+        )
+
+    unknown = sorted(set(params) - _PROFILE_SHAPE_PARAMS[shape])
+    if unknown:
+        plural = "s" if len(unknown) > 1 else ""
+        keys = ", ".join(repr(k) for k in unknown)
+        accepted = sorted(_PROFILE_SHAPE_PARAMS[shape])
+        raise Cod3sPlatformImportError(
+            f"{where}: shape {shape!r} does not accept parameter{plural} "
+            f"{keys}; it accepts {accepted}"
+        )
+
+    cls_name = _PROFILE_SHAPE_CLASSES[shape]
+    if cls_name is None:
+        # Constant shape: the whole declaration IS the nominal rate. No profile
+        # object, so nothing reaches build_profile.
+        return rate, None
+
+    if not allow_modulated:
+        raise Cod3sPlatformImportError(
+            f"{where}: shape {shape!r} is a modulated profile, and muscadet "
+            "carries a time profile on a continuous OUTPUT only -- there is no "
+            "profile channel on a continuous input. Declare a "
+            f"{_PROFILE_CONSTANT_SHAPE!r} shape here."
+        )
+
+    return rate, {"cls": cls_name, **params}
+
+
+def _parse_continuous_rate(raw: Any, *, flow_name: str, key: str) -> Optional[float]:
+    """Coerce a bare numeric field of a continuous interface."""
+    if raw is None:
+        return None
+
+    if isinstance(raw, bool):
+        # A bool here is a discrete default that survived a family switch: it
+        # would coerce to 0.0/1.0 and read as a plausible rate.
+        raise Cod3sPlatformImportError(
+            f"Interface {flow_name!r}: {key} must be a real number on a "
+            f"continuous port, got the boolean {raw!r}"
+        )
+
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        raise Cod3sPlatformImportError(
+            f"Interface {flow_name!r}: {key} must be a real number, got {raw!r}"
+        ) from None
+
+    if not math.isfinite(value):
+        raise Cod3sPlatformImportError(
+            f"Interface {flow_name!r}: {key} must be a finite real number, "
+            f"got {raw!r}"
+        )
+
+    return value
+
+
+def _parse_allocation(raw: Any, *, flow_name: str) -> str:
+    """Validate the allocation policy of a continuous output."""
+    if raw is None:
+        return _ALLOCATION_PROPORTIONAL
+
+    if raw not in _VALID_ALLOCATIONS:
+        raise Cod3sPlatformImportError(
+            f"Interface {flow_name!r}: unsupported allocation={raw!r} "
+            f"(expected one of {sorted(_VALID_ALLOCATIONS)})"
+        )
+
+    return raw
+
+
+def _parse_continuous_interface(
+    interface: Dict[str, Any], *, name: str, port_type: str
+) -> FlowSpec:
+    """Translate one CONTINUOUS KB interface into a :class:`FlowSpec`.
+
+    ``logic`` is set to an empty list on both directions: the continuous family
+    reads no boolean production condition and no input aggregation logic, and
+    the empty list is what keeps the intra-component output ordering (which
+    walks ``logic``) a no-op rather than a special case.
+    """
+    _check_family_keys(
+        interface,
+        name=name,
+        family=CONTINUOUS_FAMILY,
+        forbidden=_DISCRETE_ONLY_INTERFACE_KEYS,
+        other_family=DISCRETE_FAMILY,
+    )
+
+    if port_type == "input":
+        rate, _ = _parse_profile(
+            interface.get("demand_profile"),
+            flow_name=name,
+            key="demand_profile",
+            allow_modulated=False,
+        )
+        return FlowSpec(
+            name=name,
+            direction="input",
+            logic=[],
+            flow_family=CONTINUOUS_FAMILY,
+            var_in_default=_parse_continuous_rate(
+                interface.get("var_in_default"),
+                flow_name=name,
+                key="var_in_default",
+            ),
+            nominal_rate=rate,
+        )
+
+    rate, profile_spec = _parse_profile(
+        interface.get("production_profile"),
+        flow_name=name,
+        key="production_profile",
+        allow_modulated=True,
+    )
+    return FlowSpec(
+        name=name,
+        direction="output",
+        logic=[],
+        flow_family=CONTINUOUS_FAMILY,
+        nominal_rate=rate,
+        profile_spec=profile_spec,
+        allocation=_parse_allocation(interface.get("allocation"), flow_name=name),
+    )
+
 
 def _parse_interface(interface: Dict[str, Any]) -> FlowSpec:
     """Translate one KB interface dict into a :class:`FlowSpec`.
@@ -366,6 +939,12 @@ def _parse_interface(interface: Dict[str, Any]) -> FlowSpec:
     The legacy ambiguous ``logic`` field is rejected outright (no
     fallback) per Resolved Arbitrations #4 — re-export from a
     post-3.0.0 platform instance to upgrade the file.
+
+    A ``flow_family`` discriminator selects the muscadet flow FAMILY before any
+    of the above is read: ``'discrete'`` (the default, and the whole of the
+    schema described here) or ``'continuous'``, which is parsed by
+    :func:`_parse_continuous_interface` and shares none of the discrete keys.
+    An unknown family is refused rather than read as discrete.
     """
     name = interface.get("name")
     if not name:
@@ -382,6 +961,27 @@ def _parse_interface(interface: Dict[str, Any]) -> FlowSpec:
             f"Interface {name!r}: unsupported port_type.general={port_type!r} "
             "(expected 'input' or 'output')"
         )
+
+    # Flow family first: it decides which schema the rest of the interface is
+    # read under. No fallback on an unknown value — reading a continuous port as
+    # discrete builds a boolean where a rate was declared.
+    flow_family = interface.get("flow_family") or DISCRETE_FAMILY
+    if flow_family not in _VALID_FLOW_FAMILIES:
+        raise Cod3sPlatformImportError(
+            f"Interface {name!r}: unsupported flow_family={flow_family!r} "
+            f"(expected one of {sorted(_VALID_FLOW_FAMILIES)})"
+        )
+    if flow_family == CONTINUOUS_FAMILY:
+        return _parse_continuous_interface(interface, name=name, port_type=port_type)
+
+    _check_family_keys(
+        interface,
+        name=name,
+        family=DISCRETE_FAMILY,
+        forbidden=_CONTINUOUS_ONLY_INTERFACE_KEYS,
+        other_family=CONTINUOUS_FAMILY,
+    )
+
     if port_type == "input":
         return FlowSpec(
             name=name,
@@ -429,6 +1029,643 @@ def _build_kb_lookup(kb: Dict[str, Any]) -> Dict[str, List[FlowSpec]]:
         # but the keys are not authoritative — we read ``port_type.general``
         # for direction. Iterating ``.values()`` is sufficient.
         out[class_name] = [_parse_interface(iface) for iface in ifaces.values()]
+    return out
+
+
+# ---------------------------------------------------------------------------
+# Capacity and rule-set parsing (2026-08)
+# ---------------------------------------------------------------------------
+
+#: Keys a ``capacities`` entry may carry. An allowlist, like everything else in
+#: this module: a misspelled ``fillrate`` would otherwise take its default and
+#: build a pure buffer where a tank was meant, which no reading of the model
+#: distinguishes from a tank that was never asked to fill.
+_CAPACITY_KEYS = frozenset(
+    {"name", "flows", "flow", "volume", "side", "content_init", "fill_rate"}
+)
+
+#: Keys a held-flow entry may carry.
+_CAPACITY_FLOW_KEYS = frozenset({"name", "weight"})
+
+#: Keys a ``rule_sets`` entry may carry.
+_RULE_SET_KEYS = frozenset({"name", "rules"})
+
+#: Keys one rule may carry.
+_RULE_KEYS = frozenset({"name", "cond", "cons", "prod"})
+
+#: Keys one guard operand may carry.
+_RULE_OPERAND_KEYS = frozenset({"name", "negate", "port", "op", "value"})
+
+#: Sides a capacity, or a guard operand, may name.
+_VALID_SIDES = frozenset({"in", "out"})
+
+#: Comparison operators a numeric guard operand may carry. muscadet's own set;
+#: restated so an unsupported spelling is refused naming the class rather than
+#: at guard-compilation time.
+_VALID_GUARD_OPS = frozenset({"<", "<=", ">", ">=", "==", "!="})
+
+#: Spellings of an unbounded fill rate. JSON has no literal for infinity, and
+#: ``Infinity`` (what Python's ``json`` writes) is not portable, so the string
+#: form is part of the contract rather than a convenience.
+_INFINITE_SPELLINGS = frozenset({"inf", "+inf", "infinity", "+infinity"})
+
+
+def _coerce_number(raw: Any, *, where: str, allow_infinite: bool = False) -> float:
+    """Coerce a declared number, refusing a bool and a non-finite by default.
+
+    A bool is refused rather than coerced for the reason it is refused on a
+    continuous rate: ``True`` becomes a perfectly plausible 1.0, and a discrete
+    default that survived an edit reads as a deliberate quantity.
+    """
+    if isinstance(raw, bool):
+        raise Cod3sPlatformImportError(
+            f"{where} must be a real number, got the boolean {raw!r}"
+        )
+
+    if allow_infinite and isinstance(raw, str):
+        if raw.strip().lower() in _INFINITE_SPELLINGS:
+            return math.inf
+
+    try:
+        value = float(raw)
+    except (TypeError, ValueError):
+        raise Cod3sPlatformImportError(
+            f"{where} must be a real number, got {raw!r}"
+        ) from None
+
+    if math.isnan(value) or (not allow_infinite and not math.isfinite(value)):
+        raise Cod3sPlatformImportError(
+            f"{where} must be a finite real number, got {raw!r}"
+        )
+
+    return value
+
+
+def _section_entries(
+    template: Dict[str, Any], section: str, *, class_name: str
+) -> List[Dict[str, Any]]:
+    """The entries of one class-template section, refusing anything but a list.
+
+    A mapping is NOT silently wrapped: ``interfaces`` is a mapping and these two
+    sections are lists, and tolerating both here would leave a platform free to
+    emit either, which is how a contract stops being one.
+    """
+    raw = template.get(section)
+    if raw is None:
+        return []
+
+    if not isinstance(raw, list):
+        raise Cod3sPlatformImportError(
+            f"Class {class_name!r}: section {section!r} is a LIST of "
+            f"declarations, got {type(raw).__name__}"
+        )
+
+    for entry in raw:
+        if not isinstance(entry, dict):
+            raise Cod3sPlatformImportError(
+                f"Class {class_name!r}: every entry of section {section!r} is a "
+                f"mapping, got {type(entry).__name__}"
+            )
+
+    return raw
+
+
+def _check_entry_keys(entry: Dict[str, Any], allowed: frozenset, *, where: str) -> None:
+    """Refuse, by name, a key the entry has no reader for."""
+    unknown = sorted(set(entry) - allowed)
+    if not unknown:
+        return
+    plural = "s" if len(unknown) > 1 else ""
+    keys = ", ".join(repr(key) for key in unknown)
+    raise Cod3sPlatformImportError(
+        f"{where}: unknown declaration key{plural} {keys}; it accepts "
+        f"{', '.join(sorted(allowed))}"
+    )
+
+
+class _FlowIndex:
+    """The flows of one class template, indexed for the two sections to check.
+
+    Both a capacity and a rule name flows, and both must be able to tell three
+    situations apart -- the name is unknown, the name exists on the other side,
+    the name exists but is discrete -- because each calls for a different fix.
+    """
+
+    def __init__(self, flows: List[FlowSpec]):
+        self.inputs = {flow.name: flow for flow in flows if flow.direction == "input"}
+        self.outputs = {flow.name: flow for flow in flows if flow.direction == "output"}
+        self.continuous = {
+            flow.name for flow in flows if flow.flow_family == CONTINUOUS_FAMILY
+        }
+        self.names = set(self.inputs) | set(self.outputs)
+
+    @property
+    def has_continuous(self) -> bool:
+        return bool(self.continuous)
+
+    def on_side(self, side: str) -> Dict[str, FlowSpec]:
+        return self.inputs if side == "in" else self.outputs
+
+
+def _parse_capacity_flows(
+    entry: Dict[str, Any], *, where: str, index: _FlowIndex
+) -> Tuple[CapacityFlowSpec, ...]:
+    """The held flows of one capacity, validated against the class's ports."""
+    if "flow" in entry and "flows" in entry:
+        raise Cod3sPlatformImportError(
+            f"{where}: give either 'flow' (the single-flow short form) or "
+            "'flows', not both"
+        )
+
+    raw = entry.get("flows", entry.get("flow"))
+    if raw is None:
+        raise Cod3sPlatformImportError(
+            f"{where}: declare the flows it holds with 'flow' or 'flows'"
+        )
+    if isinstance(raw, (str, dict)):
+        raw = [raw]
+    if not isinstance(raw, list) or not raw:
+        raise Cod3sPlatformImportError(
+            f"{where}: 'flows' is a non-empty list of flow names or of "
+            f"{{'name', 'weight'}} mappings, got {raw!r}"
+        )
+
+    held: List[CapacityFlowSpec] = []
+    seen: set = set()
+    for item in raw:
+        if isinstance(item, str):
+            item = {"name": item}
+        if not isinstance(item, dict):
+            raise Cod3sPlatformImportError(
+                f"{where}: a held flow is a name or a {{'name', 'weight'}} "
+                f"mapping, got {type(item).__name__}"
+            )
+        _check_entry_keys(item, _CAPACITY_FLOW_KEYS, where=f"{where}, held flow")
+
+        name = item.get("name")
+        if not name:
+            raise Cod3sPlatformImportError(f"{where}: a held flow carries no 'name'")
+        if name in seen:
+            raise Cod3sPlatformImportError(
+                f"{where}: flow {name!r} is held twice; one entry holds it once, "
+                "with one weight"
+            )
+        seen.add(name)
+
+        if name not in index.names:
+            raise Cod3sPlatformImportError(
+                f"{where}: flow {name!r} is not an interface of this class "
+                f"(declared: {sorted(index.names)})"
+            )
+        if name not in index.continuous:
+            raise Cod3sPlatformImportError(
+                f"{where}: flow {name!r} is a discrete flow; a capacity holds "
+                "continuous flows only -- declare the interface with "
+                f"flow_family={CONTINUOUS_FAMILY!r}"
+            )
+
+        weight = 1.0
+        if item.get("weight") is not None:
+            weight = _coerce_number(
+                item["weight"], where=f"{where}, held flow {name!r}: weight"
+            )
+            if weight <= 0:
+                raise Cod3sPlatformImportError(
+                    f"{where}, held flow {name!r}: weight must be strictly "
+                    f"positive, got {weight}"
+                )
+
+        held.append(CapacityFlowSpec(name=name, weight=weight))
+
+    return tuple(held)
+
+
+def _parse_capacity(
+    entry: Dict[str, Any], *, class_name: str, index: _FlowIndex
+) -> CapacitySpec:
+    """Translate one ``capacities`` entry into a :class:`CapacitySpec`."""
+    name = entry.get("name")
+    if not name:
+        raise Cod3sPlatformImportError(
+            f"Class {class_name!r}: a capacity carries no 'name': {entry!r}"
+        )
+
+    where = f"Class {class_name!r}, capacity {name!r}"
+    _check_entry_keys(entry, _CAPACITY_KEYS, where=where)
+
+    flows = _parse_capacity_flows(entry, where=where, index=index)
+
+    if entry.get("volume") is None:
+        raise Cod3sPlatformImportError(
+            f"{where}: 'volume', the quantity the held flows SHARE, is required"
+        )
+    volume = _coerce_number(entry["volume"], where=f"{where}: volume")
+    if volume <= 0:
+        raise Cod3sPlatformImportError(
+            f"{where}: volume must be strictly positive, got {volume}"
+        )
+
+    side = entry.get("side")
+    if side is not None and side not in _VALID_SIDES:
+        raise Cod3sPlatformImportError(
+            f"{where}: side must be one of {sorted(_VALID_SIDES)}, got {side!r}"
+        )
+    if side is not None:
+        missing = [held.name for held in flows if held.name not in index.on_side(side)]
+        if missing:
+            kind = "input" if side == "in" else "output"
+            raise Cod3sPlatformImportError(
+                f"{where} is declared on side {side!r} but "
+                f"{', '.join(repr(m) for m in missing)} is not an {kind} flow "
+                "of this class"
+            )
+
+    held_names = {held.name for held in flows}
+    content_init: Dict[str, float] = {}
+    raw_content = entry.get("content_init")
+    if raw_content is not None:
+        if not isinstance(raw_content, dict):
+            raise Cod3sPlatformImportError(
+                f"{where}: 'content_init' is a {{flow: quantity}} mapping, got "
+                f"{type(raw_content).__name__}"
+            )
+        for flow_name, quantity in raw_content.items():
+            if flow_name not in held_names:
+                raise Cod3sPlatformImportError(
+                    f"{where}: 'content_init' names flow {flow_name!r}, which "
+                    f"this capacity does not hold (it holds "
+                    f"{sorted(held_names)})"
+                )
+            content_init[flow_name] = _coerce_number(
+                quantity, where=f"{where}: content_init[{flow_name!r}]"
+            )
+
+    fill_rate = None
+    if entry.get("fill_rate") is not None:
+        fill_rate = _coerce_number(
+            entry["fill_rate"], where=f"{where}: fill_rate", allow_infinite=True
+        )
+        if fill_rate < 0:
+            raise Cod3sPlatformImportError(
+                f"{where}: fill_rate must be positive or zero, got {fill_rate}"
+            )
+
+    return CapacitySpec(
+        name=name,
+        flows=flows,
+        volume=volume,
+        side=side,
+        content_init=content_init,
+        fill_rate=fill_rate,
+    )
+
+
+def _build_kb_capacities(
+    kb: Dict[str, Any], kb_lookup: Dict[str, List[FlowSpec]]
+) -> Dict[str, Tuple[CapacitySpec, ...]]:
+    """Compute ``{class_name: (CapacitySpec, ...)}`` from the KB dict.
+
+    Kept apart from :func:`_build_kb_lookup` rather than folded into it: that
+    function's ``{class: [FlowSpec]}`` shape is what every existing caller and
+    test reads, and a capacity needs the parsed flows to validate itself
+    against, so it comes second by dependency as well as by compatibility.
+    """
+    templates = kb.get("component_templates") or {}
+    out: Dict[str, Tuple[CapacitySpec, ...]] = {}
+
+    for class_name, template in templates.items():
+        entries = _section_entries(template, "capacities", class_name=class_name)
+        if not entries:
+            out[class_name] = ()
+            continue
+
+        if _gate_kind_of_template(template) is not None:
+            raise Cod3sPlatformImportError(
+                f"Class {class_name!r} is a logic gate and declares capacities. "
+                "A gate is a combinational component reading its sources "
+                "directly; it holds no flow and therefore no volume."
+            )
+
+        index = _FlowIndex(kb_lookup.get(class_name) or [])
+        if not index.has_continuous:
+            raise Cod3sPlatformImportError(
+                f"Class {class_name!r} declares a capacity but carries no "
+                f"continuous interface. A volume is held over continuous flows "
+                f"only -- declare the port with flow_family="
+                f"{CONTINUOUS_FAMILY!r} first."
+            )
+
+        capacities: List[CapacitySpec] = []
+        seen: set = set()
+        for entry in entries:
+            capacity = _parse_capacity(entry, class_name=class_name, index=index)
+            if capacity.name in seen:
+                raise Cod3sPlatformImportError(
+                    f"Class {class_name!r}: capacity {capacity.name!r} is "
+                    "declared twice; a capacity name is unique on a component"
+                )
+            seen.add(capacity.name)
+            capacities.append(capacity)
+
+        out[class_name] = tuple(capacities)
+
+    return out
+
+
+def _parse_rule_operand(
+    raw: Any, *, where: str, index: _FlowIndex, capacity_names: set
+) -> RuleOperandSpec:
+    """Translate one guard operand, validated against the class's ports."""
+    if isinstance(raw, str):
+        raw = {"name": raw}
+    if not isinstance(raw, dict):
+        raise Cod3sPlatformImportError(
+            f"{where}: a guard operand is a flow name or a "
+            f"{{'name', 'negate', 'port', 'op', 'value'}} mapping, got "
+            f"{type(raw).__name__}"
+        )
+    _check_entry_keys(raw, _RULE_OPERAND_KEYS, where=f"{where}, guard operand")
+
+    name = raw.get("name")
+    if not name:
+        raise Cod3sPlatformImportError(f"{where}: a guard operand carries no 'name'")
+
+    port = raw.get("port")
+    if port is not None and port not in _VALID_SIDES:
+        raise Cod3sPlatformImportError(
+            f"{where}, guard operand {name!r}: port must be one of "
+            f"{sorted(_VALID_SIDES)}, got {port!r}"
+        )
+
+    _check_rule_flow_name(
+        name,
+        where=f"{where}, guard operand",
+        side=port,
+        index=index,
+        capacity_names=capacity_names,
+    )
+
+    op = raw.get("op")
+    value = raw.get("value")
+    if op is not None:
+        if op not in _VALID_GUARD_OPS:
+            raise Cod3sPlatformImportError(
+                f"{where}, guard operand {name!r}: unsupported comparison "
+                f"op={op!r} (expected one of {sorted(_VALID_GUARD_OPS)})"
+            )
+        if value is None:
+            raise Cod3sPlatformImportError(
+                f"{where}, guard operand {name!r}: a comparison carries the "
+                "'value' it compares to"
+            )
+        value = _coerce_number(value, where=f"{where}, guard operand {name!r}: value")
+    elif value is not None:
+        raise Cod3sPlatformImportError(
+            f"{where}, guard operand {name!r}: a 'value' without an 'op' "
+            "compares to nothing; declare the operator or drop the value"
+        )
+
+    return RuleOperandSpec(
+        name=name,
+        negate=bool(raw.get("negate", False)),
+        port=port,
+        op=op,
+        value=value,
+    )
+
+
+def _check_rule_flow_name(
+    name: str,
+    *,
+    where: str,
+    side: Optional[str],
+    index: _FlowIndex,
+    capacity_names: set,
+) -> None:
+    """Refuse a rule name that is not a flow reachable on ``side``.
+
+    A name designating a declared CAPACITY is refused as such rather than as an
+    unknown flow: muscadet refuses it too (an interposed capacity replaces the
+    flow it buffers automatically, so rules name flows and never capacities),
+    and "flow 'cuve' does not exist" would send the reader looking for a port
+    they never meant to declare.
+    """
+    if name in capacity_names:
+        raise Cod3sPlatformImportError(
+            f"{where} references capacity {name!r}, which is not a flow. An "
+            "interposed capacity replaces the flow it buffers automatically, "
+            "so a rule names the FLOW the capacity holds."
+        )
+
+    if side is None:
+        if name not in index.names:
+            raise Cod3sPlatformImportError(
+                f"{where} references flow {name!r}, which this class does not "
+                f"declare (declared: {sorted(index.names)})"
+            )
+        return
+
+    if name not in index.on_side(side):
+        kind = "input" if side == "in" else "output"
+        other = "output" if side == "in" else "input"
+        detail = f" -- it is declared as an {other} flow" if name in index.names else ""
+        raise Cod3sPlatformImportError(
+            f"{where} references flow {name!r}, which is not an {kind} flow of "
+            f"this class{detail} (its {kind}s: {sorted(index.on_side(side))})"
+        )
+
+
+def _parse_rule_coefficients(
+    raw: Any,
+    *,
+    where: str,
+    key: str,
+    side: str,
+    index: _FlowIndex,
+    capacity_names: set,
+) -> Dict[str, float]:
+    """One ``cons`` / ``prod`` map, validated against the class's ports."""
+    if raw is None:
+        return {}
+    if not isinstance(raw, dict):
+        raise Cod3sPlatformImportError(
+            f"{where}: {key!r} is a {{flow: coefficient}} mapping, got "
+            f"{type(raw).__name__}"
+        )
+
+    out: Dict[str, float] = {}
+    for name, coefficient in raw.items():
+        _check_rule_flow_name(
+            name,
+            where=f"{where}, {key!r} map",
+            side=side,
+            index=index,
+            capacity_names=capacity_names,
+        )
+        out[name] = _coerce_number(coefficient, where=f"{where}: {key}[{name!r}]")
+    return out
+
+
+def _parse_rule(
+    entry: Dict[str, Any], *, where: str, index: _FlowIndex, capacity_names: set
+) -> RuleSpec:
+    """Translate one rule of a rule set."""
+    _check_entry_keys(entry, _RULE_KEYS, where=where)
+
+    raw_cond = entry.get("cond")
+    if isinstance(raw_cond, str):
+        raise Cod3sPlatformImportError(
+            f"{where}: 'cond' is a LIST of operands. muscadet also reads an "
+            "expression string, but a mini-language embedded in an exported "
+            "payload cannot be validated against the class's own ports, so the "
+            "bridge carries the structured form only: "
+            "[{'name': ..., 'negate': ..., 'port': ..., 'op': ..., 'value': ...}]"
+        )
+    if raw_cond is None:
+        raw_cond = []
+    if isinstance(raw_cond, dict):
+        raw_cond = [raw_cond]
+    if not isinstance(raw_cond, list):
+        raise Cod3sPlatformImportError(
+            f"{where}: 'cond' is a list of operands, got " f"{type(raw_cond).__name__}"
+        )
+
+    cond = tuple(
+        _parse_rule_operand(
+            operand, where=where, index=index, capacity_names=capacity_names
+        )
+        for operand in raw_cond
+    )
+
+    return RuleSpec(
+        name=entry.get("name"),
+        cond=cond,
+        cons=_parse_rule_coefficients(
+            entry.get("cons"),
+            where=where,
+            key="cons",
+            side="in",
+            index=index,
+            capacity_names=capacity_names,
+        ),
+        prod=_parse_rule_coefficients(
+            entry.get("prod"),
+            where=where,
+            key="prod",
+            side="out",
+            index=index,
+            capacity_names=capacity_names,
+        ),
+    )
+
+
+def _parse_rule_set(
+    entry: Dict[str, Any], *, class_name: str, index: _FlowIndex, capacity_names: set
+) -> RuleSetSpec:
+    """Translate one ``rule_sets`` entry into a :class:`RuleSetSpec`."""
+    name = entry.get("name")
+    if not name:
+        raise Cod3sPlatformImportError(
+            f"Class {class_name!r}: a rule set carries no 'name': {entry!r}"
+        )
+
+    where = f"Class {class_name!r}, rule set {name!r}"
+    _check_entry_keys(entry, _RULE_SET_KEYS, where=where)
+
+    raw_rules = entry.get("rules")
+    if raw_rules is None:
+        raw_rules = []
+    if isinstance(raw_rules, dict):
+        raw_rules = [raw_rules]
+    if not isinstance(raw_rules, list):
+        raise Cod3sPlatformImportError(
+            f"{where}: 'rules' is a list of rules, got {type(raw_rules).__name__}"
+        )
+
+    rules: List[RuleSpec] = []
+    for position, raw_rule in enumerate(raw_rules):
+        if not isinstance(raw_rule, dict):
+            raise Cod3sPlatformImportError(
+                f"{where}: every rule is a mapping, got " f"{type(raw_rule).__name__}"
+            )
+        label = raw_rule.get("name") or f"rule #{position}"
+        rules.append(
+            _parse_rule(
+                raw_rule,
+                where=f"{where}, {label}",
+                index=index,
+                capacity_names=capacity_names,
+            )
+        )
+
+    defaults = [
+        rule.name or f"rule #{position}"
+        for position, rule in enumerate(rules)
+        if not rule.cond
+    ]
+    if len(defaults) > 1:
+        raise Cod3sPlatformImportError(
+            f"{where}: {len(defaults)} rules carry no guard "
+            f"({', '.join(repr(label) for label in defaults)}). A rule without "
+            "a guard is the DEFAULT rule of its set, applying when no other "
+            "matches, and a set holds at most one."
+        )
+
+    return RuleSetSpec(name=name, rules=tuple(rules))
+
+
+def _build_kb_rule_sets(
+    kb: Dict[str, Any],
+    kb_lookup: Dict[str, List[FlowSpec]],
+    capacities_lookup: Dict[str, Tuple[CapacitySpec, ...]],
+) -> Dict[str, Tuple[RuleSetSpec, ...]]:
+    """Compute ``{class_name: (RuleSetSpec, ...)}`` from the KB dict.
+
+    Takes the capacities as well as the flows because a rule REFUSES a capacity
+    name in a guard or in a coefficient map, and that refusal is only reachable
+    once the capacities of the class are known -- the same dependency muscadet's
+    own ``DECLARATION_SECTIONS`` encodes by ordering capacities before rules.
+    """
+    templates = kb.get("component_templates") or {}
+    out: Dict[str, Tuple[RuleSetSpec, ...]] = {}
+
+    for class_name, template in templates.items():
+        entries = _section_entries(template, "rule_sets", class_name=class_name)
+        if not entries:
+            out[class_name] = ()
+            continue
+
+        if _gate_kind_of_template(template) is not None:
+            raise Cod3sPlatformImportError(
+                f"Class {class_name!r} is a logic gate and declares rule sets. "
+                "A gate aggregates booleans through its own kind; it "
+                "transforms no quantity."
+            )
+
+        index = _FlowIndex(kb_lookup.get(class_name) or [])
+        capacity_names = {
+            capacity.name for capacity in capacities_lookup.get(class_name) or ()
+        }
+
+        rule_sets: List[RuleSetSpec] = []
+        seen: set = set()
+        for entry in entries:
+            rule_set = _parse_rule_set(
+                entry,
+                class_name=class_name,
+                index=index,
+                capacity_names=capacity_names,
+            )
+            if rule_set.name in seen:
+                raise Cod3sPlatformImportError(
+                    f"Class {class_name!r}: rule set {rule_set.name!r} is "
+                    "declared twice; a rule set name is unique on a component"
+                )
+            seen.add(rule_set.name)
+            rule_sets.append(rule_set)
+
+        out[class_name] = tuple(rule_sets)
+
     return out
 
 
@@ -552,6 +1789,39 @@ _ROLE_TO_DIRECTION: Dict[str, str] = {
     "tempo_deactivation": "output",
 }
 _OVERRIDE_ROLES: frozenset = frozenset(_ROLE_TO_DIRECTION)
+
+# --- Per-instance CAPACITY overrides (2026-08) -----------------------------
+#
+# The pre-existing override channel indexes ``(name, role)`` against a FLOW
+# spec, so nothing in it can carry a capacity: a capacity is not a flow, it has
+# no direction, and its name lives in a namespace of its own. These roles reuse
+# the same ``attributes`` list on the MODEL COMPONENT and read ``name`` as the
+# CAPACITY name, which is what lets two components of one class hold different
+# volumes without splitting the class in two.
+#
+# They must be REGISTERED, not merely handled: an unknown role is logged and
+# dropped by ``_build_overrides_index``, so an unregistered capacity role would
+# leave every tank at the template's volume with nothing in the model saying so.
+
+#: The volume the held flows share. Always overridable: it is one scalar and it
+#: is the number that differs between two instances of one class.
+CAPACITY_VOLUME_ROLE = "capacity_volume"
+
+#: The initial raw quantity, on a SINGLE-FLOW capacity only. The engine indexes
+#: a content by held flow, so a scalar override addresses one flow and one
+#: only; on a mixture it would have to say which constituent it fills, and a
+#: mapping-valued attribute is a channel the platform does not have.
+CAPACITY_CONTENT_INIT_ROLE = "capacity_content_init"
+
+#: Declared so it can be REFUSED by name. The fill rate is frozen at the
+#: template on purpose -- it is a property of the buffering behaviour, not of
+#: the instance -- and leaving the role out of the registry would have it
+#: logged and dropped, which is the one outcome worth avoiding.
+CAPACITY_FILL_RATE_ROLE = "capacity_fill_rate"
+
+_CAPACITY_OVERRIDE_ROLES: frozenset = frozenset(
+    {CAPACITY_VOLUME_ROLE, CAPACITY_CONTENT_INIT_ROLE, CAPACITY_FILL_RATE_ROLE}
+)
 # Roles that exist on the platform but are NOT instance configuration
 # overrides — they are runtime observables (is_available, fed_out,
 # fed_in, is_active) and the importer ignores them silently.
@@ -652,6 +1922,11 @@ def _build_overrides_index(
         if not name or not role:
             continue
         if role in _OBSERVABLE_ROLES:
+            continue
+        if role in _CAPACITY_OVERRIDE_ROLES:
+            # Read by _build_capacity_overrides_index instead: ``name`` is a
+            # capacity there, so this index -- keyed against flow specs --
+            # would look it up among the flows and find nothing.
             continue
         if role not in _OVERRIDE_ROLES:
             logger.warning(
@@ -762,6 +2037,20 @@ def _apply_instance_overrides(
                 f"{other.direction} (snapshot corruption)"
             )
         flow = out[idx]
+        if flow.flow_family == CONTINUOUS_FAMILY:
+            # Every role in _ROLE_TO_DIRECTION is a DISCRETE one: they carry
+            # booleans, an aggregation logic or a tempo law, and none of them
+            # has a continuous counterpart to be applied to. Applied anyway,
+            # role=var_in_default would coerce its bool to a plausible rate of
+            # 1.0 and the others would be dropped by the continuous kwargs
+            # builders without a word. Refused instead, by name -- the platform
+            # gains its continuous override roles in the unit that emits them.
+            raise Cod3sPlatformImportError(
+                f"Component {comp_name!r}: instance override role={role} is a "
+                f"discrete-family override and flow {name!r} is continuous. "
+                "No continuous instance override is carried yet; declare the "
+                "value on the KB interface."
+            )
         if role == "logic_in":
             new_logic = _parse_input_logic_value(
                 value, flow_name=name, comp_name=comp_name
@@ -818,10 +2107,195 @@ def _apply_instance_overrides(
     return out
 
 
+def _build_capacity_overrides_index(
+    attributes: List[Dict[str, Any]],
+) -> "OverridesIndex":
+    """Index a model component's CAPACITY overrides by ``(capacity name, role)``.
+
+    Same ``attributes`` list as the flow overrides, read under the roles of
+    :data:`_CAPACITY_OVERRIDE_ROLES`. A ``value`` of ``None`` means "use the
+    template's", exactly as it does on the flow side.
+    """
+    out: OverridesIndex = {}
+    for attr in attributes or []:
+        if not isinstance(attr, dict):
+            continue
+        name = attr.get("name")
+        role = attr.get("role")
+        if not name or role not in _CAPACITY_OVERRIDE_ROLES:
+            continue
+        if attr.get("value") is None:
+            continue
+        out[(name, role)] = attr["value"]
+    return out
+
+
+def _apply_capacity_overrides(
+    capacities: Tuple[CapacitySpec, ...],
+    overrides: "OverridesIndex",
+    *,
+    comp_name: str,
+) -> Tuple[CapacitySpec, ...]:
+    """Return the capacities with this instance's overrides folded in.
+
+    A stale override -- one naming a capacity the class no longer declares --
+    is REFUSED rather than dropped, unlike a stale flow override. The asymmetry
+    is deliberate: a capacity name is one of a handful on a component and does
+    not churn, and a volume silently reverting to the template's builds a
+    different plant with nothing anywhere saying which one ran.
+    """
+    if not overrides:
+        return capacities
+
+    by_name = {capacity.name: index for index, capacity in enumerate(capacities)}
+    out = list(capacities)
+
+    for (name, role), value in overrides.items():
+        if role == CAPACITY_FILL_RATE_ROLE:
+            raise Cod3sPlatformImportError(
+                f"Component {comp_name!r}: capacity {name!r} carries a "
+                f"role={role} override. The fill rate is frozen at the class "
+                "template: it states HOW the volume buffers, which is a "
+                "property of the class and not of one instance. Declare it in "
+                "the template's 'capacities' section."
+            )
+
+        index = by_name.get(name)
+        if index is None:
+            raise Cod3sPlatformImportError(
+                f"Component {comp_name!r}: instance override role={role} names "
+                f"capacity {name!r}, which its class does not declare "
+                f"(declared: {sorted(by_name)})"
+            )
+
+        capacity = out[index]
+        where = f"Component {comp_name!r}, capacity {name!r}: {role}"
+
+        if role == CAPACITY_VOLUME_ROLE:
+            volume = _coerce_number(value, where=where)
+            if volume <= 0:
+                raise Cod3sPlatformImportError(
+                    f"{where}: volume must be strictly positive, got {volume}"
+                )
+            out[index] = replace(capacity, volume=volume)
+            continue
+
+        # CAPACITY_CONTENT_INIT_ROLE
+        if len(capacity.flows) != 1:
+            held = sorted(held.name for held in capacity.flows)
+            raise Cod3sPlatformImportError(
+                f"{where}: the initial content is overridable on a SINGLE-flow "
+                f"capacity only, and {name!r} holds {len(capacity.flows)} "
+                f"({', '.join(held)}). A content is indexed by held flow, so a "
+                "scalar override would not say which constituent it fills; "
+                "declare the content in the class template instead."
+            )
+        content = _coerce_number(value, where=where)
+        if content < 0:
+            raise Cod3sPlatformImportError(
+                f"{where}: an initial content is positive or zero, got {content}"
+            )
+        out[index] = replace(capacity, content_init={capacity.flows[0].name: content})
+
+    return tuple(out)
+
+
+def _parse_deratings(
+    raw: Any, *, comp_name: str, flows: List[FlowSpec]
+) -> Tuple[DeratingSpec, ...]:
+    """Translate a model component's ``deratings`` section.
+
+    Each entry is a ``(mode, continuous output)`` pair whose derating variable
+    the apply layer allocates through the public ``ObjFlow.add_derating``,
+    AFTER ``set_flows()``. The pair exists because a mode may be declared
+    outside the component -- a standalone ``cod3s.ObjFM*`` naming variables by
+    their exact basename -- and can only target a variable that already exists.
+
+    A target that is not a continuous OUTPUT is refused naming it: only a
+    continuous output carries a rate, so a derating on anything else is a
+    declaration that could never take effect.
+    """
+    if raw is None:
+        return ()
+    if not isinstance(raw, list):
+        raise Cod3sPlatformImportError(
+            f"Component {comp_name!r}: 'deratings' is a list of "
+            f"{{'mode', 'flow'}} mappings, got {type(raw).__name__}"
+        )
+
+    continuous_outputs = {
+        flow.name
+        for flow in flows
+        if flow.direction == "output" and flow.flow_family == CONTINUOUS_FAMILY
+    }
+    known = {flow.name for flow in flows}
+
+    out: List[DeratingSpec] = []
+    seen: set = set()
+    for entry in raw:
+        if not isinstance(entry, dict):
+            raise Cod3sPlatformImportError(
+                f"Component {comp_name!r}: every 'deratings' entry is a "
+                f"{{'mode', 'flow'}} mapping, got {type(entry).__name__}"
+            )
+        unknown = sorted(set(entry) - {"mode", "flow"})
+        if unknown:
+            raise Cod3sPlatformImportError(
+                f"Component {comp_name!r}: 'deratings' entry carries unknown "
+                f"key(s) {', '.join(repr(key) for key in unknown)}; it accepts "
+                "'mode' and 'flow'"
+            )
+
+        mode = entry.get("mode")
+        flow_name = entry.get("flow")
+        if not mode:
+            raise Cod3sPlatformImportError(
+                f"Component {comp_name!r}: a 'deratings' entry carries no "
+                f"'mode', the name of the failure mode owning the variable: "
+                f"{entry!r}"
+            )
+        if not flow_name:
+            raise Cod3sPlatformImportError(
+                f"Component {comp_name!r}: 'deratings' entry for mode "
+                f"{mode!r} carries no 'flow'"
+            )
+
+        if flow_name not in continuous_outputs:
+            if flow_name not in known:
+                detail = "which this component does not declare"
+            elif flow_name in {f.name for f in flows if f.direction == "output"}:
+                detail = (
+                    "a DISCRETE output. Only a continuous output carries a "
+                    "rate; a discrete one is gated by its availability instead"
+                )
+            else:
+                detail = (
+                    "an input. Only a continuous OUTPUT carries a rate, and a "
+                    "derating multiplies what the rules produced"
+                )
+            raise Cod3sPlatformImportError(
+                f"Component {comp_name!r}: mode {mode!r} derates flow "
+                f"{flow_name!r}, {detail} (continuous outputs: "
+                f"{sorted(continuous_outputs)})"
+            )
+
+        pair = (mode, flow_name)
+        if pair in seen:
+            # register_derating is idempotent; collapsing here keeps the spec a
+            # faithful account of the variables that will exist.
+            continue
+        seen.add(pair)
+        out.append(DeratingSpec(mode=mode, flow=flow_name))
+
+    return tuple(out)
+
+
 def _parse_components(
     components_raw: Dict[str, Dict[str, Any]],
     kb_lookup: Dict[str, List[FlowSpec]],
     gate_kinds: Optional[Dict[str, str]] = None,
+    capacities_lookup: Optional[Dict[str, Tuple[CapacitySpec, ...]]] = None,
+    rule_sets_lookup: Optional[Dict[str, Tuple[RuleSetSpec, ...]]] = None,
 ) -> List[ComponentSpec]:
     """Translate the model components dict into a list of ComponentSpec.
 
@@ -839,6 +2313,8 @@ def _parse_components(
     ``ObjLogicGate``.
     """
     gate_kinds = gate_kinds or {}
+    capacities_lookup = capacities_lookup or {}
+    rule_sets_lookup = rule_sets_lookup or {}
     seen_names: set[str] = set()
     out: List[ComponentSpec] = []
     for cid, comp in (components_raw or {}).items():
@@ -865,6 +2341,12 @@ def _parse_components(
 
         gate_kind = gate_kinds.get(class_name)
         if gate_kind is not None:
+            if comp.get("deratings"):
+                raise Cod3sPlatformImportError(
+                    f"Component {name!r} is a logic gate and declares "
+                    "deratings. A gate exports one boolean and carries no "
+                    "continuous output, so it has no rate to derate."
+                )
             # Logic gate : keep the KB-parsed flows (the joker ``in``/``out``
             # port names) for connection validation, but synthesise an
             # ObjLogicGate (not an ObjFlow) at apply time. Read the editable
@@ -893,6 +2375,15 @@ def _parse_components(
         flows = _apply_instance_overrides(
             list(kb_lookup[class_name]), overrides, comp_name=name
         )
+        # Capacities are resolved PER COMPONENT and not once per class,
+        # because their numbers are what an instance overrides: two tanks of
+        # one class routinely hold different volumes.
+        capacity_overrides = _build_capacity_overrides_index(instance_attrs)
+        capacities = _apply_capacity_overrides(
+            capacities_lookup.get(class_name) or (),
+            capacity_overrides,
+            comp_name=name,
+        )
         out.append(
             ComponentSpec(
                 id=cid,
@@ -903,7 +2394,13 @@ def _parse_components(
                     "platform_id": cid,
                     "attributes_initial": instance_attrs,
                     "instance_overrides": dict(overrides),
+                    "capacity_overrides": dict(capacity_overrides),
                 },
+                capacities=capacities,
+                rule_sets=rule_sets_lookup.get(class_name) or (),
+                deratings=_parse_deratings(
+                    comp.get("deratings"), comp_name=name, flows=flows
+                ),
             )
         )
     return out
@@ -1082,8 +2579,17 @@ def parse_platform_export(payload: Dict[str, Any]) -> ImporterContext:
 
     kb_lookup = _build_kb_lookup(kb)
     gate_kinds = _build_gate_kinds(kb)
+    # Capacities before rule sets, and both after the flows: the same
+    # dependency muscadet's own ``DECLARATION_SECTIONS`` encodes, for the same
+    # reason -- a capacity names flows, and a rule refuses a capacity name.
+    capacities_lookup = _build_kb_capacities(kb, kb_lookup)
+    rule_sets_lookup = _build_kb_rule_sets(kb, kb_lookup, capacities_lookup)
     components = _parse_components(
-        elements.get("components") or {}, kb_lookup, gate_kinds
+        elements.get("components") or {},
+        kb_lookup,
+        gate_kinds,
+        capacities_lookup=capacities_lookup,
+        rule_sets_lookup=rule_sets_lookup,
     )
     connections = _parse_connections(elements.get("connections") or {}, components)
 
@@ -1313,6 +2819,303 @@ def _create_logic_gate(
         )
 
 
+def _continuous_in_kwargs(flow: FlowSpec) -> Dict[str, Any]:
+    """Declaration kwargs of a continuous INPUT flow.
+
+    A dictionary of its own, sharing not one line with the discrete builder.
+    That separation is what guarantees no production condition, no inner mode
+    and no negation can reach a continuous flow: there is no code path putting
+    them here. ``FlowContinuous.check_declaration_keys`` would refuse them, but
+    a refusal is a last line of defence, not a design.
+    """
+    kwargs: Dict[str, Any] = {
+        "cls": "FlowContinuousIn",
+        "name": flow.name,
+    }
+    # Only pass what was declared; None leaves the muscadet default (0.0 for
+    # both), which is what a port fed by a recipe or a capacity wants.
+    if flow.var_in_default is not None:
+        kwargs["var_in_default"] = float(flow.var_in_default)
+    if flow.nominal_rate is not None:
+        kwargs["var_demand_default"] = flow.nominal_rate
+
+    return kwargs
+
+
+def _continuous_out_kwargs(flow: FlowSpec) -> Dict[str, Any]:
+    """Declaration kwargs of a continuous OUTPUT flow.
+
+    The profile arrives already decomposed by the parse layer: ``nominal_rate``
+    is the declared rate and ``profile_spec`` the modulation, absent for a
+    constant shape. So ``profile`` is written here only when there is a factor
+    to build, and a constant shape never reaches ``muscadet.build_profile``.
+    """
+    kwargs: Dict[str, Any] = {
+        "cls": "FlowContinuousOut",
+        "name": flow.name,
+        "allocation": flow.allocation or _ALLOCATION_PROPORTIONAL,
+    }
+    if flow.nominal_rate is not None:
+        kwargs["var_fed_default"] = flow.nominal_rate
+    if flow.profile_spec is not None:
+        kwargs["profile"] = dict(flow.profile_spec)
+
+    return kwargs
+
+
+#: Section of :data:`muscadet.declare.DECLARATION_SECTIONS` the importer builds
+#: itself rather than by dispatching entries: the output flows must be created
+#: in intra-component DEPENDENCY order (a discrete output's production condition
+#: may reference another output of the same component), which is an ordering
+#: this bridge computes and the generic dispatch knows nothing about.
+_FLOWS_SECTION = "flows"
+
+
+def _capacity_kwargs(capacity: CapacitySpec) -> Dict[str, Any]:
+    """Declaration kwargs of one capacity, as ``ObjFlow.add_capacity`` takes them.
+
+    ``volume`` becomes ``capacity``: the platform names the quantity, muscadet
+    names the thing. Only what was declared is passed -- ``side`` left out lets
+    muscadet resolve it from the sides the held flows are carried on, and
+    ``fill_rate`` left out keeps the pure-buffer default.
+    """
+    kwargs: Dict[str, Any] = {
+        "name": capacity.name,
+        "flows": [
+            {"name": held.name, "weight": held.weight} for held in capacity.flows
+        ],
+        "capacity": capacity.volume,
+    }
+    if capacity.side is not None:
+        kwargs["side"] = capacity.side
+    if capacity.content_init:
+        kwargs["content_init"] = dict(capacity.content_init)
+    if capacity.fill_rate is not None:
+        kwargs["fill_rate"] = capacity.fill_rate
+    return kwargs
+
+
+def _rule_operand_kwargs(operand: RuleOperandSpec) -> Dict[str, Any]:
+    """One guard operand, in muscadet's canonical mapping form."""
+    kwargs: Dict[str, Any] = {"name": operand.name}
+    if operand.negate:
+        kwargs["negate"] = True
+    if operand.port is not None:
+        kwargs["port"] = operand.port
+    if operand.op is not None:
+        kwargs["op"] = operand.op
+        kwargs["value"] = operand.value
+    return kwargs
+
+
+def _rule_set_kwargs(rule_set: RuleSetSpec) -> Dict[str, Any]:
+    """Declaration kwargs of one rule set, as ``ObjFlow.add_rules`` takes them.
+
+    ``cond`` is emitted only when the rule carries one: an EMPTY guard is what
+    makes a rule the default rule of its set, and muscadet reads that from the
+    absence rather than from an empty list being present or not.
+    """
+    rules: List[Dict[str, Any]] = []
+    for rule in rule_set.rules:
+        entry: Dict[str, Any] = {}
+        if rule.name is not None:
+            entry["name"] = rule.name
+        if rule.cond:
+            entry["cond"] = [_rule_operand_kwargs(op) for op in rule.cond]
+        if rule.cons:
+            entry["cons"] = dict(rule.cons)
+        if rule.prod:
+            entry["prod"] = dict(rule.prod)
+        rules.append(entry)
+
+    return {"name": rule_set.name, "rules": rules}
+
+
+def _declaration_entries(spec: ComponentSpec) -> Dict[str, List[Dict[str, Any]]]:
+    """The declaration sections this bridge emits, keyed as muscadet names them.
+
+    The keys are those of :data:`muscadet.declare.DECLARATION_SECTIONS`, which
+    is what lets :func:`_declare_component` walk that tuple instead of carrying
+    an order of its own. The sections not emitted here (``measurements_in``,
+    ``measurements_out``, ``transfers``) simply have no entries, and gain one
+    the day the platform exports them.
+    """
+    return {
+        "capacities": [_capacity_kwargs(capacity) for capacity in spec.capacities],
+        "rules": [_rule_set_kwargs(rule_set) for rule_set in spec.rule_sets],
+    }
+
+
+def _declare_component_flows(comp: Any, spec: ComponentSpec) -> None:
+    """Declare every flow of one component: inputs first, outputs in dep order."""
+    input_names = set()
+    for flow in spec.flows:
+        if flow.direction != "input":
+            continue
+        if flow.flow_family == CONTINUOUS_FAMILY:
+            flow_in_kwargs = _continuous_in_kwargs(flow)
+        else:
+            flow_in_kwargs = {
+                "cls": "FlowIn",
+                "name": flow.name,
+                "logic": flow.logic,
+            }
+            # Only pass var_in_default when explicitly set
+            # (role=var_in_default instance override) ; None leaves the
+            # muscadet FlowIn default (False).
+            if flow.var_in_default is not None:
+                flow_in_kwargs["var_in_default"] = flow.var_in_default
+        try:
+            comp.add_flow(flow_in_kwargs)
+        except Exception as e:
+            raise Cod3sPlatformImportError(
+                f"Failed to add input flow {flow.name!r} to component "
+                f"{spec.name!r}: {e}"
+            ) from e
+        input_names.add(flow.name)
+
+    # Outputs in dependency order (an output's logic may reference
+    # another output of the same component — Platform KB pattern
+    # for diagnostic flows mirroring primary outputs).
+    outputs = [f for f in spec.flows if f.direction == "output"]
+    for flow in _order_outputs_by_deps(outputs, input_names, spec.name):
+        if flow.flow_family == CONTINUOUS_FAMILY:
+            try:
+                comp.add_flow(_continuous_out_kwargs(flow))
+            except Exception as e:
+                raise Cod3sPlatformImportError(
+                    f"Failed to add continuous output flow {flow.name!r} "
+                    f"to component {spec.name!r}: {e}"
+                ) from e
+            continue
+        # Dynamic flow-out dispatch (2026-07-10). All three classes derive
+        # from FlowOut, so var_prod_cond / inner_mode / negate apply to each.
+        flow_type = flow.flow_type or "classic"
+        cls_name = {
+            "tempo": "FlowOutTempo",
+            "on_trigger": "FlowOutOnTrigger",
+        }.get(flow_type, "FlowOut")
+        flow_kwargs: Dict[str, Any] = {
+            "cls": cls_name,
+            "name": flow.name,
+            "var_prod_cond": flow.logic,
+            "var_prod_cond_inner_mode": flow.logic_inner_mode,
+            "negate": flow.negate,
+        }
+        # P1.6 — instance override role=init: set the initial value
+        # of var_prod so the flow starts in the user-chosen state.
+        # When prod_cond is non-empty, the propagation will resolve
+        # var_prod from inputs at t=0+, but the seed matters for
+        # the very first tick and for unconditional outputs.
+        if flow.init_value is not None:
+            flow_kwargs["var_prod_default"] = flow.init_value
+        # Service-function dormancy: var_is_active_default=False makes the
+        # flow stay unfed (orthogonally to prod_cond) until an effect sets
+        # var_is_active True. Only passed when explicitly overridden so
+        # normal flows keep the muscadet default (True = always active).
+        if flow.is_active_default is not None:
+            flow_kwargs["var_is_active_default"] = flow.is_active_default
+        # Service-function dormancy (user-facing): start the availability
+        # gate closed so the flow is dormant until an effect re-opens it.
+        if flow.fed_available_init is not None:
+            flow_kwargs["var_fed_available_out_init"] = flow.fed_available_init
+        # Availability-gate reset control: when False, keep the gate's last
+        # value within a sequence instead of reinitialising it each step. Only
+        # passed when explicitly overridden so normal flows keep the muscadet
+        # default (True = legacy reinitialised gate, byte-identical).
+        if flow.fed_available_reset is not None:
+            flow_kwargs["var_fed_available_out_reset"] = flow.fed_available_reset
+        # Tempo params (FlowOutTempo). Occurrence-law dicts pass through in
+        # SHORT wire form; cod3s' sanitize_occ_law normalises them.
+        if flow_type == "tempo":
+            if flow.occ_enable is not None:
+                flow_kwargs["occ_enable_flow"] = flow.occ_enable
+            if flow.occ_disable is not None:
+                flow_kwargs["occ_disable_flow"] = flow.occ_disable
+            if flow.init_enable is not None:
+                flow_kwargs["init_enable"] = flow.init_enable
+        # On-trigger params (FlowOutOnTrigger). Trigger times are plain
+        # floats; muscadet wraps them in a delay law internally.
+        elif flow_type == "on_trigger":
+            if flow.trigger_time_up is not None:
+                flow_kwargs["trigger_time_up"] = flow.trigger_time_up
+            if flow.trigger_time_down is not None:
+                flow_kwargs["trigger_time_down"] = flow.trigger_time_down
+            if flow.trigger_logic is not None:
+                flow_kwargs["trigger_logic"] = flow.trigger_logic
+        try:
+            comp.add_flow(flow_kwargs)
+        except Exception as e:
+            raise Cod3sPlatformImportError(
+                f"Failed to add output flow {flow.name!r} to component "
+                f"{spec.name!r}: {e}"
+            ) from e
+
+
+def _declare_component(comp: Any, spec: ComponentSpec) -> None:
+    """Declare one component's sections, in the order muscadet owns.
+
+    The order is READ from :data:`muscadet.declare.DECLARATION_SECTIONS` rather
+    than restated here, because it is the library's and not the bridge's: a
+    capacity names flows, a rule refuses a capacity name in a ``cons`` map, and
+    a conduit refuses a flow a rule already consumes -- three refusals that are
+    only reachable when the thing doing the refusing exists first. Writing the
+    order out here would fork it, and a fork would go unnoticed until a section
+    added upstream landed in the wrong place.
+
+    ``set_flows()`` is called ONCE, after every section that must precede it: it
+    creates the PyCATSHOO variables and message boxes, it cannot be re-run, and
+    skipping it leaves ``connect`` failing on another component entirely. The
+    derating pre-allocation follows it for the mirror-image reason muscadet
+    keeps :data:`~muscadet.declare.POST_SET_FLOWS_SECTIONS` apart: the bounded
+    variable a mode clamps does not exist until then.
+    """
+    from muscadet.declare import DECLARATION_SECTIONS  # noqa: WPS433
+
+    entries_by_section = _declaration_entries(spec)
+
+    for section, method_name in DECLARATION_SECTIONS:
+        if section == _FLOWS_SECTION:
+            _declare_component_flows(comp, spec)
+            continue
+
+        entries = entries_by_section.get(section)
+        if not entries:
+            continue
+
+        method = getattr(comp, method_name)
+        for entry in entries:
+            try:
+                # Copied: a spec is data the caller keeps, and muscadet
+                # resolves declarations in place (a rule operand is bound to
+                # the flow object it names).
+                method(**copy.deepcopy(entry))
+            except Cod3sPlatformImportError:
+                raise
+            except Exception as e:
+                raise Cod3sPlatformImportError(
+                    f"Failed to declare {section} entry {entry.get('name')!r} "
+                    f"on component {spec.name!r}: {e}"
+                ) from e
+
+    # Wire all declared flows to PyCATSHOO (variables, message boxes,
+    # sensitive methods, automata) in one shot. Required because
+    # ``partial_init=True`` skipped this in ``__init__``.
+    comp.set_flows()
+
+    # After set_flows(), and only after: add_derating allocates a variable on
+    # the flow object, which the engine must already know about.
+    for derating in spec.deratings:
+        try:
+            comp.add_derating(derating.mode, derating.flow)
+        except Exception as e:
+            raise Cod3sPlatformImportError(
+                f"Failed to allocate the derating variable of mode "
+                f"{derating.mode!r} on flow {derating.flow!r} of component "
+                f"{spec.name!r}: {e}"
+            ) from e
+
+
 def apply_to_system(
     ctx: ImporterContext,
     system: Any,
@@ -1326,12 +3129,20 @@ def apply_to_system(
     1. For each component, instantiate via ``system.add_component(cls='ObjFlow',
        name=...)``.
     2. Add **all input flows first** (output ``var_prod_cond`` may reference
-       them).
+       them). Each flow is dispatched on its ``flow_family``: a continuous one
+       is built from :func:`_continuous_in_kwargs` /
+       :func:`_continuous_out_kwargs`, which share no key with the discrete
+       builders below.
     3. Add output flows in **dependency order** — outputs whose
        ``var_prod_cond`` references another output of the same component
        are created after their dependencies (the COD3S Platform KB uses
        this for diagnostic flows that mirror primary outputs).
-    4. After all components and flows are declared, wire connections via
+    4. Declare the component's **capacities** and then its **rule sets**,
+       walking :data:`muscadet.declare.DECLARATION_SECTIONS` rather than
+       restating its order, call ``set_flows()`` once, and pre-allocate the
+       derating variable of each declared ``(mode, continuous output)`` pair
+       (cf. :func:`_declare_component`).
+    5. After all components and flows are declared, wire connections via
        ``system.connect_flow``.
 
     Output flows are created via the dict-based ``add_flow`` API, which
@@ -1398,103 +3209,16 @@ def apply_to_system(
                     "instance_overrides": dict(
                         spec.metadata.get("instance_overrides") or {}
                     ),
+                    "capacity_overrides": dict(
+                        spec.metadata.get("capacity_overrides") or {}
+                    ),
                 }
             )
 
-        # Inputs first
-        input_names = set()
-        for flow in spec.flows:
-            if flow.direction == "input":
-                flow_in_kwargs = {
-                    "cls": "FlowIn",
-                    "name": flow.name,
-                    "logic": flow.logic,
-                }
-                # Only pass var_in_default when explicitly set (role=var_in_default
-                # instance override) ; None leaves the muscadet FlowIn default (False).
-                if flow.var_in_default is not None:
-                    flow_in_kwargs["var_in_default"] = flow.var_in_default
-                try:
-                    comp.add_flow(flow_in_kwargs)
-                except Exception as e:
-                    raise Cod3sPlatformImportError(
-                        f"Failed to add input flow {flow.name!r} to component "
-                        f"{spec.name!r}: {e}"
-                    ) from e
-                input_names.add(flow.name)
-
-        # Outputs in dependency order (an output's logic may reference
-        # another output of the same component — Platform KB pattern
-        # for diagnostic flows mirroring primary outputs).
-        outputs = [f for f in spec.flows if f.direction == "output"]
-        for flow in _order_outputs_by_deps(outputs, input_names, spec.name):
-            # Dynamic flow-out dispatch (2026-07-10). All three classes derive
-            # from FlowOut, so var_prod_cond / inner_mode / negate apply to each.
-            flow_type = flow.flow_type or "classic"
-            cls_name = {
-                "tempo": "FlowOutTempo",
-                "on_trigger": "FlowOutOnTrigger",
-            }.get(flow_type, "FlowOut")
-            flow_kwargs: Dict[str, Any] = {
-                "cls": cls_name,
-                "name": flow.name,
-                "var_prod_cond": flow.logic,
-                "var_prod_cond_inner_mode": flow.logic_inner_mode,
-                "negate": flow.negate,
-            }
-            # P1.6 — instance override role=init: set the initial value
-            # of var_prod so the flow starts in the user-chosen state.
-            # When prod_cond is non-empty, the propagation will resolve
-            # var_prod from inputs at t=0+, but the seed matters for
-            # the very first tick and for unconditional outputs.
-            if flow.init_value is not None:
-                flow_kwargs["var_prod_default"] = flow.init_value
-            # Service-function dormancy: var_is_active_default=False makes the
-            # flow stay unfed (orthogonally to prod_cond) until an effect sets
-            # var_is_active True. Only passed when explicitly overridden so
-            # normal flows keep the muscadet default (True = always active).
-            if flow.is_active_default is not None:
-                flow_kwargs["var_is_active_default"] = flow.is_active_default
-            # Service-function dormancy (user-facing): start the availability
-            # gate closed so the flow is dormant until an effect re-opens it.
-            if flow.fed_available_init is not None:
-                flow_kwargs["var_fed_available_out_init"] = flow.fed_available_init
-            # Availability-gate reset control: when False, keep the gate's last
-            # value within a sequence instead of reinitialising it each step. Only
-            # passed when explicitly overridden so normal flows keep the muscadet
-            # default (True = legacy reinitialised gate, byte-identical).
-            if flow.fed_available_reset is not None:
-                flow_kwargs["var_fed_available_out_reset"] = flow.fed_available_reset
-            # Tempo params (FlowOutTempo). Occurrence-law dicts pass through in
-            # SHORT wire form; cod3s' sanitize_occ_law normalises them.
-            if flow_type == "tempo":
-                if flow.occ_enable is not None:
-                    flow_kwargs["occ_enable_flow"] = flow.occ_enable
-                if flow.occ_disable is not None:
-                    flow_kwargs["occ_disable_flow"] = flow.occ_disable
-                if flow.init_enable is not None:
-                    flow_kwargs["init_enable"] = flow.init_enable
-            # On-trigger params (FlowOutOnTrigger). Trigger times are plain
-            # floats; muscadet wraps them in a delay law internally.
-            elif flow_type == "on_trigger":
-                if flow.trigger_time_up is not None:
-                    flow_kwargs["trigger_time_up"] = flow.trigger_time_up
-                if flow.trigger_time_down is not None:
-                    flow_kwargs["trigger_time_down"] = flow.trigger_time_down
-                if flow.trigger_logic is not None:
-                    flow_kwargs["trigger_logic"] = flow.trigger_logic
-            try:
-                comp.add_flow(flow_kwargs)
-            except Exception as e:
-                raise Cod3sPlatformImportError(
-                    f"Failed to add output flow {flow.name!r} to component "
-                    f"{spec.name!r}: {e}"
-                ) from e
-
-        # Wire all declared flows to PyCATSHOO (variables, message boxes,
-        # sensitive methods, automata) in one shot. Required because
-        # ``partial_init=True`` skipped this in ``__init__``.
-        comp.set_flows()
+        # Flows, capacities and rule sets, in the order muscadet owns, then
+        # ``set_flows()`` once, then the derating pre-allocation that needs the
+        # variables it creates.
+        _declare_component(comp, spec)
 
     # Logic gates after all regular components exist (their ``cond``
     # references regular source variables) and in dependency order
