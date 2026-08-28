@@ -354,6 +354,78 @@ def test_an_unbounded_demand_is_still_answered_from_the_stock():
         cod3s.terminate_session()
 
 
+class BcObserver(muscadet.ObjFlow):
+    """Reads a capacity's level over a measurement link, as a sensor would."""
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        self.add_measurement_in(name="tk")
+
+
+def _observed_levels(name, rate, demand, init, volume, horizon):
+    """Both readings of one capacity's level, at every stop of a grid."""
+    system = muscadet.System(name=name)
+    try:
+        system.add_component(name="SRC", cls="SourceContinuous", flow="w", rate=rate)
+        system.add_component(
+            name="TANK",
+            cls="CapacityContinuous",
+            flow="w",
+            capacity=volume,
+            capacity_name="tk",
+            fill_rate=math.inf,
+            content_init={"w": init},
+        )
+        system.add_component(
+            name="USER", cls="ConsumerContinuous", flow="w", demand=demand
+        )
+        system.add_component(name="OBS", cls="BcObserver")
+        system.connect_flow(source="SRC", target="TANK", flow_name="w")
+        system.connect_flow(source="TANK", target="USER", flow_name="w")
+        system.connect("TANK", "tk_level_out", "OBS", "tk_level_in")
+        system.isimu_start()
+
+        tank = system.comp["TANK"].capacities["tk"]
+        observer = system.comp["OBS"].measurements_in["tk"]
+        return drive(
+            system,
+            lambda at: {
+                "time": at,
+                "held": tank.get_quantity("w"),
+                "observed": observer.get_level(),
+                "bounded": tank.is_full or tank.is_empty,
+            },
+            horizon=horizon,
+        )
+    finally:
+        system.deleteSys()
+        cod3s.terminate_session()
+
+
+def test_an_observer_reads_the_level_the_capacity_holds():
+    """``var_qty_total`` is an ODE variable of its OWN, integrating the sum of
+    the per-flow rates rather than being derived from them, and it is what the
+    measurement box exports. Clamping the constituents therefore left it
+    behind, and it does not catch up.
+
+    The same tank then reported two levels depending on how it was asked:
+    60.000000 through ``get_quantity`` and 60.002605 through a measurement
+    link, permanently, with the error re-accruing at every crossing. A sensor
+    thresholding on that link sees a state outside the declared volume.
+    """
+    for label, rows in (
+        ("full", _observed_levels("BcObsFull", 10.0, 4.0, 40.0, 60.0, 6.0)),
+        ("empty", _observed_levels("BcObsEmpty", 4.0, 6.0, 20.0, 1000.0, 12.0)),
+    ):
+        crossed = [row for row in rows if row["bounded"]]
+        assert crossed, label
+        for row in rows:
+            assert row["observed"] == pytest.approx(row["held"], abs=TOL), (
+                label,
+                row,
+            )
+
+
 def test_delete():
     """Each scenario deletes its own system; this closes the session."""
     cod3s.terminate_session()
