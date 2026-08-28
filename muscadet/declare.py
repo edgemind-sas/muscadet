@@ -58,7 +58,6 @@ Examples
 ... })
 """
 
-import copy
 import inspect
 
 import pydantic
@@ -136,13 +135,29 @@ COMPONENT_KEYS = frozenset(
     + POST_SET_FLOWS_SECTIONS
 )
 
-#: Field-name prefixes marking a RUNTIME HANDLE rather than a declaration: the
-#: PyCATSHOO variables and references a flow is wired to at ``set_flows()``, and
-#: the sensitive methods bound with them. They hold engine objects, they are
-#: rebuilt on every construction, and they are dropped from a spec rather than
-#: refused. Anything else that will not serialise is refused instead, because it
-#: is then a declaration being silently lost.
+#: Field-name prefixes a RUNTIME HANDLE may carry: the PyCATSHOO variables and
+#: references a flow is wired to at ``set_flows()``, and the sensitive methods
+#: bound with them. They hold engine objects, they are rebuilt on every
+#: construction, and they are dropped from a spec rather than refused. Anything
+#: else that will not serialise is refused instead, because it is then a
+#: declaration being silently lost.
+#:
+#: **The prefix alone does not tell the two apart**, and reading it as if it did
+#: is the mistake to avoid: ``var_prod_default``, ``var_fed_default``,
+#: ``var_type`` and ``var_in_default`` all carry this prefix and are all
+#: declarations a spec must keep. What separates them is the VALUE. A handle is
+#: an engine object, or ``None`` before ``set_flows()`` has wired it; a
+#: declaration is data. :data:`RUNTIME_HANDLE_PREFIXES` is the narrower set that
+#: never holds a declaration at all.
 RUNTIME_FIELD_PREFIXES = ("var_", "sm_")
+
+#: Prefixes whose fields are ALWAYS plumbing, never a declaration: a sensitive
+#: method's name and the bound function itself. The name is recomputed from the
+#: flow's own name at every construction (``flow.py``, ``add_mb``), so a spec
+#: carrying one says nothing and goes stale the moment a generated model renames
+#: a flow -- verified: renaming ``f`` to ``g`` in the data rebuilds
+#: ``set_g_fed_out`` and ignores what the spec held.
+RUNTIME_HANDLE_PREFIXES = ("sm_",)
 
 #: Fields carrying ``exclude=True`` that are DERIVED, and are therefore dropped
 #: from a spec like a runtime handle. Everything else excluded is treated as a
@@ -200,18 +215,12 @@ def _is_serialisable(value):
 def _as_data(value):
     """Normalise a read-back declaration to what a JSON round trip gives back.
 
-    Tuples become lists. A mode's effects are declared as
-    ``[(pattern, value), ...]`` and kept that way, so a spec holding them would
-    compare unequal to the same spec written out and read back -- the one
-    difference a caller keeping declarations on disk would meet first. The
-    library reads an effect by unpacking it, which a two-element list satisfies
-    exactly as a tuple does.
+    The container walk itself is :func:`~muscadet.common.copy_declaration`,
+    written once and shared: the two differed only in what they did with a
+    tuple, and a container type added to one would have been silently absent
+    from the other.
     """
-    if isinstance(value, dict):
-        return {key: _as_data(item) for key, item in value.items()}
-    if isinstance(value, (list, tuple)):
-        return [_as_data(item) for item in value]
-    return value
+    return copy_declaration(value, tuples_as_lists=True)
 
 
 def _checked_declaration(value, where):
@@ -266,10 +275,19 @@ def _declared_object_spec(obj, registry, where):
 
     Both families follow the same pattern deliberately: a plain class, a
     registry of the shapes a ``{"cls": ...}`` mapping may name, and a builder
-    refusing anything else. A shape absent from its registry has no mapping
-    form BY CONSTRUCTION -- ``Transfer`` is left out of
-    :data:`~muscadet.transfer.TRANSFER_CLASSES` precisely because its whole
-    content is a Python function -- so it is refused here rather than dropped.
+    refusing anything else.
+
+    **The two registries do not agree on their own base class, and the
+    difference is deliberate on the transfer side only.** ``Transfer`` is left
+    out of :data:`~muscadet.transfer.TRANSFER_CLASSES`, so a bare one is
+    refused here by the registry test below. ``Profile`` IS in
+    :data:`~muscadet.profile.PROFILE_CLASSES`, because ``{"cls": "Profile",
+    "fun": f, "continuous": True}`` is a mapping a caller can hand to
+    ``build_profile`` in memory -- a callable is a legal value in a Python
+    dict, just not one that survives being written out. A bare ``Profile``
+    therefore reaches the per-parameter loop instead, and is refused there, on
+    its ``fun``. Both are refusals and neither is silent; only the message
+    differs, and it names the offending parameter rather than the shape.
 
     The keys written are the constructor's own parameter names, read off the
     signature, so a shape added to a registry serialises without touching this
@@ -387,6 +405,16 @@ def _declaration_fields(obj, where):
     fields = {}
 
     def classify(key, value):
+        # An unset handle serialises -- it is ``None`` until ``set_flows()``
+        # wires it -- and a sensitive method's name serialises as the string it
+        # is, so neither is caught by the refusal below. Both are plumbing, and
+        # writing them into a spec fills every flow with four keys that say
+        # nothing and that the next build recomputes anyway.
+        if key.startswith(RUNTIME_HANDLE_PREFIXES) or (
+            value is None and key.startswith(RUNTIME_FIELD_PREFIXES)
+        ):
+            return
+
         if _is_serialisable(value):
             fields[key] = value
             return
@@ -617,12 +645,14 @@ def build_component(system, spec):
         method = getattr(comp, method_name)
         for entry in _entries(spec, section, name):
             # ``add_flow`` takes the whole mapping positionally, the others take
-            # it as keywords. Copied either way: a spec is data the caller keeps
-            # and may build twice.
+            # it as keywords. A spec is data the caller keeps and may build
+            # twice, so nothing here may write through it -- and ``add_flow``
+            # needs no copy from us, ``postprocess_flow_specs`` opening with one
+            # of its own. Copying twice cost a walk per flow on every build.
             if section == "flows":
-                method(copy.deepcopy(entry))
+                method(entry)
             else:
-                method(**copy.deepcopy(entry))
+                method(**copy_declaration(entry))
 
     # The SAME arguments ``add_flows`` was given, exactly as
     # ``ObjFlow.__init__`` hands them to both. A class may override
@@ -634,22 +664,35 @@ def build_component(system, spec):
     # inside the band -- a component that thresholds but chatters.
     comp.set_flows(**class_params)
 
-    # ``copy_declaration``, not ``copy.deepcopy``, and this is the one section
-    # where the difference bites. An occurrence law legitimately holds the
-    # PyCATSHOO variable its rate lives in -- ``{"cls": "exp", "rate":
-    # <IVariable>}``, which is what ``add_exp_failure_mode`` writes so an
-    # indicator can reference the rate by name -- and deep-copying that raises
-    # ``Pickling of "Pycatshoo.IVariable" instances is not enabled``. Copying
-    # the containers and sharing the leaves is also the correct semantics, not
-    # merely the one that runs: an engine handle identifies one variable.
-    for entry in _entries(spec, "automata", name):
-        comp.add_atm2states(**copy_declaration(entry))
-
-    for entry in _entries(spec, "failure_modes", name):
-        method_name = _failure_mode_method(entry, name)
-        entry = copy_declaration(entry)
-        entry.pop("cls", None)
-        getattr(comp, method_name)(**entry)
+    # Driven from :data:`POST_SET_FLOWS_SECTIONS` rather than written out twice,
+    # so the constant is what decides. Hardcoded, a third name added to it would
+    # be admitted by ``COMPONENT_KEYS``, accepted by ``check_spec`` and then
+    # silently ignored here -- the exact class of dead declaration this module
+    # refuses everywhere else. The ``else`` below is what makes that impossible.
+    #
+    # ``copy_declaration``, not ``copy.deepcopy``, and this is the section where
+    # the difference bites: an occurrence law legitimately holds the PyCATSHOO
+    # variable its rate lives in -- ``{"cls": "exp", "rate": <IVariable>}``,
+    # which is what ``add_exp_failure_mode`` writes so an indicator can name the
+    # rate -- and deep-copying that raises ``Pickling of "Pycatshoo.IVariable"
+    # instances is not enabled``. Sharing the leaves is also the correct
+    # semantics, not merely the one that runs: an engine handle is one variable.
+    for section in POST_SET_FLOWS_SECTIONS:
+        for entry in _entries(spec, section, name):
+            entry = copy_declaration(entry)
+            if section == "automata":
+                comp.add_atm2states(**entry)
+            elif section == "failure_modes":
+                method_name = _failure_mode_method(entry, name)
+                entry.pop("cls", None)
+                getattr(comp, method_name)(**entry)
+            else:
+                raise ComponentSpecError(
+                    f"Component {name}: section {section!r} is declared in "
+                    f"POST_SET_FLOWS_SECTIONS but build_component does not "
+                    f"build it. A section a spec may carry and nothing builds "
+                    f"is a declaration silently lost"
+                )
 
     return comp
 
