@@ -10,6 +10,8 @@ difference.
 Each test below pins one shape that came back different, or not at all.
 """
 
+import copy
+
 import Pycatshoo as Pyc
 import cod3s
 import pytest
@@ -309,6 +311,80 @@ def test_a_bare_component_carries_no_decoration():
 
         for key in ("label", "description", "metadata", "create_default_out_automata"):
             assert key not in spec, key
+    finally:
+        system.deleteSys()
+        cod3s.terminate_session()
+
+
+# ---------------------------------------------------------------------------
+# What a spec must NOT carry, and what drives what
+# ---------------------------------------------------------------------------
+def test_a_spec_carries_no_runtime_plumbing():
+    """A sensitive method's name is recomputed at every build, so a spec
+    carrying one says nothing and goes stale the moment a generated model
+    renames a flow. An unset handle -- ``None`` until ``set_flows()`` wires it
+    -- says nothing either. Both serialise, so neither is caught by the
+    refusal that catches a live object, and both filled every flow of every
+    spec."""
+    system = muscadet.System(name="DclRtPlumbing")
+    try:
+        system.add_component(name="C", cls="RtDiscrete")
+        spec = muscadet.component_spec(system.comp["C"])
+        flow = spec["flows"][0]
+
+        assert not [key for key in flow if key.startswith("sm_")]
+        assert not [key for key in flow if flow[key] is None]
+        # ... and the declarations sharing the same prefix are still there.
+        assert flow["var_prod_default"] is True
+        assert flow["var_type"] == "bool"
+    finally:
+        system.deleteSys()
+        cod3s.terminate_session()
+
+
+def test_a_renamed_flow_gets_its_own_sensitive_method():
+    """Which is why dropping the name loses nothing."""
+    system = muscadet.System(name="DclRtRename")
+    try:
+        system.add_component(name="C", cls="RtDiscrete")
+        spec = muscadet.component_spec(system.comp["C"])
+        spec["flows"][0]["name"] = "g"
+
+        rebuilt = muscadet.build_component(system, dict(spec, name="C2"))
+
+        assert rebuilt.flows_out["g"].sm_flow_fed_name == "set_g_fed_out"
+    finally:
+        system.deleteSys()
+        cod3s.terminate_session()
+
+
+def test_building_does_not_write_through_the_caller_s_spec():
+    """A spec is data the caller keeps, and building must not empty it.
+
+    The flows section is no longer copied here -- ``postprocess_flow_specs``
+    opens with a copy of its own -- so this pins the property rather than the
+    number of copies made to get it.
+    """
+    system = muscadet.System(name="DclRtNoWriteThrough")
+    try:
+        spec = {
+            "name": "C",
+            "flows": [{"cls": "FlowOut", "name": "f", "var_prod_default": True}],
+            "failure_modes": [
+                {
+                    "cls": "delay",
+                    "name": "fm",
+                    "failure_time": 3.0,
+                    "failure_effects": [["f", False]],
+                }
+            ],
+        }
+        reference = copy.deepcopy(spec)
+
+        muscadet.build_component(system, spec)
+        muscadet.build_component(system, dict(spec, name="C2"))
+
+        assert spec == reference
     finally:
         system.deleteSys()
         cod3s.terminate_session()

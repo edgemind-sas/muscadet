@@ -25,8 +25,16 @@ def fresh_instant_occ_law():
     return dict(INSTANT_OCC_LAW)
 
 
-def copy_declaration(value):
+def copy_declaration(value, tuples_as_lists=False):
     """Copy a declaration's CONTAINERS, sharing its leaves.
+
+    ``tuples_as_lists`` normalises tuples to lists on the way, which is what a
+    JSON round trip does to them: a mode's effects are declared as
+    ``[(pattern, value), ...]`` and a spec holding them would otherwise compare
+    unequal to the same spec written out and read back. The library unpacks an
+    effect, which a two-element list satisfies exactly as a tuple does. The
+    flag exists so this walk is written once: ``muscadet.declare`` needs the
+    normalising form and everything else needs the faithful one.
 
     A declaration held in data is a caller's own object, and building from it
     must not empty it: a spec has to build two systems, not one. muscadet's own
@@ -50,11 +58,14 @@ def copy_declaration(value):
     possible.
     """
     if isinstance(value, dict):
-        return {key: copy_declaration(item) for key, item in value.items()}
+        return {
+            key: copy_declaration(item, tuples_as_lists) for key, item in value.items()
+        }
     if isinstance(value, list):
-        return [copy_declaration(item) for item in value]
+        return [copy_declaration(item, tuples_as_lists) for item in value]
     if isinstance(value, tuple):
-        return tuple(copy_declaration(item) for item in value)
+        items = (copy_declaration(item, tuples_as_lists) for item in value)
+        return list(items) if tuples_as_lists else tuple(items)
     return value
 
 
