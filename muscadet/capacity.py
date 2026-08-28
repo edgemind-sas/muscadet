@@ -878,6 +878,7 @@ class Capacity(cod3s.ObjCOD3S):
                 var = self.var_qty[entry.name]
                 if var.value() < 0.0:
                     var.setValue(0.0)
+            self.resync_total()
             return
 
         if not self.is_full:
@@ -894,18 +895,65 @@ class Capacity(cod3s.ObjCOD3S):
             entry.name: max(self.get_inflow(entry.name), 0.0) * entry.weight
             for entry in self.flows
         }
-        total_inflow = sum(weighted_inflow.values())
-        if total_inflow <= 0.0:
+        payers = [entry for entry in self.flows if weighted_inflow[entry.name] > 0.0]
+        if not payers:
             # Nothing was flowing in, so nothing caused the excess and there is
             # no defensible payer. Leaving the residue beats inventing one.
             return
 
-        for entry in self.flows:
-            share = weighted_inflow[entry.name] / total_inflow
-            if share <= 0.0:
-                continue
-            var = self.var_qty[entry.name]
-            var.setValue(var.value() - excess * share / entry.weight)
+        # A payer is charged its share of the excess, but never more than it
+        # HOLDS: charging past that would push a constituent negative, which is
+        # the very state this reset map exists to remove. What one payer cannot
+        # cover falls to the others that still hold something, so a bounded
+        # number of passes settles it. This has resisted every attempt to
+        # trigger it -- a payer's holding is its inflow integrated since it
+        # started, and its charge is that same inflow over one crossing search,
+        # so it holds more than it owes unless it started flowing AT the
+        # crossing. The guard is for that case, and costs one comparison.
+        remaining = excess
+        for _ in range(len(payers)):
+            if remaining <= 0.0:
+                break
+            able = [entry for entry in payers if self.var_qty[entry.name].value() > 0.0]
+            share_total = sum(weighted_inflow[entry.name] for entry in able)
+            if not able or share_total <= 0.0:
+                break
+
+            unpaid = 0.0
+            for entry in able:
+                var = self.var_qty[entry.name]
+                # The charge, converted from weighted volume to raw quantity.
+                charge = (
+                    remaining * weighted_inflow[entry.name] / share_total / entry.weight
+                )
+                paid = min(charge, var.value())
+                var.setValue(var.value() - paid)
+                unpaid += (charge - paid) * entry.weight
+            remaining = unpaid
+
+        self.resync_total()
+
+    def resync_total(self) -> None:
+        """Put ``var_qty_total`` back in step with the constituents.
+
+        The total is an ODE variable of its own, integrating the sum of the
+        per-flow rates rather than being derived from them, and it is the one
+        exported on the measurement box as ``{c}_level``. Rewriting the
+        constituents therefore leaves it behind, and it does not catch up: the
+        solver integrates it onwards from wherever it was.
+
+        The consequence is the one :meth:`clamp_to_bounds` exists to prevent,
+        moved one channel over. Measured on a tank of 60 filled past its bound:
+        ``get_quantity()`` read 60.000000 while an observer wired to the
+        measurement link read 60.002605 -- the same tank reporting two levels
+        depending on how it is asked, permanently, with the error re-accruing
+        at every crossing. A sensor thresholding on that link, or an indicator
+        naming it, sees a state outside the declared volume.
+
+        ``var_fill_total`` needs no such treatment: it is explicit, recomputed
+        from the per-flow quantities at every evaluation of ``compute``.
+        """
+        self.var_qty_total.setValue(sum(var.value() for var in self.var_qty.values()))
 
     def serve_limit(self, flow_name=None) -> float:
         """What the capacity can serve onward.
