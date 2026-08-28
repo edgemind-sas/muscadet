@@ -412,8 +412,15 @@ def test_the_declaration_reads_back_identically(both):
     for name in COMPONENTS:
         left = dict(reference["structure"][name]["spec"])
         right = dict(rebuilt["structure"][name]["spec"])
-        left.pop("source_cls")
-        right.pop("source_cls")
+        # Both keys say where the component CAME FROM rather than what it
+        # declares, and the two builds legitimately differ on both: one is
+        # declared against the shipped classes, the other imported, and the
+        # importer stamps the platform id and class name into ``metadata``.
+        # ``metadata`` was absent here only because ``component_spec`` dropped
+        # it, so this comparison read stronger than it was.
+        for spec in (left, right):
+            spec.pop("source_cls")
+            spec.pop("metadata", None)
         assert right == left, name
 
 

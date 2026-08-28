@@ -214,6 +214,53 @@ def _as_data(value):
     return value
 
 
+def _checked_declaration(value, where):
+    """A declaration read back verbatim, refused if a mapping cannot carry it.
+
+    The other sections are dumped field by field through
+    :func:`_declaration_fields`, which classifies each value and refuses what
+    will not serialise, naming the field. ``automata`` and ``failure_modes``
+    are not dumped: they are what the caller DECLARED, kept verbatim by
+    ``ObjFlow.declared_automata`` / ``declared_failure_modes``, so they reached
+    the spec without passing that gate.
+
+    Nothing refused them, and the two things they legitimately hold that a
+    mapping cannot are the ones this module exists to catch: a Python callable
+    as a transition condition, and the PyCATSHOO variable an occurrence law may
+    carry as its rate -- ``add_exp_failure_mode`` writes one itself, so an
+    indicator can reference the rate by name. A spec carrying either came back
+    without complaint and failed later, at ``json.dumps``, far from the
+    declaration that caused it and naming only a type.
+
+    Note this refuses on the READ side only. Building FROM such a declaration
+    stays supported: ``copy_declaration`` shares leaves precisely so a law
+    holding an engine handle can be built from, and a caller holding one in
+    memory is not doing anything wrong. What cannot be done is writing it out.
+    """
+    if _is_serialisable(value):
+        return _as_data(value)
+
+    if isinstance(value, dict):
+        return {
+            key: _checked_declaration(item, f"{where}.{key}")
+            for key, item in value.items()
+        }
+    if isinstance(value, (list, tuple)):
+        return [
+            _checked_declaration(item, f"{where}[{index}]")
+            for index, item in enumerate(value)
+        ]
+
+    raise ComponentSpecError(
+        f"{where}: holds {type(value).__name__}, which no mapping can carry. "
+        f"A PyCATSHOO variable and a Python callable are both live objects: "
+        f"they build a component but do not survive being written out. "
+        f"Declare the equivalent value instead -- a number for an occurrence "
+        f"law's rate, a named condition for a callable -- or keep this "
+        f"component a subclass"
+    )
+
+
 def _declared_object_spec(obj, registry, where):
     """Serialise a declared-continuous object (a profile, a transfer equation).
 
@@ -690,7 +737,7 @@ def component_spec(comp):
             }
         )
 
-    return _as_data(
+    spec = _as_data(
         {
             "name": comp.basename(),
             "cls": "ObjFlow",
@@ -701,7 +748,35 @@ def component_spec(comp):
             "measurements_out": dump_all(comp.measurements_out, "measurement out"),
             "rules": dump_all(comp.rule_sets, "rule set"),
             "transfers": transfers,
-            "automata": list(comp.declared_automata.values()),
-            "failure_modes": list(comp.declared_failure_modes.values()),
         }
     )
+
+    # Declared verbatim rather than dumped, so they get their own gate -- see
+    # :func:`_checked_declaration`.
+    for section, declared, kind in (
+        ("automata", comp.declared_automata, "automaton"),
+        ("failure_modes", comp.declared_failure_modes, "failure mode"),
+    ):
+        spec[section] = [
+            _checked_declaration(entry, f"{where}, {kind} {entry_name}")
+            for entry_name, entry in declared.items()
+        ]
+
+    # The constructor's own declaration. Written only when it says something:
+    # ``label`` defaults to the name and ``description`` to the label, so
+    # emitting them unconditionally would fill every spec with its own name
+    # twice. ``create_default_out_automata`` is the one that is BEHAVIOUR
+    # rather than decoration -- dropped, the rebuilt component had no ok/nok
+    # pair on its discrete outputs and any indicator naming one was silently
+    # gone -- and ``metadata`` is where a platform export attaches what it
+    # knows about an instance.
+    if comp.label != comp.basename():
+        spec["label"] = comp.label
+    if comp.description != comp.label:
+        spec["description"] = comp.description
+    if comp.metadata:
+        spec["metadata"] = _checked_declaration(comp.metadata, f"{where}, metadata")
+    if getattr(comp, "has_default_out_automata", False):
+        spec["create_default_out_automata"] = True
+
+    return spec
