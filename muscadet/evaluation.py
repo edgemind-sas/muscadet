@@ -117,6 +117,7 @@ def compute_demand(comp):
     # is filled by get_output_demand below and consulted by the production
     # sweep -- a per-evaluation hand-off, never a memo across evaluations.
     comp._demand_bound.clear()
+    comp._demand_scale.clear()
 
     comp.apply_demand(comp.evaluate_demand())
 
@@ -193,7 +194,7 @@ def evaluate_demand(comp):
     def accumulate(flow_name, quantity):
         demands[flow_name] = demands.get(flow_name, 0.0) + quantity
 
-    for rule_set in comp.rule_sets.values():
+    for set_key, rule_set in comp.rule_sets.items():
         # Every flow the SET consumes starts at zero, whichever of its
         # rules is active: a rule set selecting nothing demands nothing,
         # exactly as it produces nothing (R14).
@@ -205,6 +206,11 @@ def evaluate_demand(comp):
             continue
 
         scale = comp.get_demand_scale(rule)
+        # Handed to the production sweep of this same evaluation, with the
+        # rule it was computed for: a set whose guard selected another rule
+        # in between must not be capped by a scale that belongs to the one
+        # before it.
+        comp._demand_scale[set_key] = (rule, scale)
         for flow_name, coefficient in rule.cons.items():
             if coefficient <= 0:
                 # A rule consuming nothing of a flow demands nothing of
@@ -360,19 +366,15 @@ def get_demand_scale(comp, rule):
     still from t=0. Under the old maximum that model ran and dropped
     everything it made.
 
-    **What this does NOT close.** The scale computed here bounds the DEMAND
-    sweep only. :meth:`evaluate_production` sizes each rule set from the
-    shared input budget (``rule_scale``) and never reads it back, so a
-    component carrying **two rule sets** on one input still runs a set whose
-    scale here is zero, eats the budget the other set needed, and drops what
-    it makes. Measured on a supply of 5 feeding two sets, the first with one
-    outlet asked for nothing: the first set ran at 4 and dropped 4 an hour,
-    the second produced nothing. Pre-existing, and reached more often under a
-    minimum: it used to take EVERY outlet of a set being asked for nothing,
-    it now takes one. Closing it means capping the production scale here too,
-    which is a change to a second sweep and to the meaning of
-    :data:`UNCONSTRAINED_SCALE` under a minimum, so it is deliberately not in
-    this one.
+    **This scale binds the production sweep too**, since 3.1.0. It is recorded
+    per rule set in ``comp._demand_scale`` and read back by
+    :meth:`demand_scale`, because :meth:`evaluate_production` sizes each set
+    from the SHARED input budget and that is only equivalent for a component
+    carrying one set. With two, a set this scale had sized at zero ran anyway,
+    ate the budget its sibling needed, and dropped what it made: measured on a
+    supply of 5, the first-declared set at 4 dropping 4 an hour while the only
+    set with a real consumer produced nothing, and swapping the declaration
+    order swapped which consumer was served.
 
     Parameters
     ----------
@@ -405,6 +407,49 @@ def get_demand_scale(comp, rule):
         return UNCONSTRAINED_SCALE
 
     return min(scales)
+
+
+def demand_scale(comp, set_key, rule):
+    """
+    Returns what the DEMAND sweep sized ``rule`` at, this evaluation.
+
+    The read side of the per-evaluation hand-off :meth:`get_demand_scale`
+    fills. Deliberately not a recomputation: :meth:`get_output_demand` writes
+    ``comp._demand_bound``, which :meth:`get_output_request` consumes further
+    down the production sweep, so calling it again here would replace this
+    evaluation's reading with one taken after the capacity levels moved.
+
+    **An absent reading is not a scale of zero, and not the nominal scale
+    either: it is no cap at all.** Two situations produce one, and neither
+    justifies throttling anything. A rule set whose guard selected a different
+    rule between the two sweeps has a reading that belongs to another rule, so
+    it is refused by identity rather than applied to this one. And a
+    production sweep run OUTSIDE a solver step -- a test calling
+    :meth:`evaluate_production` directly, before the demand band of the same
+    evaluation has run -- has no reading at all. In a real run the bands are
+    ordered demand before production (see :mod:`muscadet.ordering`), so the
+    reading is always there and always current; inventing one where it is
+    missing would make a diagnostic call change the number it reports.
+
+    Parameters
+    ----------
+    set_key : str
+        Key of the rule set in ``comp.rule_sets``.
+    rule : muscadet.rules.Rule
+        The rule the production sweep is about to size.
+
+    Returns
+    -------
+    float
+        The recorded scale, or :data:`~muscadet.flow_continuous.UNBOUNDED`
+        when there is none to apply.
+    """
+    recorded = comp._demand_scale.get(set_key)
+
+    if recorded is None or recorded[0] is not rule:
+        return UNBOUNDED
+
+    return recorded[1]
 
 
 def output_constrains_demand(comp, flow_name):
@@ -981,7 +1026,7 @@ def evaluate_production(comp):
     # order they were declared, and the first one served is the first one
     # declared. Deterministic and inspectable, which no proportional split of a
     # contested reagent would be without a declared policy of its own.
-    for rule_set in comp.rule_sets.values():
+    for set_key, rule_set in comp.rule_sets.items():
         # Every flow the SET names starts at zero, whichever of its
         # rules is active. Written rather than left out: a flow the
         # previously active mode produced -- or drew from a capacity --
@@ -995,7 +1040,24 @@ def evaluate_production(comp):
             continue
 
         available = {flow_name: take(flow_name) for flow_name in rule.cons}
-        scale = rule_scale(rule, available)
+        # What the inputs allow, capped by what the outputs can take.
+        #
+        # The cap is the missing half of the minimum scale of 3.0.0. Sizing a
+        # set on the shared input budget ALONE is right for one rule set,
+        # whose inputs the demand sweep already narrowed to what its outputs
+        # asked for. It is wrong the moment a component carries two: the
+        # budget is the aggregate, so a set the demand sweep sized at zero ran
+        # anyway, ate the budget its sibling needed, and dropped what it made
+        # -- measured on a supply of 5, the first-declared set running at 4
+        # and dropping 4 an hour while the only set with a real consumer
+        # produced nothing.
+        #
+        # Read rather than recomputed, and that is not an optimisation:
+        # get_output_demand WRITES _demand_bound, which get_output_request is
+        # about to read below, so recomputing here would overwrite this
+        # evaluation's hand-off with a bound taken after the capacity levels
+        # moved.
+        scale = min(rule_scale(rule, available), comp.demand_scale(set_key, rule))
 
         # The scale the outputs are actually PRODUCED at: a rule whose
         # outputs a failure mode or a time profile scaled down draws less

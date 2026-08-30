@@ -350,6 +350,15 @@ class ObjFlow(cod3s.PycComponent):
         # see get_output_request for why the two sweeps may share a reading.
         self._demand_bound = {}
 
+        # The scale each rule set was sized at by the demand sweep, as
+        # ``{rule set key: (rule, scale)}``, for the production sweep of the
+        # SAME evaluation to cap itself by. Same hand-off as above and for a
+        # sharper reason: get_output_demand WRITES _demand_bound, so a
+        # production sweep that recomputed the scale would overwrite the
+        # reading get_output_request is about to consume. Emptied at the head
+        # of compute_demand; see evaluate_production.
+        self._demand_scale = {}
+
         # What each continuous output's production is scaled by -- its time
         # profile times what its failure modes left of it -- and the instant
         # the profiles are functions of. Both emptied at the head of
@@ -1952,6 +1961,7 @@ class ObjFlow(cod3s.PycComponent):
     compute_demand = evaluation.compute_demand
     evaluate_demand = evaluation.evaluate_demand
     get_demand_scale = evaluation.get_demand_scale
+    demand_scale = evaluation.demand_scale
     get_output_demand = evaluation.get_output_demand
     get_output_consumer_demand = evaluation.get_output_consumer_demand
     output_constrains_demand = evaluation.output_constrains_demand
