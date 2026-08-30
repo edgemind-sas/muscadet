@@ -71,13 +71,26 @@ DSM_BUFFER = 10.0
 #: bounds a rule here must be its outputs, never its reagents.
 DSM_AMPLE = 100.0
 
-#: When the fault cuts outlet ``a``, and a repair far beyond the horizon.
+#: When the fault cuts outlet ``a``. It never repairs, said the way the
+#: "Modelling pitfalls" section of the README asks for it: a repair pushed
+#: beyond the horizon is an integration horizon, a repair that cannot fire
+#: costs nothing.
 DSM_CUT = 1.0
-DSM_NEVER = 1e6
 
-#: Numerical slack. The solver root-finds a bound crossing to ``dtCond`` and
-#: lands just past it, so an exact comparison on a level is meaningless.
-DSM_EPS = 1e-2
+#: Volume of the secondary buffer that throttles a main product, and what its
+#: slow consumer draws through it.
+DSM_SECONDARY = 5.0
+DSM_SLOW = 1.0
+
+#: Numerical slack on an ALGEBRAIC reading. Every scenario below settles on an
+#: exact rational and measures to nine decimals, so nothing here needs room:
+#: a loose tolerance on these would let a half-percent error pass unseen.
+DSM_EPS = 1e-6
+
+#: Numerical slack on a CAPACITY LEVEL, and only there. The solver root-finds
+#: a bound crossing to ``dtCond`` and lands just past it, so a ten-unit volume
+#: is read at 10.0013 before ``clamp_to_bounds`` takes it back.
+DSM_BOUND_EPS = 1e-2
 
 
 # ----------------------------------------------------------------------
@@ -158,6 +171,27 @@ class DsmSplitter(muscadet.ObjFlow):
         )
 
 
+class DsmRatio(muscadet.ObjFlow):
+    """1 feed makes **2** of ``a`` and **1** of ``b``.
+
+    The only shape in which the division by the coefficient decides. Every
+    other scenario here has 1:1 coefficients, or a demand of zero, or an
+    unbounded one, and a scale computed on the bare demand would pass them
+    all: a mutant dropping ``/ coefficient`` was caught by no test of this
+    module until this component existed.
+    """
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        self.add_flow_continuous_in(name="feed")
+        self.add_flow_continuous_out(name="a")
+        self.add_flow_continuous_out(name="b")
+        self.add_rules(
+            name="ratio",
+            rules=[dict(cons={"feed": 1.0}, prod={"a": 2.0, "b": 1.0})],
+        )
+
+
 class DsmVented(muscadet.ObjFlow):
     """One reagent, a useful product and a discharge.
 
@@ -222,6 +256,42 @@ def build_system():
     system.connect_flow(source="U_SPLIT", target="U_BIG", flow_name="a")
     system.connect_flow(source="U_SPLIT", target="U_SMALL", flow_name="b")
 
+    # -- COEFFICIENTS. Both consumers ask for exactly four, and the outlets
+    #    still do not constrain equally: the criterion is demand DIVIDED BY
+    #    coefficient. Making four of ``a`` takes a scale of two, which makes
+    #    two of ``b``, so the smaller consumer is served half of what it
+    #    asked. This is also the counter-example to reading the migration
+    #    note as "outputs asked the same are unaffected".
+    system.add_component(name="C_SRC", cls="DsmSource", flow="feed")
+    system.add_component(name="C_RATIO", cls="DsmRatio")
+    system.add_component(name="C_A", cls="DsmConsumer", flow="a", demand=4.0)
+    system.add_component(name="C_B", cls="DsmConsumer", flow="b", demand=4.0)
+    system.connect_flow(source="C_SRC", target="C_RATIO", flow_name="feed")
+    system.connect_flow(source="C_RATIO", target="C_A", flow_name="a")
+    system.connect_flow(source="C_RATIO", target="C_B", flow_name="b")
+
+    # -- THROTTLE. The shape a modeller actually meets, where the blocked
+    #    outlet of the scenarios above is the degenerate case: a by-product
+    #    buffered on its way to a consumer that draws it more slowly than the
+    #    reaction makes it. The main product runs at full rate until the
+    #    buffer saturates, then follows the slow consumer.
+    system.add_component(name="H_SRC", cls="DsmSource", flow="feed")
+    system.add_component(name="H_REACT", cls="DsmSplitter")
+    system.add_component(name="H_MAIN", cls="DsmConsumer", flow="a", demand=10.0)
+    system.add_component(
+        name="H_BUF",
+        cls="CapacityContinuous",
+        flow="b",
+        capacity=DSM_SECONDARY,
+        ports="both",
+        fill_rate=math.inf,
+    )
+    system.add_component(name="H_SLOW", cls="DsmConsumer", flow="b", demand=DSM_SLOW)
+    system.connect_flow(source="H_SRC", target="H_REACT", flow_name="feed")
+    system.connect_flow(source="H_REACT", target="H_MAIN", flow_name="a")
+    system.connect_flow(source="H_REACT", target="H_BUF", flow_name="b")
+    system.connect_flow(source="H_BUF", target="H_SLOW", flow_name="b")
+
     # -- UNWIRED VENT (R-10, non-regression). The discharge is connected to
     #    nothing, so it is dropped from the scale and the useful consumer
     #    alone sizes the rule. A minimum must not turn a dropped outlet into
@@ -279,7 +349,7 @@ def build_system():
         name="cut_a",
         failure_time=DSM_CUT,
         failure_effects=[("a", 0.0)],
-        repair_time=DSM_NEVER,
+        repair_cond=False,
     )
 
     # -- The clock. On a component of its own, so no scenario depends on
@@ -319,15 +389,21 @@ def the_run():
     system.isimu_start()
 
     buffer_peak = 0.0
-    tank_peak = 0.0
+    main_peak = 0.0
+    running = None
     while system.currentTime() < DSM_HORIZON:
         system.isimu_step_forward()
-        buffer_peak = max(
-            buffer_peak, system.comp["P_ELY"].capacities["buffer_h2"].total_quantity()
-        )
-        tank_peak = max(
-            tank_peak, system.comp["T_TANK"].capacities["capacity"].total_quantity()
-        )
+        cell = system.comp["P_ELY"].capacities["buffer_h2"]
+        buffer_peak = max(buffer_peak, cell.total_quantity())
+        main_peak = max(main_peak, out_value(system, "H_REACT", "a"))
+        # The stoichiometry, caught WHILE the cell runs. Read once, on the
+        # first step that has an inflow: at the horizon everything is zero
+        # and a ratio between two zeros asserts nothing.
+        if running is None and cell.get_inflow("h2") > 0.0:
+            running = {
+                "into_buffer": cell.get_inflow("h2"),
+                "o2": out_value(system, "P_ELY", "o2"),
+            }
 
     obs = {
         "time": system.currentTime(),
@@ -342,6 +418,7 @@ def the_run():
             "o2": out_value(system, "P_ELY", "o2"),
             "level": system.comp["P_ELY"].capacities["buffer_h2"].total_quantity(),
             "peak": buffer_peak,
+            "running": running,
         },
         "unequal": {
             "feed": delivered(system, "U_SPLIT", "feed"),
@@ -365,7 +442,18 @@ def the_run():
             "feed": delivered(system, "T_SPLIT", "feed"),
             "a": out_value(system, "T_SPLIT", "a"),
             "b": out_value(system, "T_SPLIT", "b"),
-            "peak": tank_peak,
+            "level": system.comp["T_TANK"].capacities["capacity"].total_quantity(),
+        },
+        "coef": {
+            "feed": delivered(system, "C_RATIO", "feed"),
+            "a": delivered(system, "C_A", "a"),
+            "b": delivered(system, "C_B", "b"),
+        },
+        "throttle": {
+            "main_peak": main_peak,
+            "main": out_value(system, "H_REACT", "a"),
+            "feed": delivered(system, "H_REACT", "feed"),
+            "level": system.comp["H_BUF"].capacities["capacity"].total_quantity(),
         },
         "derated": {
             "feed": delivered(system, "R_SPLIT", "feed"),
@@ -397,15 +485,24 @@ def test_a_blocked_outlet_stops_the_reaction(the_run):
     assert blocked["o2"] == pytest.approx(0.0, abs=DSM_EPS)
 
 
-def test_the_blocked_reaction_makes_nothing_it_cannot_deliver(the_run):
-    """Stoichiometry, stated as a balance rather than as two numbers.
+def test_a_running_cell_places_both_products_in_the_declared_ratio(the_run):
+    """Stoichiometry as a balance, read on a cell that is actually running.
 
-    Whatever the rule ran at, the oxygen it delivered is exactly half the
-    hydrogen it delivered: the coefficients of the rule, holding on the wire.
-    A destroyed product breaks this and nothing else records it.
+    On the blocked cell the same statement would be ``0 == 2 x 0``, true of
+    any semantics and therefore worth nothing. Read here on the BUFFERED cell
+    while it fills, where both terms are non-zero: what enters the buffer is
+    exactly twice the oxygen leaving, which is the rule's coefficients holding
+    on the wire. A product made and dropped breaks this, and nothing else in
+    the model records it.
+
+    The hydrogen term is the buffer's INFLOW, not the outlet's ``var_fed``:
+    that variable carries what was DELIVERED, which is zero here whatever the
+    cell does, and reading it would assert nothing again.
     """
-    blocked = the_run["blocked"]
-    assert blocked["h2"] == pytest.approx(2.0 * blocked["o2"], abs=DSM_EPS)
+    running = the_run["buffered"]["running"]
+    assert running is not None, "the buffered cell never ran"
+    assert running["o2"] > 0.0
+    assert running["into_buffer"] == pytest.approx(2.0 * running["o2"], abs=DSM_EPS)
 
 
 # ----------------------------------------------------------------------
@@ -420,7 +517,7 @@ def test_a_buffer_behind_a_blocked_outlet_never_exceeds_its_volume(the_run):
     overshoot that later drains would slip past an end-of-run assertion, and
     an overshoot is exactly the failure mode.
     """
-    assert the_run["buffered"]["peak"] <= DSM_BUFFER + DSM_EPS
+    assert the_run["buffered"]["peak"] <= DSM_BUFFER + DSM_BOUND_EPS
 
 
 def test_a_full_buffer_stops_the_reaction_that_fills_it(the_run):
@@ -428,7 +525,7 @@ def test_a_full_buffer_stops_the_reaction_that_fills_it(the_run):
     stops -- power drawn and oxygen both back to zero, the buffer resting on
     its bound."""
     buffered = the_run["buffered"]
-    assert buffered["level"] == pytest.approx(DSM_BUFFER, abs=DSM_EPS)
+    assert buffered["level"] == pytest.approx(DSM_BUFFER, abs=DSM_BOUND_EPS)
     assert buffered["power"] == pytest.approx(0.0, abs=DSM_EPS)
     assert buffered["h2"] == pytest.approx(0.0, abs=DSM_EPS)
     assert buffered["o2"] == pytest.approx(0.0, abs=DSM_EPS)
@@ -466,8 +563,57 @@ def test_neither_product_of_an_unequal_split_is_destroyed(the_run):
     unequal = the_run["unequal"]
     assert unequal["a"] == pytest.approx(unequal["feed"], abs=DSM_EPS)
     assert unequal["b"] == pytest.approx(unequal["feed"], abs=DSM_EPS)
-    assert unequal["a"] == pytest.approx(unequal["a_received"], abs=DSM_EPS)
-    assert unequal["b"] == pytest.approx(unequal["b_received"], abs=DSM_EPS)
+
+
+# ----------------------------------------------------------------------
+# It is demand DIVIDED BY coefficient that is compared
+# ----------------------------------------------------------------------
+
+
+def test_the_coefficients_decide_which_output_constrains(the_run):
+    """Two consumers asking for the same four, and they do not weigh the same.
+
+    The rule makes two of ``a`` per one of ``b``, so four of ``a`` costs a
+    scale of two while four of ``b`` would cost four. Two is the scale, and
+    the smaller consumer gets half of what it asked.
+
+    The only scenario of this module in which the division decides: a scale
+    computed on the bare demand would give four here and pass every other
+    test in the file. It is also the counter-example to reading the migration
+    note as "outputs asked the same quantity do not move" -- they are asked
+    the same and they move.
+    """
+    coef = the_run["coef"]
+    assert coef["feed"] == pytest.approx(2.0, abs=DSM_EPS)
+    assert coef["a"] == pytest.approx(4.0, abs=DSM_EPS)
+    assert coef["b"] == pytest.approx(2.0, abs=DSM_EPS)
+
+
+# ----------------------------------------------------------------------
+# The shape a modeller actually meets
+# ----------------------------------------------------------------------
+
+
+def test_a_saturated_secondary_buffer_throttles_the_main_product(the_run):
+    """A by-product buffered on its way to a slow consumer, which is the
+    everyday form of the blocked outlet above.
+
+    The reaction runs at ten while the buffer takes the difference, then the
+    buffer saturates and the whole cell follows the slow consumer at one. The
+    main product drops by a factor of ten because of a constraint on the OTHER
+    outlet, which is the consequence of this semantics a modeller is most
+    likely to meet and to find surprising. Under the old maximum the main
+    product stayed at ten and nine units an hour of by-product were dropped.
+
+    Measured beside it and worth recording: the regime settles in one step and
+    does not chatter. The buffer's accept bound is a lagged reading, which is
+    the shape a latch comes in, and it does not latch here.
+    """
+    throttle = the_run["throttle"]
+    assert throttle["main_peak"] == pytest.approx(10.0, abs=DSM_EPS)
+    assert throttle["main"] == pytest.approx(DSM_SLOW, abs=DSM_EPS)
+    assert throttle["feed"] == pytest.approx(DSM_SLOW, abs=DSM_EPS)
+    assert throttle["level"] == pytest.approx(DSM_SECONDARY, abs=DSM_BOUND_EPS)
 
 
 # ----------------------------------------------------------------------
@@ -517,7 +663,9 @@ def test_a_filling_tank_does_not_out_vote_a_metered_consumer(the_run):
     assert tank["feed"] == pytest.approx(3.0, abs=DSM_EPS)
     assert tank["a"] == pytest.approx(3.0, abs=DSM_EPS)
     assert tank["b"] == pytest.approx(3.0, abs=DSM_EPS)
-    assert tank["peak"] > 0.0
+    # The level, at the rate the rule was sized to and not merely above zero:
+    # a defect filling at a twentieth of that would pass "> 0".
+    assert tank["level"] == pytest.approx(3.0 * the_run["time"], rel=1e-3)
 
 
 # ----------------------------------------------------------------------

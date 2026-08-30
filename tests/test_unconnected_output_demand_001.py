@@ -9,13 +9,16 @@ out-voted every connected one: the component claimed its whole upstream supply,
 a vent or a model still being assembled silently over-drawing a shared source
 with no diagnostic at all.
 
-The scale is a **minimum** since 3.0.0 (R-37,
-``tests/test_demand_scale_minimum_001.py``), and everything below holds
-unchanged: the filter this module pins is **structural**, so it serves the new
-rule exactly as it served the old one. It has to, and for the symmetric reason
--- an unwired output entering a minimum as a demand of zero would collapse its
-rule to a standstill, where entering a maximum as ``inf`` used to make it draw
-without bound. The same three cases, kept apart by the same predicate.
+The scale is a **minimum** since 3.0.0
+(``tests/test_demand_scale_minimum_001.py``), and everything below holds
+unchanged, but not for a symmetric reason and the difference is easy to get
+wrong. An unwired output publishes ``inf``, and an ``inf`` never wins a
+minimum: dropping it is no longer what saves a rule that has one connected
+output left. What the filter still carries is the **third** case below, where
+every output is unwired: a minimum of infinities would make the rule draw its
+whole supply, and only the filter routes it to the nominal fallback instead.
+Measured with the filter disabled, on the LONE_T model of this module: 100.0
+drawn instead of 1.0.
 
 Three cases have to stay apart, and this module pins all three:
 
