@@ -1,19 +1,27 @@
 """An unconnected continuous output constrains nothing (R-10).
 
-``get_demand_scale`` sizes the scale a rule must run at from its outputs, as a
-maximum over what each of them is asked for divided by its coefficient. An
-output nobody is connected to is asked for nothing, and
-``FlowContinuousOut.get_demand_bound`` reports that as ``inf`` -- "nobody is
-throttling me". Fed into a maximum, that single unwired output out-voted every
-connected one and the component claimed its whole upstream supply: a vent, or a
-model still being assembled, silently over-drawing a shared source with no
-diagnostic at all.
+``get_demand_scale`` sizes the scale a rule must run at from its outputs, over
+what each of them is asked for divided by its coefficient. An output nobody is
+connected to is asked for nothing, and ``FlowContinuousOut.get_demand_bound``
+reports that as ``inf`` -- "nobody is throttling me". The scale was a **maximum**
+when this module was written, and fed into one that single unwired output
+out-voted every connected one: the component claimed its whole upstream supply,
+a vent or a model still being assembled silently over-drawing a shared source
+with no diagnostic at all.
+
+The scale is a **minimum** since 3.0.0 (R-37,
+``tests/test_demand_scale_minimum_001.py``), and everything below holds
+unchanged: the filter this module pins is **structural**, so it serves the new
+rule exactly as it served the old one. It has to, and for the symmetric reason
+-- an unwired output entering a minimum as a demand of zero would collapse its
+rule to a standstill, where entering a maximum as ``inf`` used to make it draw
+without bound. The same three cases, kept apart by the same predicate.
 
 Three cases have to stay apart, and this module pins all three:
 
 * an output **nothing is connected to** constrains nothing and is dropped from
-  the maximum -- it is a legitimate model (a vent), so it is neither refused
-  nor made to demand;
+  the scale -- it is a legitimate model (a vent), so it is neither refused nor
+  made to demand;
 * an output connected to a consumer **currently demanding zero** still
   constrains, at scale zero. "Nobody is asking" and "somebody is asking for
   nothing" are different models and must not collapse into one;
@@ -353,9 +361,11 @@ def test_a_vent_is_a_legitimate_model_and_still_carries_what_is_produced(the_run
 def test_a_consumer_asking_for_nothing_still_constrains_at_scale_zero(the_run):
     """ "Nobody is asking" and "somebody is asking for nothing" differ.
 
-    Collapsing the two -- dropping a zero demand from the maximum the way an
+    Collapsing the two -- dropping a zero demand from the scale the way an
     absent one is dropped -- would let a component asked for nothing run at its
-    nominal scale and draw upstream for a production nobody wants.
+    nominal scale and draw upstream for a production nobody wants. True of the
+    maximum this was written against and of the minimum that replaced it: the
+    ``not scales`` fallback is reached either way.
     """
     zero = the_run["zero"]
 

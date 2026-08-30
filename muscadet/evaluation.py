@@ -273,26 +273,57 @@ def evaluate_demand(comp):
 
 def get_demand_scale(comp, rule):
     """
-    Returns the scale ``rule`` would have to run at to satisfy its outputs.
+    Returns the scale ``rule`` may run at without making what it cannot place.
 
-    The scale is taken over the ``prod`` coefficients, as a **maximum**: the
-    rule's outputs are correlated by construction, so the scale that serves
-    them all is the one the most demanding of them needs.
+    The scale is taken over the ``prod`` coefficients, as a **minimum** (R-37):
+    the rule's outputs are correlated by construction, so a scale above what
+    any one of them can take produces a surplus of the others that has nowhere
+    to go. There is no such place: an output delivers what its consumers draw,
+    and the rest is simply gone, recorded by no balance.
+
+    It was a **maximum** until 3.0.0, on the reading that the scale serving
+    every output is the one the most demanding of them needs. That reading is
+    only sound when the surplus can leave, and nothing in a model said whether
+    it could. Its worst consequence was not the missing matter but the bound it
+    broke: an electrolyser whose hydrogen outlet was blocked, holding a
+    ten-unit buffer behind that outlet, filled it to thirty-nine in twenty
+    hours while :meth:`Capacity.clamp_to_bounds` worked to hold a bound the
+    production sweep kept refilling past. Blocking the second outlet made
+    everything exact. One outlet still asking was the whole of the defect.
+
+    **The argument that settles it is expressiveness.** Under a minimum both
+    intents stay modellable: "this outlet constrains me" is a wire to its real
+    consumer, and "this outlet discharges freely" is either no wire at all
+    (dropped by :meth:`output_constrains_demand`) or a discharge asking for
+    more than the rule can make, which a minimum never retains. Under a
+    maximum the second worked and the first could not be said. The discharge
+    pattern R-10 recommends -- declare the vent as a consumer with its own
+    demand, so the intent is visible -- was itself wrong under a maximum: the
+    rule took off at the vent's rate and destroyed the useful surplus.
+
+    **Not to be harmonised with the maximum of** :meth:`get_uptake_factor`.
+    The two answer different questions. A derating is a declared LOSS: the
+    product is made and the fault destroys it on the way out, so it must not
+    spare the reagents the surviving legs still consume. A demand of zero is
+    not a loss but the ABSENCE of an outlet, and nothing may be created that
+    has nowhere to go.
 
     Only the outputs that actually CONSTRAIN the rule take part in it --
     :meth:`output_constrains_demand`. An output nothing asks anything of
-    constrains nothing, so it must not enter the maximum at all: entering it
-    as an unbounded demand would let a single unwired output dominate every
-    connected one and make the component claim its whole upstream supply, a
-    vent or a half-assembled model silently over-drawing a shared source.
+    constrains nothing, so it must not enter the scale at all. Under the old
+    maximum, entering it as an unbounded demand let a single unwired output
+    dominate every connected one; under a minimum the same filter is what
+    keeps an unwired vent from collapsing its rule to zero. The filter serves
+    both, which is why it is structural and reads no demand value.
 
     "Nobody is connected" and "somebody is asking for nothing" stay strictly
     apart. A consumer publishing a demand of zero is a real bound and gives a
     scale of zero, which is what stops the rule; only the absence of a
     consumer is dropped. And a genuinely unbounded demand published BY a
     connected consumer -- a capacity claiming ``inf`` for its filling (R36),
-    a downstream itself unconstrained -- still travels, because the test is
-    structural (is there a consumer?) and never reads the demand's value.
+    a downstream itself unconstrained -- still travels: it means "deliver
+    whatever you can", and an unbounded claim never wins a minimum, so a
+    metered sibling output goes on sizing the rule.
 
     A rule left with no constraining output at all -- producing nothing, or
     producing only into unwired outputs -- falls back to the nominal scale,
@@ -302,7 +333,8 @@ def get_demand_scale(comp, rule):
     is not the output that constrains there but the volume behind it, which
     claims a fill rate for itself and is throttled by its own accept bound
     (:meth:`output_capacity_claims_demand`). The two are added by
-    :meth:`get_output_demand` and enter the maximum as one figure.
+    :meth:`get_output_demand` and enter the scale as one figure -- which is
+    what makes a full buffer stop the rule filling it.
 
     Parameters
     ----------
@@ -334,7 +366,7 @@ def get_demand_scale(comp, rule):
     if not scales:
         return UNCONSTRAINED_SCALE
 
-    return max(scales)
+    return min(scales)
 
 
 def output_constrains_demand(comp, flow_name):
