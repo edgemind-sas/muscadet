@@ -30,12 +30,22 @@ is therefore recorded by the demand sweep in ``comp._demand_scale``, beside the
 bound and cleared at the same place, and read back by identity of the rule it
 was computed for.
 
-**An absent reading is no cap at all**, and that is a decision this module
-pins rather than an omission. It is neither zero nor the nominal scale: a
-production sweep run outside a solver step, by a test calling
-``evaluate_production()`` directly, has no reading, and a diagnostic call must
-not change the number it reports. In a real run the bands are ordered demand
-before production, so the reading is always there.
+**In a real run the reading is never missing.** The bands are ordered demand
+before production, one of each per component per instant, and a measurement
+over 1 428 reads on the model below found none absent, including at
+``isimu_start`` and across a guard flipping mid-run.
+
+**Outside a solver step the reading is STALE, not missing.** A test calling
+``evaluate_production()`` directly gets the one the last evaluation left, so
+such a call reports what the run last computed rather than an uncapped number.
+This module relies on that deliberately: ``blocked_evaluated`` below is such a
+call, and it is the only place a dropped product is visible at all. The
+consequence to know is the other way round: hand-editing a demand and calling
+the sweep without replaying the demand band answers from before the edit.
+
+``UNBOUNDED`` for a missing reading is therefore a **cold-start guard**, not
+the out-of-step story: it covers a call made before any evaluation has run,
+and a record whose rule is not the one being sized.
 
 PyCATSHOO forbids more than one live system per process, so every scenario
 lives in the one system below, driven through a single interactive session.
@@ -62,8 +72,19 @@ RSP_SPARE = 6.0
 #: The partial case: the blocked set's outlet asks for a little, not nothing.
 RSP_TRICKLE = 1.0
 
-#: These scenarios settle on exact rationals and measure to nine decimals.
+#: These scenarios settle on exact rationals. Largest residue observed: 1e-14.
 RSP_EPS = 1e-6
+
+#: The generator's rating, what its load draws, and the fill rate its buffer
+#: claims in the variant that declares one.
+RSP_RATING = 2.0
+RSP_LOAD = 0.5
+RSP_FILL = 0.5
+
+#: What each consumer of the derated pair asks for, and when the fault cuts
+#: the first outlet. It never repairs.
+RSP_PAIR = 2.0
+RSP_CUT = 1.0
 
 
 # ----------------------------------------------------------------------
@@ -130,6 +151,30 @@ class RspTwoSetsSwapped(muscadet.ObjFlow):
         )
 
 
+class RspGenset(muscadet.ObjFlow):
+    """A rule that CONSUMES NOTHING: the single-set shape that moves.
+
+    ``rule_scale`` has no reagent to size against and answers the nominal
+    scale, so before 3.1.0 the demand never reached the production and this
+    rule ran at its rating whatever anyone asked. The buffer takes whatever
+    the rating exceeds the load by, and claims nothing for itself unless a
+    ``fill_rate`` says so.
+    """
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        self.add_flow_continuous_out(name="power")
+        self.add_rules(name="gen", rules=[dict(prod={"power": RSP_RATING})])
+        self.add_capacity(
+            name="battery",
+            flow="power",
+            side="out",
+            capacity=100.0,
+            content_init={"power": 0.0},
+            **({"fill_rate": kwargs["fill_rate"]} if "fill_rate" in kwargs else {}),
+        )
+
+
 class RspOneSet(muscadet.ObjFlow):
     """A single rule set, where the cap is a no-op and must stay one."""
 
@@ -190,6 +235,41 @@ def build_system():
     system.connect_flow(source="O_SRC", target="O_T", flow_name="feed")
     system.connect_flow(source="O_T", target="O_X", flow_name="x")
 
+    # -- GENSET. One rule set, and a rule with no reagent to size against.
+    #    Its buffer claims nothing (fill_rate defaults to 0), so the load is
+    #    the whole of what the output asks for.
+    system.add_component(name="G_GEN", cls="RspGenset")
+    system.add_component(
+        name="G_LOAD", cls="RspConsumer", flow="power", demand=RSP_LOAD
+    )
+    system.connect_flow(source="G_GEN", target="G_LOAD", flow_name="power")
+
+    # -- GENSET, CHARGING. The same, with the fill rate the buffer really has
+    #    stated rather than inferred from a rule running flat out.
+    system.add_component(name="F_GEN", cls="RspGenset", fill_rate=RSP_FILL)
+    system.add_component(
+        name="F_LOAD", cls="RspConsumer", flow="power", demand=RSP_LOAD
+    )
+    system.connect_flow(source="F_GEN", target="F_LOAD", flow_name="power")
+
+    # -- DERATED. Two sets, and a fault cutting one outlet of the first. The
+    #    cap must not read that loss as an absent outlet: the product is made
+    #    and destroyed on the way out, so the draw holds.
+    system.add_component(name="D_SRC", cls="RspSource", rate=RSP_SUPPLY)
+    system.add_component(name="D_T", cls="RspTwoSets")
+    system.add_component(name="D_X", cls="RspConsumer", flow="x", demand=RSP_PAIR)
+    system.add_component(name="D_Y", cls="RspConsumer", flow="y", demand=RSP_PAIR)
+    system.add_component(name="D_Z", cls="RspConsumer", flow="z", demand=RSP_PAIR)
+    system.connect_flow(source="D_SRC", target="D_T", flow_name="feed")
+    for name, flow in (("D_X", "x"), ("D_Y", "y"), ("D_Z", "z")):
+        system.connect_flow(source="D_T", target=name, flow_name=flow)
+    system.comp["D_T"].add_delay_failure_mode(
+        name="cut_x",
+        failure_time=RSP_CUT,
+        failure_effects=[("x", 0.0)],
+        repair_cond=False,
+    )
+
     system.add_component(name="CLOCK", cls="RspSource", flow="tick", rate=0.0)
     system.comp["CLOCK"].add_atm2states(
         name="tick",
@@ -236,6 +316,15 @@ def the_run():
             "feed": drawn(system, "O_T"),
             "x": out_value(system, "O_T", "x"),
         },
+        "genset": {
+            "power": out_value(system, "G_GEN", "power"),
+            "battery": system.comp["G_GEN"].capacities["battery"].total_quantity(),
+        },
+        "charging": {
+            "power": out_value(system, "F_GEN", "power"),
+            "battery": system.comp["F_GEN"].capacities["battery"].total_quantity(),
+        },
+        "derated": readings("D_T"),
         "system": system,
     }
 
@@ -334,12 +423,73 @@ def test_a_partly_asked_set_runs_partly(the_run):
     assert trickle["feed"] == pytest.approx(RSP_TRICKLE + RSP_SIBLING, abs=RSP_EPS)
 
 
-def test_a_single_rule_set_is_untouched(the_run):
-    """One set, where the demand sweep had already narrowed the input to what
-    the outputs asked for: the cap meets a scale it cannot lower."""
+def test_a_single_set_with_a_reagent_is_untouched(the_run):
+    """One set consuming something, where the demand sweep had already
+    narrowed the input to what the outputs asked for: the cap meets a scale
+    it cannot lower.
+
+    The claim is deliberately narrower than "a single rule set is untouched",
+    which is false: see the generator below, whose rule consumes nothing and
+    whose scale the demand never reached before 3.1.0.
+    """
     single = the_run["single"]
     assert single["feed"] == pytest.approx(3.0, abs=RSP_EPS)
     assert single["x"] == pytest.approx(3.0, abs=RSP_EPS)
+
+
+# ----------------------------------------------------------------------
+# A rule with no reagent: the single-set shape that does move
+# ----------------------------------------------------------------------
+
+
+def test_a_rule_consuming_nothing_delivers_what_is_asked_not_its_rating(the_run):
+    """A 2 kW generator feeding a 0.5 kW load produces 0.5.
+
+    ``rule_scale`` sizes a rule against its reagents, and this one has none,
+    so it answered the nominal scale and the demand never reached the
+    production: the generator ran at its rating whatever anyone asked. The
+    surplus went into a buffer that had claimed nothing, ``fill_rate``
+    defaulting to 0, which is the one thing R36 says such a buffer must not
+    do. Before 3.1.0 the battery held 6.0 after four hours.
+    """
+    genset = the_run["genset"]
+    assert genset["power"] == pytest.approx(RSP_LOAD, abs=RSP_EPS)
+    assert genset["battery"] == pytest.approx(0.0, abs=RSP_EPS)
+
+
+def test_a_declared_fill_rate_brings_the_charging_back(the_run):
+    """And says it, which is the whole point of the change.
+
+    The same generator whose buffer declares the rate it really takes: the
+    output is asked for the load plus that claim, the rule runs at the sum,
+    and the battery charges at exactly the rate it was declared with rather
+    than at whatever the rule's rating happened to leave over.
+    """
+    charging = the_run["charging"]
+    assert charging["power"] == pytest.approx(RSP_LOAD, abs=RSP_EPS)
+    assert charging["battery"] == pytest.approx(RSP_FILL * the_run["time"], rel=1e-3)
+
+
+# ----------------------------------------------------------------------
+# A loss is still not an absent outlet
+# ----------------------------------------------------------------------
+
+
+def test_the_cap_does_not_read_a_derating_as_an_absent_outlet(the_run):
+    """Two sets, and a fault cutting one outlet of the first to zero.
+
+    The cap lowers a set to what its outputs ASK for, and a derated outlet
+    asks for exactly what it asked before: the product is made and the fault
+    destroys it on the way out. So the draw holds, the surviving outlet keeps
+    delivering, and the sibling set keeps its share. Reading the loss as a
+    demand of zero would stop the draw and make ``y`` out of nothing, which is
+    why ``get_uptake_factor`` is a maximum where this cap is a minimum.
+    """
+    derated = the_run["derated"]
+    assert derated["x"] == pytest.approx(0.0, abs=RSP_EPS)
+    assert derated["y"] == pytest.approx(RSP_PAIR, abs=RSP_EPS)
+    assert derated["z"] == pytest.approx(RSP_PAIR, abs=RSP_EPS)
+    assert derated["feed"] == pytest.approx(2.0 * RSP_PAIR, abs=RSP_EPS)
 
 
 # ----------------------------------------------------------------------
@@ -347,23 +497,26 @@ def test_a_single_rule_set_is_untouched(the_run):
 # ----------------------------------------------------------------------
 
 
-def test_a_production_sweep_with_no_reading_is_not_throttled(the_run):
-    """A diagnostic call must report the number, not a different one.
+def test_a_cold_production_sweep_is_not_throttled(the_run):
+    """Before any evaluation has run there is no reading, and none is invented.
 
-    ``evaluate_production()`` called outside a solver step has no reading from
-    the demand band of the same evaluation. Answering ``0`` would stop the
-    model, answering the nominal scale would invent a bound; the hand-off
-    answers "no cap", so the sweep reports exactly what it reported before
-    this mechanism existed. Two tests of ``test_advection_001.py`` read the
-    sweep this way, and they are why the default is what it is.
+    Answering ``0`` would stop the model and answering the nominal scale would
+    make up a bound; the hand-off answers "no cap", so a sweep with nothing
+    recorded reports exactly what it reported before this mechanism existed.
 
-    The private dictionary is emptied here on purpose: that is precisely the
-    state a call outside a step finds it in.
+    The dictionary is emptied by hand because that state is otherwise
+    unreachable from a test: outside a solver step a component holds the
+    reading its last evaluation left, not an empty one. It is restored
+    afterwards, the fixture being module-scoped and its components live.
     """
     component = the_run["system"].comp["O_T"]
+    saved = dict(component._demand_scale)
     component._demand_scale.clear()
-
-    _, produced = component.evaluate_production()
+    try:
+        _, produced = component.evaluate_production()
+    finally:
+        # Restored: the fixture is module-scoped and its components are live.
+        component._demand_scale.update(saved)
 
     assert produced["x"] == pytest.approx(3.0, abs=RSP_EPS)
 
@@ -379,16 +532,22 @@ def test_a_reading_belonging_to_another_rule_is_refused(the_run):
     rule_set = component.rule_sets["s1"]
     rule = component.get_active_rule(rule_set)
 
-    component._demand_scale["s1"] = (rule, 2.0)
-    assert component.demand_scale("s1", rule) == pytest.approx(2.0)
+    saved = dict(component._demand_scale)
+    try:
+        component._demand_scale["s1"] = (rule, 2.0)
+        assert component.recorded_demand_scale("s1", rule) == pytest.approx(2.0)
 
-    # Same set, another rule object: the reading does not apply.
-    other = component.get_active_rule(component.rule_sets["s2"])
-    assert component.demand_scale("s1", other) == math.inf
+        # Same set, another rule object: the reading does not apply.
+        other = component.get_active_rule(component.rule_sets["s2"])
+        assert component.recorded_demand_scale("s1", other) == math.inf
 
-    # No reading at all.
-    component._demand_scale.clear()
-    assert component.demand_scale("s1", rule) == math.inf
+        # No reading at all: the cold-start case.
+        component._demand_scale.clear()
+        assert component.recorded_demand_scale("s1", rule) == math.inf
+    finally:
+        # Restored: the fixture is module-scoped and its components are live.
+        component._demand_scale.clear()
+        component._demand_scale.update(saved)
 
 
 # ----------------------------------------------------------------------
