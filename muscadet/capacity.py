@@ -96,9 +96,27 @@ from colored import attr, fg
 import cod3s
 
 from .common import entity_label, fresh_instant_occ_law
+from .flow_continuous import (
+    FlowContinuousOut,
+    rate_alias,
+    rate_observation_box,
+)
 
 #: The two sides a capacity may sit on, relative to the component's rules.
 SIDES = ("in", "out")
+
+#: A measurement channel reads a capacity LEVEL: an integrated state, the kind
+#: muscadet has always carried. The default, and byte-identical to 1.x.
+MEASUREMENT_LEVEL = "level"
+
+#: A measurement channel reads the RATE a continuous output delivers (R38). Same
+#: observer, same read-only construction, a different quantity: the box pair is
+#: ``{f}_rate_out`` / ``{f}_rate_in`` instead of ``{c}_level_out`` /
+#: ``{c}_level_in``, and there is no fill and no constituent behind it.
+MEASUREMENT_RATE = "rate"
+
+#: Every nature a measurement channel may be declared with.
+MEASUREMENT_KINDS = (MEASUREMENT_LEVEL, MEASUREMENT_RATE)
 
 
 # ----------------------------------------------------------------------
@@ -1116,6 +1134,18 @@ class MeasurementIn(cod3s.ObjCOD3S):
     no way to reach many-to-one WITHOUT saying how the readings combine, which
     is the point -- a silent sum over redundant sensors is a wrong model, not a
     default.
+
+    **One observer, two natures of channel** (R38). ``kind="level"`` -- the
+    default -- reads a capacity level or a republished reading, and is what this
+    class has always been. ``kind="rate"`` reads what a continuous output
+    DELIVERS, over the ``{f}_rate_out`` box that output publishes. Everything
+    that makes an observer an observer is shared and stays shared: the endpoint
+    is a reference, so the reading cannot be written; the link carries no
+    quantity and no demand, so the observer takes no share of what it watches;
+    and the same ``setCnctMax(1)`` / ``combine`` rule governs how many
+    publishers one channel may read. Only the box name, the alias and the
+    absence of a fill differ, which is why this is one class with a nature and
+    not two.
     """
 
     name: str = pydantic.Field(
@@ -1123,6 +1153,17 @@ class MeasurementIn(cod3s.ObjCOD3S):
         description=(
             "Measurement channel name. Matches the observed publisher's name, "
             "which is what makes the exported and imported aliases line up."
+        ),
+    )
+
+    kind: str = pydantic.Field(
+        MEASUREMENT_LEVEL,
+        description=(
+            "What this channel reads: 'level', a capacity level or a "
+            "republished reading (the default, and what muscadet has always "
+            "carried), or 'rate', the quantity a continuous output delivers "
+            "(R38). A rate channel imports over '{f}_rate_in' instead of "
+            "'{c}_level_in', reads no fill and carries no constituent."
         ),
     )
 
@@ -1143,6 +1184,16 @@ class MeasurementIn(cod3s.ObjCOD3S):
 
     fill_default: float = pydantic.Field(
         0.0, description="Fill read while the link is not connected"
+    )
+
+    rate_default: float = pydantic.Field(
+        0.0,
+        description=(
+            "Rate read while a kind='rate' link is not connected. Kept apart "
+            "from level_default rather than folded into it: the two are read "
+            "on different channels and a model declaring both natures would "
+            "otherwise have to give one number two meanings."
+        ),
     )
 
     combine: typing.Optional[str] = pydantic.Field(
@@ -1191,11 +1242,36 @@ class MeasurementIn(cod3s.ObjCOD3S):
     )
 
     @pydantic.model_validator(mode="after")
+    def check_kind(self):
+        """Refuse an unknown channel nature at DECLARATION time (R38).
+
+        A misspelt nature would otherwise build a box under a name no publisher
+        exports, and the mistake would only surface at ``connect``, as an engine
+        message naming a missing box rather than the typo that caused it.
+        """
+        if self.kind not in MEASUREMENT_KINDS:
+            raise ValueError(
+                f"Measurement channel {self.name}: unknown kind {self.kind!r}, "
+                f"expected one of {', '.join(MEASUREMENT_KINDS)}"
+            )
+
+        return self
+
+    @pydantic.model_validator(mode="after")
     def check_flows(self):
         """Refuse a malformed constituent list at DECLARATION time.
 
         A duplicate would declare the same reference twice under the same
         alias, which PyCATSHOO refuses far from the declaration that caused it.
+
+        A constituent declared on a RATE channel is deliberately NOT refused
+        here, and it is the one case where the mistake is better caught later:
+        the reading of a rate has no constituent, but neither does a level
+        published by a capacity that does not hold the named flow, and
+        :meth:`muscadet.System.check_measurement_constituents` already tells a
+        modeller which constituents the publisher on the other end actually
+        carries. Two refusals with two different vocabularies for one mistake
+        would be worse than one.
         """
         seen = set()
         for flow_name in self.flows:
@@ -1236,17 +1312,37 @@ class MeasurementIn(cod3s.ObjCOD3S):
         """True when this channel was declared as a many-to-one reading."""
         return self.combine is not None or self.combine_fun is not None
 
-    def add_variables(self, comp):
-        self.var_level = comp.addReference(f"{self.name}_level_in")
-        self.var_fill = comp.addReference(f"{self.name}_fill_in")
+    @property
+    def reads_a_rate(self) -> bool:
+        """True when this channel observes a delivered rate rather than a level."""
+        return self.kind == MEASUREMENT_RATE
 
-        for flow_name in self.flows:
-            self.var_level_flow[flow_name] = comp.addReference(
-                f"{self.name}_level_{flow_name}_in"
-            )
-            self.var_fill_flow[flow_name] = comp.addReference(
-                f"{self.name}_fill_{flow_name}_in"
-            )
+    def box_name(self) -> str:
+        """Name of the box this channel imports on, per its nature (R38)."""
+        if self.reads_a_rate:
+            return rate_observation_box(self.name, "in")
+
+        return f"{self.name}_level_in"
+
+    def add_variables(self, comp):
+        if self.reads_a_rate:
+            # One reference and no more: a rate carries no fill -- there is no
+            # volume it is a fraction of -- and no constituent. It is held in
+            # ``var_level``, the channel's single reading handle, so that
+            # everything downstream of it (the connection cap, ``reduce``,
+            # ``is_connected``) stays one implementation.
+            self.var_level = comp.addReference(self.box_name())
+        else:
+            self.var_level = comp.addReference(f"{self.name}_level_in")
+            self.var_fill = comp.addReference(f"{self.name}_fill_in")
+
+            for flow_name in self.flows:
+                self.var_level_flow[flow_name] = comp.addReference(
+                    f"{self.name}_level_{flow_name}_in"
+                )
+                self.var_fill_flow[flow_name] = comp.addReference(
+                    f"{self.name}_fill_{flow_name}_in"
+                )
 
         if not self.combines_several:
             # A measurement observes exactly one publisher unless the
@@ -1269,6 +1365,9 @@ class MeasurementIn(cod3s.ObjCOD3S):
 
     def every_reference(self):
         """Every reference this channel reads, totals and constituents."""
+        if self.reads_a_rate:
+            return [self.var_level]
+
         return (
             [self.var_level, self.var_fill]
             + list(self.var_level_flow.values())
@@ -1276,7 +1375,11 @@ class MeasurementIn(cod3s.ObjCOD3S):
         )
 
     def add_mb(self, comp):
-        mb_name = f"{self.name}_level_in"
+        if self.reads_a_rate:
+            self.add_rate_mb(comp)
+            return
+
+        mb_name = self.box_name()
         comp.addMessageBox(mb_name)
         comp.addMessageBoxImport(mb_name, self.var_level, level_alias(self.name))
         comp.addMessageBoxImport(mb_name, self.var_fill, fill_alias(self.name))
@@ -1292,6 +1395,37 @@ class MeasurementIn(cod3s.ObjCOD3S):
                 self.var_fill_flow[flow_name],
                 fill_alias(self.name, flow_name),
             )
+
+    def add_rate_mb(self, comp: typing.Any) -> None:
+        """Import a delivered rate, one alias and one reference (R38).
+
+        The publishing half is
+        :meth:`muscadet.flow_continuous.FlowContinuousOut.add_rate_observation_mb`,
+        and the alias is built by the same
+        :func:`muscadet.flow_continuous.rate_alias` so the two cannot drift.
+
+        The clash refused below is the observer's half of KD19: a channel named
+        ``q`` imports on ``q_rate_in``, which is also the data channel of an
+        input flow named ``q_rate``. This check sees only the flows declared
+        BEFORE the channel -- the canonical declaration order puts measurement
+        channels first, precisely because a discrete output may compare one --
+        so it is a better message where it can be given, not a guarantee. In
+        the other order the engine still refuses the duplicate box, naming it.
+        """
+        clash = rate_alias(self.name)
+        flows_in = getattr(comp, "flows_in", None) or {}
+
+        if clash in flows_in:
+            raise ValueError(
+                f"Measurement channel {self.name}: its rate import box "
+                f"{self.box_name()!r} is derived from the channel name, and "
+                f"input flow {clash!r} claims the very same box as its own "
+                "data channel. Rename one of the two"
+            )
+
+        mb_name = self.box_name()
+        comp.addMessageBox(mb_name)
+        comp.addMessageBoxImport(mb_name, self.var_level, rate_alias(self.name))
 
     def readings(self, var, default) -> typing.List[float]:
         """The per-connection readings of one reference, in connection order.
@@ -1336,13 +1470,31 @@ class MeasurementIn(cod3s.ObjCOD3S):
             "Add it to the channel's flows= list to import it"
         )
 
-    def get_level(self, flow=None) -> float:
-        """The level read on this channel, combined over its publishers.
+    def get_reading(self, flow: typing.Optional[str] = None) -> float:
+        """What this channel reads, whatever its nature (R38).
 
-        ``flow=None`` is the whole volume. Naming a declared constituent gives
-        that constituent's own level, which is what an intensive property is
-        formed from.
+        The single accessor everything that consumes a measurement goes
+        through: a comparison operand of a rule guard or of a discrete
+        production condition (R21, R22), a transfer potential, a republishing
+        instrument. It answers a level on a level channel and a rate on a rate
+        one, which is exactly what those consumers want -- a number to threshold
+        or to put in a law -- and it is why a rate channel needed no second
+        observer class.
+
+        :meth:`get_level` and :meth:`get_rate` are the named readings, and each
+        refuses the nature it is not: naming the quantity is worth a refusal in
+        a model, and worth nothing in the generic path above.
         """
+        if self.reads_a_rate:
+            if flow is not None:
+                raise ValueError(
+                    f"Measurement channel {self.name}: it reads a RATE, which "
+                    f"has no constituent, so {flow!r} cannot be read on it. A "
+                    "constituent is a substance a volume holds"
+                )
+
+            return self.reduce(self.var_level, self.rate_default)
+
         if flow is None:
             return self.reduce(self.var_level, self.level_default)
 
@@ -1350,13 +1502,55 @@ class MeasurementIn(cod3s.ObjCOD3S):
             self.resolve(self.var_level_flow, flow, "level"), self.level_default
         )
 
+    def get_level(self, flow=None) -> float:
+        """The level read on this channel, combined over its publishers.
+
+        ``flow=None`` is the whole volume. Naming a declared constituent gives
+        that constituent's own level, which is what an intensive property is
+        formed from.
+        """
+        self.require_kind(MEASUREMENT_LEVEL, "get_level", "get_rate")
+
+        return self.get_reading(flow)
+
+    def get_rate(self) -> float:
+        """The delivered rate read on this channel (R38).
+
+        No ``flow`` argument, and not by omission: a rate is one number, so
+        there is no constituent of it to name.
+        """
+        self.require_kind(MEASUREMENT_RATE, "get_rate", "get_level")
+
+        return self.get_reading()
+
     def get_fill(self, flow=None) -> float:
         """The fill read on this channel. See :meth:`get_level` for ``flow``."""
+        self.require_kind(MEASUREMENT_LEVEL, "get_fill", "get_rate")
+
         if flow is None:
             return self.reduce(self.var_fill, self.fill_default)
 
         return self.reduce(
             self.resolve(self.var_fill_flow, flow, "fill"), self.fill_default
+        )
+
+    def require_kind(self, kind: str, asked: str, instead: str) -> None:
+        """Refuse a reading this channel's nature does not carry (R38).
+
+        Refused rather than answered approximately: a rate returned under
+        ``get_level`` would read as an integrated state to everything that
+        thresholds one, and the two behave differently the moment a loop is
+        closed through them -- a level breaks an algebraic loop, a rate does
+        not. Naming the right accessor in the message keeps the correction one
+        edit long.
+        """
+        if self.kind == kind:
+            return
+
+        raise ValueError(
+            f"Measurement channel {self.name}: it reads a {self.kind}, so "
+            f"{asked}() has nothing to answer. Read it with {instead}(), or "
+            f"declare the channel with kind={kind!r}"
         )
 
     @property
@@ -1369,7 +1563,7 @@ class MeasurementIn(cod3s.ObjCOD3S):
         return (
             f"{fg('cyan')}{self.__class__.__name__}{attr('reset')} "
             f"{fg('blue')}{self.name}{attr('reset')}{policy} = "
-            f"{self.get_level() if self.var_level is not None else 'N/A'}"
+            f"{self.get_reading() if self.var_level is not None else 'N/A'}"
         )
 
     def __str__(self) -> str:
@@ -1408,9 +1602,28 @@ class MeasurementOut(cod3s.ObjCOD3S):
     -------------------
     Like every measurement link: the box exports two doubles and imports
     nothing, there is no demand alias, no allocation, and the channel is not an
-    edge of the continuous flow graph. ``source`` is restricted to a LEVEL --
-    never a rate -- so a republished reading stays an integrated state, which is
-    what keeps the R30 acyclicity argument intact.
+    edge of the continuous flow graph.
+
+    ``source`` accepted a LEVEL and nothing else, on the ground that a
+    republished reading then stays an integrated state and the R30 acyclicity
+    argument holds. Since R38 a continuous output publishes the rate it
+    delivers, an instrument may read one, and that ground no longer covers the
+    whole of what may be republished. **The reason that remains true is the
+    structural one, and it is the only one this class ever needed**: the box is
+    export only and carries no demand alias, so a reading moves no quantity,
+    takes no share of what it watches and adds no edge to the graph the
+    acyclicity check walks. That is what makes a republication safe as a matter
+    of TRANSPORT, whatever it republishes.
+
+    What it does not make safe is a LOOP. An integrated level breaks one -- it
+    is the state a differential equation carries between instants -- while a
+    rate is algebraic: a comparison against a rate is a function of that rate at
+    this very instant. Wire such a comparison back to the component producing
+    the rate and the two regimes select each other within one instant, which is
+    the chatter of R30. :func:`muscadet.ordering.find_rate_comparison_loops`
+    catches that shape when the rate arrives over a continuous INPUT, and does
+    not walk measurement links: a republished rate driven back onto its own
+    producer is therefore a loop nothing refuses yet.
     """
 
     name: str = pydantic.Field(
@@ -1581,7 +1794,14 @@ class MeasurementOut(cod3s.ObjCOD3S):
         var_fill.setValue(float(level if fill is None else fill) * gain)
 
     def resolve_source(self, comp):
-        """The capacity or measurement channel this republisher reads."""
+        """The capacity, measurement channel or continuous output this reads.
+
+        The three are interchangeable as sources and nothing downstream tells
+        them apart: what an instrument publishes is a reading, and an observer
+        of that reading cannot -- and must not be able to -- tell which of the
+        three it came from. A continuous output joins the list under R38, which
+        is what lets an instrument report a delivered rate.
+        """
         capacity = comp.capacities.get(self.source)
         if capacity is not None:
             return capacity
@@ -1590,18 +1810,29 @@ class MeasurementOut(cod3s.ObjCOD3S):
         if measurement is not None:
             return measurement
 
+        flow = comp.flows_continuous_out.get(self.source)
+        if flow is not None:
+            return flow
+
         raise ValueError(
             f"Object {comp.name()}: published measurement {self.name} declares "
-            f"source {self.source!r}, which is neither a capacity nor a "
-            "measurement channel of this component"
+            f"source {self.source!r}, which is neither a capacity, nor a "
+            "measurement channel, nor a continuous output flow of this "
+            "component"
         )
 
     def read_source(self, comp, flow=None):
         """The ``(level, fill)`` pair the declared source currently holds.
 
-        ``flow=None`` is the whole volume. A capacity and a measurement channel
-        answer the same question under different method names, which is the
-        only reason this dispatches at all.
+        ``flow=None`` is the whole volume. The three source kinds answer the
+        same question under different method names, which is the only reason
+        this dispatches at all.
+
+        A continuous output answers a **rate and no fill**: a fill is the
+        fraction of a volume that is occupied, and a rate is not in a volume.
+        ``None`` is returned rather than a zero, so :meth:`publish` falls back
+        to the reading itself and an observer reads the same number on both
+        aliases instead of a fill that would look like an empty tank.
         """
         source = self.resolve_source(comp)
 
@@ -1611,7 +1842,18 @@ class MeasurementOut(cod3s.ObjCOD3S):
             # this very call is republishing.
             return source.get_quantity(flow), source.current_fill(flow)
 
-        return source.get_level(flow), source.get_fill(flow)
+        if isinstance(source, FlowContinuousOut):
+            # ``flow`` is always None here: published_flows() is empty on a
+            # continuous output, so check_source_carries refused any
+            # constituent at declaration.
+            return source.live_value(), None
+
+        if source.reads_a_rate:
+            # An instrument republishing what a FIRST instrument read off a
+            # rate: same answer, one hop further out.
+            return source.get_reading(), None
+
+        return source.get_reading(flow), source.get_fill(flow)
 
     def compute(self, comp):
         """Refresh the published readings from the source, if one is declared."""

@@ -1,7 +1,12 @@
 import cod3s
 
+from .capacity import MEASUREMENT_LEVEL, MEASUREMENT_RATE
 from .obj_logic import LogicOr, LogicAnd
-from .flow_continuous import FlowContinuous
+from .flow_continuous import (
+    FlowContinuous,
+    RATE_OBSERVATION_IN_SUFFIX,
+    RATE_OBSERVATION_OUT_SUFFIX,
+)
 from .ordering import (
     CAPACITY_ORDER_BASE,
     MEASUREMENT_ORDER_BASE,
@@ -29,6 +34,12 @@ FLOW_OUT_SUFFIXES = ("_available_out", "_out")
 #: channel of a discrete trigger flow, whose flow object lives in ``flows_out``
 #: on the receiving component -- see :meth:`System.flow_behind_message_box`.
 FLOW_IN_SUFFIXES = ("_available_in", "_trigger_in", "_in")
+
+#: The box a capacity or a republishing instrument exports its level on, and the
+#: import that reads it (R33). The rate counterparts live in
+#: :mod:`muscadet.flow_continuous`, beside the output that publishes them.
+LEVEL_OUT_SUFFIX = "_level_out"
+LEVEL_IN_SUFFIX = "_level_in"
 
 
 class ModelChangedAfterPrerunError(ValueError):
@@ -713,28 +724,56 @@ class System(cod3s.PycSystem):
         )
 
     def measurement_publisher(self, component, interface):
-        """The capacity or publication behind a ``{name}_level_out`` box."""
-        if not interface.endswith("_level_out"):
-            return None
+        """What publishes a reading behind an observation box, or None.
 
+        Two box shapes, and they are disjoint by construction: a capacity or a
+        republishing instrument exports a LEVEL on ``{name}_level_out``, a
+        continuous output exports its delivered RATE on ``{flow}_rate_out``
+        (R38). Both answer :meth:`published_flows`, which is all
+        :meth:`check_measurement_constituents` asks of a publisher.
+        """
         comp = self.comp.get(component)
         if comp is None:
             return None
 
-        name = interface[: -len("_level_out")]
+        if interface.endswith(LEVEL_OUT_SUFFIX):
+            name = interface[: -len(LEVEL_OUT_SUFFIX)]
 
-        return comp.capacities.get(name) or comp.measurements_out.get(name)
+            return comp.capacities.get(name) or comp.measurements_out.get(name)
+
+        if interface.endswith(RATE_OBSERVATION_OUT_SUFFIX):
+            name = interface[: -len(RATE_OBSERVATION_OUT_SUFFIX)]
+
+            return comp.flows_continuous_out.get(name)
+
+        return None
 
     def measurement_observer(self, component, interface):
-        """The measurement import behind a ``{name}_level_in`` box."""
-        if not interface.endswith("_level_in"):
-            return None
+        """The measurement import behind a ``{name}_level_in`` / ``_rate_in`` box.
 
+        The channel's declared nature has to AGREE with the suffix the box was
+        named for: one class serves both natures (R38), so a channel named ``q``
+        and declared ``kind="rate"`` imports on ``q_rate_in`` and on nothing
+        else. Resolving ``q_level_in`` onto it would hand
+        :meth:`check_measurement_constituents` an observer that is not on the
+        wire being checked.
+        """
         comp = self.comp.get(component)
         if comp is None:
             return None
 
-        return comp.measurements_in.get(interface[: -len("_level_in")])
+        for suffix, kind in (
+            (LEVEL_IN_SUFFIX, MEASUREMENT_LEVEL),
+            (RATE_OBSERVATION_IN_SUFFIX, MEASUREMENT_RATE),
+        ):
+            if not interface.endswith(suffix):
+                continue
+
+            channel = comp.measurements_in.get(interface[: -len(suffix)])
+
+            return channel if channel is not None and channel.kind == kind else None
+
+        return None
 
     def check_measurement_constituents(
         self, component_source, interface_source, component_target, interface_target
@@ -746,6 +785,13 @@ class System(cod3s.PycSystem):
         and the refusal is **atomic**, so the observer loses the total it would
         otherwise have read. Caught here, the modeller is told which
         constituents exist.
+
+        Covers the RATE link of R38 under the same two resolutions, and it has
+        to: a rate publishes no constituent at all, so an observer declaring one
+        is asking a number for a decomposition it cannot have. Left out of this
+        check, that link would reach the engine and fail on the missing alias
+        alone, and the modeller would be told a box does not export
+        ``q_water_level`` rather than that a rate holds nothing.
 
         Silent on everything that is not a measurement-to-measurement link, and
         silent when either end is unknown: this is a diagnostic ahead of the
@@ -773,7 +819,8 @@ class System(cod3s.PycSystem):
             f"constituent{plural} {', '.join(repr(n) for n in missing)}, which "
             f"{component_source} does not publish; it publishes {available}. "
             "A constituent is published by the flows a capacity HOLDS, or by "
-            "the flows= list of a republished measurement"
+            "the flows= list of a republished measurement; a continuous "
+            "output's rate is one number and publishes none"
         )
 
     def auto_connect(
