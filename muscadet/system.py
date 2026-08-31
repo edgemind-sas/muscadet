@@ -731,6 +731,14 @@ class System(cod3s.PycSystem):
         continuous output exports its delivered RATE on ``{flow}_rate_out``
         (R38). Both answer :meth:`published_flows`, which is all
         :meth:`check_measurement_constituents` asks of a publisher.
+
+        The collections are read DEFENSIVELY, like the flow dicts of
+        :meth:`flow_behind_message_box` and for the same reason: a component
+        need not be an ``ObjFlow``. A peer class -- a logic gate, a controller
+        (R39) -- carries no capacities and no continuous flows at all, and a
+        box of its own whose name happens to end in one of these two suffixes
+        must answer "no publisher here" rather than abort the connection on a
+        missing attribute.
         """
         comp = self.comp.get(component)
         if comp is None:
@@ -738,13 +746,16 @@ class System(cod3s.PycSystem):
 
         if interface.endswith(LEVEL_OUT_SUFFIX):
             name = interface[: -len(LEVEL_OUT_SUFFIX)]
+            capacities = getattr(comp, "capacities", None) or {}
+            published = getattr(comp, "measurements_out", None) or {}
 
-            return comp.capacities.get(name) or comp.measurements_out.get(name)
+            return capacities.get(name) or published.get(name)
 
         if interface.endswith(RATE_OBSERVATION_OUT_SUFFIX):
             name = interface[: -len(RATE_OBSERVATION_OUT_SUFFIX)]
+            outputs = getattr(comp, "flows_continuous_out", None) or {}
 
-            return comp.flows_continuous_out.get(name)
+            return outputs.get(name)
 
         return None
 
@@ -757,6 +768,11 @@ class System(cod3s.PycSystem):
         else. Resolving ``q_level_in`` onto it would hand
         :meth:`check_measurement_constituents` an observer that is not on the
         wire being checked.
+
+        A :class:`muscadet.ObjCtrl` answers here too, and deliberately: its
+        observation inputs ARE measurement channels, and it exposes them under
+        this name so the constituent diagnostic reaches a controller instead of
+        leaving it to fail at the engine on a missing alias (R39).
         """
         comp = self.comp.get(component)
         if comp is None:
@@ -769,7 +785,8 @@ class System(cod3s.PycSystem):
             if not interface.endswith(suffix):
                 continue
 
-            channel = comp.measurements_in.get(interface[: -len(suffix)])
+            observed = getattr(comp, "measurements_in", None) or {}
+            channel = observed.get(interface[: -len(suffix)])
 
             return channel if channel is not None and channel.kind == kind else None
 
