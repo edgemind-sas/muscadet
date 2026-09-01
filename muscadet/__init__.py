@@ -46,6 +46,7 @@ from .capacity import (
 )
 from .obj_logic import LogicOr, LogicAnd, ObjLogicGate
 from .obj_ctrl import (
+    CONTROL_AGGREGATIONS,
     CTRL_OUT_BOOL,
     CTRL_OUT_KINDS,
     CTRL_OUT_VALUE,
