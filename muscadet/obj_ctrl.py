@@ -60,12 +60,38 @@ library carries kinks of its own that predate this and are NOT declared, its
 allocation and reactant minimums among them; this is the doctrine for what a
 controller introduces, not a sweep of what came before.
 
+**What an output CARRIES: a closed grammar, never a function** (R42). An
+output declares its value under the key ``emit``, and what may be written there
+is a composition of exactly four operators: :class:`CtrlCompare` (a reading
+against a threshold), :class:`CtrlBand` (two thresholds and a direction),
+:class:`CtrlCombine` (booleans by and / or / not / k-of-n) and
+:class:`CtrlRepublish` (a reading, times a gain). A Python callable is refused
+there **even when it attests its own continuity** the way
+:class:`muscadet.Profile` lets a production profile attest it.
+
+The reason is the one the whole module turns on. The solver dates a crossing
+exactly only on a form it RECOGNISES: a threshold it can root-find, an edge it
+can watch. Nothing can read a threshold out of arbitrary Python, so nothing
+could compile one to a watched transition -- and the fallback, a sensitive
+method, is precisely the silent failure described above. A closed grammar is
+what makes every form compilable: a comparison and each edge of a band become a
+watched two-state automaton, exactly like the threshold of a discrete
+production condition (R22) and the kinks above, and the output is re-evaluated
+on the NOTIFICATION of those automata, which are discrete objects and do
+announce their state. Only :class:`CtrlCombine` reads booleans, and it is the
+one place where a change announces itself.
+
+An output declaring no ``emit`` keeps the hand-written value
+:meth:`CtrlSignalOut.publish` and :meth:`muscadet.MeasurementOut.publish` give
+it, which is what a test drives and what the skeleton has always done.
+
 **Scope of this module today.** A controller declares, builds, connects,
-reduces several sources on one input (R40) and declares that reduction's kinks
-(R41). The closed output grammar (compare, band, combine, republish) and the
-ordering of controllers among themselves are separate units; the value a
-``"bool"`` output carries is written through :meth:`CtrlSignalOut.publish`
-until the grammar writes it.
+reduces several sources on one input (R40), declares that reduction's kinks
+(R41) and compiles its outputs from the closed grammar (R42). The ordering of
+controllers among themselves is a separate unit. So is making a threshold a
+VARIABLE of the model that a failure mode can move: a threshold is an ordinary
+parameter here, while the gain of a republication is already
+``{name}_level_gain``, the variable that unit will clamp.
 """
 
 import typing
@@ -83,8 +109,10 @@ from .capacity import (
     COMBINE_SUM,
     MeasurementIn,
     MeasurementOut,
+    allocate_measurement_equation_order,
 )
-from .common import fresh_instant_occ_law, get_pyc_type
+from .common import copy_declaration, fresh_instant_occ_law, get_pyc_type
+from .rules import COMPARISON_OPERATORS, comparator
 
 #: The CLOSED list an observation input's aggregation is chosen from (R40):
 #: minimum, maximum, mean, median and sum, under the names
@@ -152,6 +180,563 @@ CTRL_OUT_VALUE = "value"
 #: Every nature a controller output may be declared with.
 CTRL_OUT_KINDS = (CTRL_OUT_BOOL, CTRL_OUT_VALUE)
 
+# ----------------------------------------------------------------------
+# The output grammar (R42)
+# ----------------------------------------------------------------------
+
+#: A reading compared to a threshold. Compiles to the WATCHED two-state
+#: automaton :meth:`ObjCtrl.add_compare_automaton` builds, which is the very
+#: shape a discrete production condition uses for the same job (R22).
+CTRL_OP_COMPARE = "compare"
+
+#: Two thresholds and a direction: a hysteresis band. Compiles to one watched
+#: two-state automaton whose two edges are the two thresholds, which is what
+#: the shipped sensor already does with an ``add_atm2states`` pair.
+CTRL_OP_BAND = "band"
+
+#: Booleans reduced by ``and``, ``or``, ``not`` or k-of-n. The ONE operator
+#: whose operands are already discrete, and therefore the one place where a
+#: change announces itself.
+CTRL_OP_COMBINE = "combine"
+
+#: A reading published as a number, multiplied by a gain. Compiles to a PDMP
+#: equation rather than to an automaton: it carries a quantity, and a quantity
+#: has no crossing to date.
+CTRL_OP_REPUBLISH = "republish"
+
+#: The operators that answer a BOOLEAN, and therefore the ones a
+#: :data:`CTRL_OUT_BOOL` output may emit.
+CTRL_BOOL_OPERATORS = (CTRL_OP_COMPARE, CTRL_OP_BAND, CTRL_OP_COMBINE)
+
+#: The operators that answer a NUMBER, and therefore the ones a
+#: :data:`CTRL_OUT_VALUE` output may emit.
+CTRL_VALUE_OPERATORS = (CTRL_OP_REPUBLISH,)
+
+#: The CLOSED list an output value is composed from (R42).
+#:
+#: Closed, and closed to a Python callable above all. muscadet already drew
+#: this conclusion on production profiles: a callable must ATTEST its own
+#: continuity because nothing can inspect it, and a discontinuous one is
+#: refused outright because the solver would walk through the break inside an
+#: integration step. An output value needs more than continuity -- it needs a
+#: form a threshold can be read out of -- so the attestation buys nothing here
+#: and a callable is refused whatever it carries. See
+#: :func:`build_ctrl_node`.
+CTRL_OPERATORS = CTRL_BOOL_OPERATORS + CTRL_VALUE_OPERATORS
+
+#: A band detecting a reading that has risen ABOVE its activation level. Its
+#: release edge then sits at or below that level.
+CTRL_BAND_ABOVE = "above"
+
+#: A band detecting a reading that has fallen BELOW its activation level. Its
+#: release edge then sits at or above that level.
+CTRL_BAND_BELOW = "below"
+
+#: Every direction a band may be declared in.
+CTRL_BAND_DIRECTIONS = (CTRL_BAND_ABOVE, CTRL_BAND_BELOW)
+
+#: The comparison operators of each band edge, per direction: the activation
+#: one first, the release one second.
+#:
+#: The release edge is deliberately STRICT, exactly as the shipped sensor's is
+#: and for the same reason: the degenerate band -- the two levels coinciding --
+#: then leaves the two edges mutually exclusive, so the output switches at that
+#: single level instead of having both edges hold at once.
+CTRL_BAND_EDGE_OPERATORS = {
+    CTRL_BAND_ABOVE: (">=", "<"),
+    CTRL_BAND_BELOW: ("<=", ">"),
+}
+
+#: Conjunction: every operand holds.
+CTRL_LOGIC_AND = "and"
+
+#: Disjunction: at least one operand holds.
+CTRL_LOGIC_OR = "or"
+
+#: Negation: the single operand does not hold.
+CTRL_LOGIC_NOT = "not"
+
+#: k-of-n: at least ``k`` of the operands hold. The voting shape a redundant
+#: instrument set exists for.
+CTRL_LOGIC_K = "k"
+
+#: The CLOSED list a combination is chosen from.
+CTRL_LOGICS = (CTRL_LOGIC_AND, CTRL_LOGIC_OR, CTRL_LOGIC_NOT, CTRL_LOGIC_K)
+
+
+class CtrlNode(pydantic.BaseModel):
+    """One node of an output value (R42): an operator and its operands.
+
+    Never built directly by a model: :func:`build_ctrl_node` is the door, and
+    it is what turns a declaration into a tree, refusing by name what the
+    closed grammar does not carry.
+
+    Every semantic refusal lives in a validator of the node itself rather than
+    in the factory, so a node handed round the library is a node that was
+    checked -- and the factory only adds WHERE the mistake was made.
+    """
+
+    model_config = pydantic.ConfigDict(extra="forbid")
+
+    #: True when this operator answers a boolean, False when it answers a
+    #: number. A class fact, not a field: it is a property of the OPERATOR.
+    IS_BOOLEAN: typing.ClassVar[bool] = True
+
+    op: str = pydantic.Field(..., description="The operator this node applies")
+
+    def operand_nodes(self) -> typing.List["CtrlNode"]:
+        """The sub-nodes this one reduces. Empty on a leaf."""
+        return []
+
+    def inputs_read(self) -> typing.List[str]:
+        """Every observation input this subtree reads, in declaration order."""
+        found: typing.List[str] = []
+
+        for operand in self.operand_nodes():
+            for name in operand.inputs_read():
+                if name not in found:
+                    found.append(name)
+
+        return found
+
+
+class CtrlCompare(CtrlNode):
+    """A reading against a threshold (R42).
+
+    Examples
+    --------
+    >>> {"op": "compare", "input": "tank", "operator": ">=", "threshold": 5.0}
+    {'op': 'compare', 'input': 'tank', 'operator': '>=', 'threshold': 5.0}
+    """
+
+    op: str = pydantic.Field(CTRL_OP_COMPARE, description="Always 'compare'")
+
+    input: str = pydantic.Field(
+        ..., description="Name of the observation input whose reading is compared"
+    )
+
+    operator: str = pydantic.Field(
+        ...,
+        description=(
+            "A name from muscadet.rules.COMPARISON_OPERATORS. The very "
+            "vocabulary a rule guard (R21) and a discrete production condition "
+            "(R22) compare with: one comparison vocabulary for the library, "
+            "one implementation."
+        ),
+    )
+
+    threshold: float = pydantic.Field(
+        ...,
+        description=(
+            "The level the reading is compared to. An ordinary parameter here; "
+            "making it a variable a failure mode can move is a later unit."
+        ),
+    )
+
+    @pydantic.model_validator(mode="after")
+    def check_operator(self) -> "CtrlCompare":
+        """Refuse a comparison operator the library does not carry."""
+        if self.operator not in COMPARISON_OPERATORS:
+            raise ValueError(
+                f"a comparison operator is one of "
+                f"{', '.join(COMPARISON_OPERATORS)}, got {self.operator!r}"
+            )
+
+        return self
+
+    def inputs_read(self) -> typing.List[str]:
+        return [self.input]
+
+
+class CtrlBand(CtrlNode):
+    """A hysteresis band: two thresholds and the direction they are read in.
+
+    What a band buys over a comparison is the whole of why it is an operator of
+    its own: a comparison switches back the instant its condition stops
+    holding, so a montage gated on one chatters around a single level. A band
+    holds between its two edges, which is what lets the quantity it controls
+    actually move.
+
+    Examples
+    --------
+    >>> {"op": "band", "input": "tank", "direction": "below",
+    ...  "activate": 3.0, "release": 7.0}      # doctest: +NORMALIZE_WHITESPACE
+    {'op': 'band', 'input': 'tank', 'direction': 'below', 'activate': 3.0,
+     'release': 7.0}
+    """
+
+    op: str = pydantic.Field(CTRL_OP_BAND, description="Always 'band'")
+
+    input: str = pydantic.Field(
+        ..., description="Name of the observation input whose reading is banded"
+    )
+
+    direction: str = pydantic.Field(
+        CTRL_BAND_ABOVE,
+        description=(
+            "'above' to activate when the reading rises past the activation "
+            "level, 'below' to activate when it falls past it. It is what "
+            "fixes on which side of that level the release edge must sit."
+        ),
+    )
+
+    activate: float = pydantic.Field(
+        ..., description="The level the band switches ON at"
+    )
+
+    release: typing.Optional[float] = pydantic.Field(
+        None,
+        description=(
+            "The level it switches OFF at. None -- the default -- coincides "
+            "with the activation level, which is the degenerate band: no "
+            "hysteresis, and the two edges still mutually exclusive because "
+            "the release comparison is strict."
+        ),
+    )
+
+    @pydantic.model_validator(mode="after")
+    def check_edges(self) -> "CtrlBand":
+        """Refuse a direction the grammar does not carry, and an inverted band.
+
+        An inverted band is not a subtle mistake with a subtle consequence: a
+        band detecting BELOW 3 and releasing at 1 can never release, because
+        the reading has to fall to 1 while the band is what stops it falling.
+        The montage then latches on its first activation and never speaks
+        again, with nothing raised anywhere.
+        """
+        if self.direction not in CTRL_BAND_DIRECTIONS:
+            raise ValueError(
+                f"a band detects in one of {', '.join(CTRL_BAND_DIRECTIONS)}, "
+                f"got {self.direction!r}"
+            )
+
+        if self.release is None:
+            self.release = self.activate
+
+            return self
+
+        inverted = (
+            self.release > self.activate
+            if self.direction == CTRL_BAND_ABOVE
+            else self.release < self.activate
+        )
+
+        if inverted:
+            side = "below" if self.direction == CTRL_BAND_ABOVE else "above"
+            raise ValueError(
+                f"a band detecting {self.direction!r} {self.activate} releases "
+                f"at or {side} it, not at {self.release}"
+            )
+
+        return self
+
+    def edge_operators(self) -> typing.Tuple[str, str]:
+        """The activation and release comparison operators of this band."""
+        return CTRL_BAND_EDGE_OPERATORS[self.direction]
+
+    def inputs_read(self) -> typing.List[str]:
+        return [self.input]
+
+
+class CtrlCombine(CtrlNode):
+    """Booleans reduced by and / or / not / k-of-n (R42).
+
+    Examples
+    --------
+    >>> {"op": "combine", "logic": "k", "k": 2, "operands": [
+    ...     {"op": "compare", "input": "a", "operator": ">=", "threshold": 1.0},
+    ...     {"op": "compare", "input": "b", "operator": ">=", "threshold": 1.0},
+    ...     {"op": "compare", "input": "c", "operator": ">=", "threshold": 1.0},
+    ... ]}                                              # doctest: +ELLIPSIS
+    {'op': 'combine', 'logic': 'k', 'k': 2, 'operands': [...]}
+    """
+
+    op: str = pydantic.Field(CTRL_OP_COMBINE, description="Always 'combine'")
+
+    logic: str = pydantic.Field(..., description=f"One of {', '.join(CTRL_LOGICS)}")
+
+    k: typing.Optional[int] = pydantic.Field(
+        None,
+        description=(
+            "How many operands must hold, for logic='k' and for it alone. "
+            "Refused elsewhere rather than ignored: a k declared beside an "
+            "'or' is a modeller who meant k-of-n."
+        ),
+    )
+
+    operands: typing.List[typing.Any] = pydantic.Field(
+        ...,
+        description=(
+            "The sub-nodes combined, already built. Typed loosely on purpose: "
+            "build_ctrl_node walks the declaration depth first and hands this "
+            "field nodes, so the recursion has exactly one entry point."
+        ),
+    )
+
+    @pydantic.model_validator(mode="after")
+    def check_logic(self) -> "CtrlCombine":
+        """Refuse an unusable combination, naming what is wrong with it.
+
+        The vacuous cases are refused rather than answered. ``any([])`` is
+        False and ``all([])`` is True, so an empty combination is a silent
+        constant -- and a constant output is a controller that does nothing,
+        which is not what anyone declares a controller for.
+        """
+        if self.logic not in CTRL_LOGICS:
+            raise ValueError(
+                f"a combination is one of {', '.join(CTRL_LOGICS)}, got "
+                f"{self.logic!r}"
+            )
+
+        for operand in self.operands:
+            if not isinstance(operand, CtrlNode):
+                raise ValueError(f"operand {operand!r} is not a grammar node")
+
+            if not operand.IS_BOOLEAN:
+                raise ValueError(
+                    f"a combination reduces conditions, and operand "
+                    f"{operand.op!r} carries a number"
+                )
+
+        if not self.operands:
+            raise ValueError("a combination with no operand is a constant")
+
+        if self.logic == CTRL_LOGIC_NOT and len(self.operands) != 1:
+            raise ValueError(f"a 'not' negates ONE operand, got {len(self.operands)}")
+
+        if self.logic != CTRL_LOGIC_K:
+            if self.k is not None:
+                raise ValueError(
+                    f"'k' counts the operands of a {CTRL_LOGIC_K!r} "
+                    f"combination and has no meaning beside a "
+                    f"{self.logic!r} one"
+                )
+
+            return self
+
+        if not isinstance(self.k, int) or isinstance(self.k, bool) or self.k < 1:
+            raise ValueError(
+                f"a {CTRL_LOGIC_K!r} combination counts at least one operand, "
+                f"got k={self.k!r}"
+            )
+
+        if self.k > len(self.operands):
+            raise ValueError(
+                f"a {CTRL_LOGIC_K!r} combination asks for {self.k} of "
+                f"{len(self.operands)} operands, which can never hold"
+            )
+
+        return self
+
+    def operand_nodes(self) -> typing.List[CtrlNode]:
+        return list(self.operands)
+
+
+class CtrlRepublish(CtrlNode):
+    """A reading published as a number, multiplied by a gain (R42).
+
+    The ONE operator that answers a quantity, and therefore the one that
+    compiles to a PDMP equation instead of to an automaton: what it carries is
+    refreshed at every integration step, exactly as every other published
+    measurement is, and it has no crossing for anything to date.
+
+    **Where the gain lives, and why it matters here.** It is written into
+    ``{name}_level_gain``, the public variable :class:`muscadet.MeasurementOut`
+    creates on every publication and multiplies everything it publishes by. So
+    the number a model declares here is already the endpoint a failure mode
+    clamps -- a gain of 0 is a dead instrument, a gain of 5 a wild one -- and
+    the unit that makes a mode reach it adds no plumbing to this one. That is
+    also why ``gain_default`` may not be declared beside it: one number, one
+    spelling.
+
+    Examples
+    --------
+    >>> {"op": "republish", "input": "reading", "gain": 1.0}
+    {'op': 'republish', 'input': 'reading', 'gain': 1.0}
+    """
+
+    IS_BOOLEAN: typing.ClassVar[bool] = False
+
+    op: str = pydantic.Field(CTRL_OP_REPUBLISH, description="Always 'republish'")
+
+    input: str = pydantic.Field(
+        ..., description="Name of the observation input whose reading is published"
+    )
+
+    gain: float = pydantic.Field(
+        1.0,
+        description=(
+            "The factor everything published is multiplied by. Lands in "
+            "'{name}_level_gain', the variable a failure mode clamps."
+        ),
+    )
+
+    def inputs_read(self) -> typing.List[str]:
+        return [self.input]
+
+
+#: Which node class each operator builds.
+CTRL_NODE_CLASSES: typing.Dict[str, typing.Type[CtrlNode]] = {
+    CTRL_OP_COMPARE: CtrlCompare,
+    CTRL_OP_BAND: CtrlBand,
+    CTRL_OP_COMBINE: CtrlCombine,
+    CTRL_OP_REPUBLISH: CtrlRepublish,
+}
+
+
+def describe_node_error(item: typing.Any) -> str:
+    """One pydantic error, rendered as the sentence a modeller needs.
+
+    Pydantic prefixes a validator's own message with ``Value error,`` and
+    reports an unknown key without naming it in the message -- the key is in
+    ``loc``. Both are undone here so that a grammar refusal reads like every
+    other refusal of this module.
+    """
+    message = str(item.get("msg", "")).replace("Value error, ", "")
+    location = ".".join(str(part) for part in item.get("loc") or ())
+
+    if item.get("type") in ("extra_forbidden", "missing") and location:
+        return f"{message} ({location})"
+
+    return message
+
+
+def build_ctrl_node(where: str, spec: typing.Any) -> typing.Optional[CtrlNode]:
+    """Turn one ``emit`` declaration into a grammar node, or refuse it (R42).
+
+    The single door onto the grammar, and therefore the single place a Python
+    callable is turned away. Recursive: a combination's operands are built
+    first, so a node always holds nodes and never raw mappings.
+
+    Parameters
+    ----------
+    where : str
+        What is being declared, as the message should name it.
+    spec : dict or None
+        The declaration. ``None`` is an output nothing computes, which keeps
+        the hand-written value :meth:`CtrlSignalOut.publish` gives it.
+
+    Returns
+    -------
+    CtrlNode or None
+
+    Raises
+    ------
+    ValueError
+        On anything that is not a mapping -- a Python callable included,
+        whatever continuity it attests -- on an unknown operator, on an unknown
+        key, and on every semantic refusal the node classes carry.
+    """
+    if spec is None:
+        return None
+
+    if isinstance(spec, CtrlNode):
+        return spec
+
+    operators = ", ".join(CTRL_OPERATORS)
+
+    if not isinstance(spec, dict):
+        raise ValueError(
+            f"{where}: an output value is a COMPOSITION of the closed "
+            f"operators {operators}, written as a mapping carrying an 'op' "
+            f"key, and {spec!r} is not one. A Python callable is refused here "
+            "whatever it attests: muscadet.Profile's continuity attestation "
+            "lets a function scale a production rate, and it still leaves "
+            "nothing a threshold can be read out of -- so nothing the "
+            "integration manager could watch, and no way to date a crossing "
+            "other than stepping over it"
+        )
+
+    spec = copy_declaration(spec)
+    op = spec.pop("op", None)
+    node_class = CTRL_NODE_CLASSES.get(op)
+
+    if node_class is None:
+        raise ValueError(
+            f"{where}: unknown operator {op!r}, expected one of {operators}"
+        )
+
+    if op == CTRL_OP_COMBINE:
+        spec["operands"] = [
+            build_ctrl_node(f"{where} operand {index}", operand)
+            for index, operand in enumerate(spec.get("operands") or [])
+        ]
+
+    try:
+        return node_class(op=op, **spec)
+    except pydantic.ValidationError as error:
+        reasons = "; ".join(describe_node_error(item) for item in error.errors())
+
+        raise ValueError(f"{where}: {reasons}") from None
+
+
+def band_edge_condition(
+    read: typing.Callable,
+    compare_fun: typing.Callable,
+    level: float,
+    holds: bool,
+) -> typing.Callable:
+    """Condition of one edge of a band, or of one side of a comparison (R42).
+
+    ``holds`` selects the direction, exactly as it does for the threshold
+    automaton of a discrete production condition (R22) and for the crossing
+    automaton of an aggregation kink (R41): the transition INTO the far state
+    fires while the comparison holds, the one back out of it when it stops.
+
+    The reading is taken LIVE, so the automaton and whatever reads the output
+    can never disagree about a value: what the automaton contributes is the
+    STOP at the right date and the notification that re-runs the output there.
+    """
+
+    def condition() -> bool:
+        satisfied = bool(compare_fun(float(read()), level))
+
+        return satisfied if holds else (not satisfied)
+
+    return condition
+
+
+def combine_reader(
+    node: "CtrlCombine", readers: typing.List[typing.Callable]
+) -> typing.Callable:
+    """The closure one combination reduces its operands with (R42).
+
+    The only operator whose operands are already BOOLEANS, and therefore the
+    only one that adds no automaton of its own: what it reduces are the states
+    of the automata its subtree declared, and a state announces itself. The
+    library has the shape already -- :class:`muscadet.ObjLogicGate` is exactly
+    this reduction over the variables of connected components -- and this is
+    the same four kinds, over the compiled operands of one controller instead.
+
+    Parameters
+    ----------
+    node : CtrlCombine
+        The validated combination. Its vacuous cases were refused at
+        declaration, so nothing here has to answer what ``any([])`` means.
+    readers : list of callable
+        One closure per operand, in declaration order.
+    """
+    logic = node.logic
+
+    if logic == CTRL_LOGIC_AND:
+        return lambda: all(read() for read in readers)
+
+    if logic == CTRL_LOGIC_OR:
+        return lambda: any(read() for read in readers)
+
+    if logic == CTRL_LOGIC_NOT:
+        first = readers[0]
+
+        return lambda: not first()
+
+    # An int, and settled long before here: ``CtrlCombine.check_logic`` refuses
+    # a k-of-n whose count is missing, not an integer, below one, or above the
+    # operand count. The cast says that rather than re-deciding it.
+    count = typing.cast(int, node.k)
+
+    return lambda: sum(1 for read in readers if read()) >= count
+
+
 #: Declaration keys an OBSERVATION INPUT reads. All but ``aggregate`` are
 #: forwarded verbatim to :class:`muscadet.MeasurementIn`.
 #:
@@ -169,8 +754,10 @@ CONTROL_IN_KEYS = (
     "aggregate",
 )
 
-#: Declaration keys a BOOLEAN output reads.
-CONTROL_OUT_BOOL_KEYS = ("kind", "default")
+#: Declaration keys a BOOLEAN output reads. ``emit`` is the output grammar
+#: (R42): the condition the signal carries, as a composition of
+#: :data:`CTRL_BOOL_OPERATORS`.
+CONTROL_OUT_BOOL_KEYS = ("kind", "default", "emit")
 
 #: Declaration keys a VALUE output reads, forwarded verbatim to
 #: :class:`muscadet.MeasurementOut`. ``source`` is deliberately absent: what a
@@ -182,6 +769,7 @@ CONTROL_OUT_VALUE_KEYS = (
     "level_default",
     "fill_default",
     "gain_default",
+    "emit",
 )
 
 
@@ -438,6 +1026,17 @@ class ObjCtrl(cod3s.PycComponent):
             self.DECLARATION_KEYS,
         )
 
+        # The grammar of every output is checked here too, and for the same
+        # reason: a malformed one then costs no engine object. It is checked
+        # again in ``add_control_out``, which is a public door of its own -- the
+        # walk is pure, so doing it twice buys the early refusal for nothing.
+        for entry in kwargs.get("controls_out") or []:
+            build_ctrl_node(
+                f"Object {name}: controller output "
+                f"{dict(entry).get('name')!r} emit",
+                dict(entry).get("emit"),
+            )
+
         super().__init__(
             name,
             label=label,
@@ -466,6 +1065,27 @@ class ObjCtrl(cod3s.PycComponent):
         #: How many sources each of those inputs was wired to when its automata
         #: were built. Read back by :meth:`check_crossings_unchanged`.
         self.crossing_sources: typing.Dict[str, int] = {}
+
+        #: What each output emits (R42), keyed by interface name: a
+        #: :class:`CtrlNode` tree, or ``None`` for an output nothing computes
+        #: and whose value is written by hand.
+        self.controls_emit: typing.Dict[str, typing.Optional[CtrlNode]] = {}
+
+        #: The automata each output's grammar compiled to, keyed by interface
+        #: name. An output that reached the compiler and produced none holds an
+        #: empty list, which is what tells "nothing to watch" -- a republication
+        #: -- apart from "not compiled".
+        self.emit_automata: typing.Dict[str, typing.List[typing.Any]] = {}
+
+        #: The closure each VALUE output's republication reads, keyed by
+        #: interface name. Walked by :meth:`compute_controls`, the one PDMP
+        #: equation a controller registers.
+        self.emit_republications: typing.Dict[str, typing.Callable] = {}
+
+        #: True once :meth:`compute_controls` is registered as an equation. One
+        #: registration covers every republication of the component, as
+        #: ``compute_measurements`` does on an ``ObjFlow``.
+        self.emit_equation_registered = False
 
         for entry in kwargs.get("controls_in") or []:
             self.add_control_in(**dict(entry))
@@ -658,8 +1278,8 @@ class ObjCtrl(cod3s.PycComponent):
 
         return channel
 
-    def add_control_out(self, name, kind=CTRL_OUT_BOOL, **params):
-        """Declare one output (R3).
+    def add_control_out(self, name, kind=CTRL_OUT_BOOL, emit=None, **params):
+        """Declare one output, and what it carries (R3, R42).
 
         Parameters
         ----------
@@ -670,6 +1290,23 @@ class ObjCtrl(cod3s.PycComponent):
             consumed by a discrete control port -- or :data:`CTRL_OUT_VALUE`
             -- a number published on ``{name}_level_out`` and read by any
             observer, a second controller included (R4).
+        emit : dict, optional
+            What the output carries, as a composition of the closed operators
+            :data:`CTRL_OPERATORS` (R42). A boolean output emits one of
+            :data:`CTRL_BOOL_OPERATORS`, a value output one of
+            :data:`CTRL_VALUE_OPERATORS`. ``None`` -- the default -- leaves the
+            output's value written by hand, which is what a test drives::
+
+                controls_out=[{
+                    "name": "fill",
+                    "kind": "bool",
+                    "emit": {"op": "band", "input": "tank",
+                             "direction": "below",
+                             "activate": 3.0, "release": 7.0},
+                }]
+
+            **No Python callable is accepted here**, whatever continuity it
+            attests: see :func:`build_ctrl_node`.
         **params : dict
             :data:`CONTROL_OUT_BOOL_KEYS` or :data:`CONTROL_OUT_VALUE_KEYS`,
             according to ``kind``.
@@ -682,7 +1319,9 @@ class ObjCtrl(cod3s.PycComponent):
         ------
         ValueError
             On an unknown nature, an unknown declaration key, a name already
-            taken, or a message box another interface already claims.
+            taken, a message box another interface already claims, a grammar
+            the closed list does not carry, an operator whose nature is not the
+            output's, or an input the controller does not declare.
         """
         if kind not in CTRL_OUT_KINDS:
             raise ValueError(
@@ -699,6 +1338,17 @@ class ObjCtrl(cod3s.PycComponent):
             accepted,
         )
 
+        # Everything the grammar can refuse is refused HERE, before a single
+        # variable or message box exists: an output whose value is nonsense
+        # leaves no half-built interface for the next walk of the system to
+        # trip over, exactly as a refused component leaves no engine object.
+        node = build_ctrl_node(
+            f"Object {self.name()}: controller output {name!r} emit", emit
+        )
+        self.check_emit_nature(name, kind, node)
+        self.check_emit_inputs(name, node)
+        params = self.emit_gain_params(name, node, params)
+
         self.claim_name(name)
 
         if kind == CTRL_OUT_BOOL:
@@ -714,8 +1364,367 @@ class ObjCtrl(cod3s.PycComponent):
         interface.add_mb(self)
 
         self.controls_out[name] = interface
+        self.controls_emit[name] = node
+
+        self.compile_emit(name)
 
         return interface
+
+    # ------------------------------------------------------------------
+    # The output grammar (R42)
+    # ------------------------------------------------------------------
+
+    def check_emit_nature(
+        self, name: str, kind: str, node: typing.Optional[CtrlNode]
+    ) -> None:
+        """Refuse an operator whose nature is not the output's (R42, R3).
+
+        The two natures are not interchangeable and nothing downstream would
+        say so: a boolean output is a signal a control port imports, a value
+        output a number an observer reads. An output carrying the wrong one
+        would build, connect, and publish something its consumer cannot use.
+        """
+        if node is None:
+            return
+
+        wants_boolean = kind == CTRL_OUT_BOOL
+
+        if node.IS_BOOLEAN == wants_boolean:
+            return
+
+        carries = "a condition" if node.IS_BOOLEAN else "a number"
+
+        raise ValueError(
+            f"Object {self.name()}: controller output {name!r} is declared "
+            f"kind={kind!r} and emits {node.op!r}, which carries {carries}. A "
+            f"{CTRL_OUT_BOOL!r} output carries a condition "
+            f"({', '.join(CTRL_BOOL_OPERATORS)}) and a {CTRL_OUT_VALUE!r} "
+            f"output a number ({', '.join(CTRL_VALUE_OPERATORS)})"
+        )
+
+    def check_emit_inputs(self, name: str, node: typing.Optional[CtrlNode]) -> None:
+        """Refuse an output reading an input this controller does not declare.
+
+        Refused at declaration, where the typo was made, and telling the
+        modeller what the controller DOES declare. Left to the compiler it
+        would be a bare ``KeyError`` out of a closure, naming neither the
+        output nor the input.
+
+        This is also what fixes the order of the two sections: an output says
+        what it is made of by naming an input, so the inputs have to exist
+        first -- which is the order :data:`muscadet.declare.DECLARATION_SECTIONS`
+        already records.
+        """
+        if node is None:
+            return
+
+        missing = [read for read in node.inputs_read() if read not in self.controls_in]
+
+        if not missing:
+            return
+
+        declared = ", ".join(self.controls_in) if self.controls_in else "none"
+        plural = "s" if len(missing) > 1 else ""
+
+        raise ValueError(
+            f"Object {self.name()}: controller output {name!r} reads input"
+            f"{plural} {', '.join(repr(read) for read in missing)}, which this "
+            f"controller does not declare; it declares {declared}. Declare "
+            "controls_in before the outputs that read them"
+        )
+
+    def emit_gain_params(self, name, node, params):
+        """Fold a republication's gain into the publication's own gain.
+
+        ONE number, ONE spelling. ``{name}_level_gain`` is the variable
+        :class:`muscadet.MeasurementOut` multiplies everything it publishes by,
+        and it is the endpoint a failure mode clamps; the gain the grammar
+        declares is that variable's initial value and not a second factor
+        beside it. Declaring both is refused rather than arbitrated, because
+        the two would silently multiply.
+        """
+        if not isinstance(node, CtrlRepublish):
+            return params
+
+        if "gain_default" in params:
+            raise ValueError(
+                f"Object {self.name()}: controller output {name!r} declares a "
+                "gain on its republication and a gain_default beside it. They "
+                f"are the same number -- the initial value of "
+                f"{name}_level_gain, which multiplies everything the output "
+                "publishes -- so declare one of the two"
+            )
+
+        params = dict(params)
+        params["gain_default"] = node.gain
+
+        return params
+
+    def compile_emit(self, name: str) -> typing.List[typing.Any]:
+        """Compile one output's grammar to engine mechanisms (R42).
+
+        A boolean output becomes a closure over its subtree, re-run on the
+        notification of every automaton that subtree declared -- and on a start
+        method, so the signal is seeded at t = 0 of every Monte Carlo sequence,
+        which a non-reinitialised variable needs. A value output becomes a PDMP
+        equation.
+
+        **Not one sensitive method on a reading.** Every registration below is
+        on an automaton, which is discrete and announces its state; the reading
+        itself is taken live inside the closure, at the moment that
+        notification fires. A sensitive method on the reading would never fire
+        at all, because a quantity moving inside an integration step announces
+        nothing -- the silent failure this whole grammar exists to make
+        unreachable.
+
+        Returns
+        -------
+        list
+            The automata built, empty for a republication and for an output
+            emitting nothing.
+        """
+        node = self.controls_emit.get(name)
+        automata: typing.List[typing.Any] = []
+
+        if node is None:
+            self.emit_automata[name] = automata
+
+            return automata
+
+        read = self.build_emit_reader(name, node, "", automata)
+        self.emit_automata[name] = automata
+
+        if not node.IS_BOOLEAN:
+            self.register_republication(name, read)
+
+            return automata
+
+        interface = self.controls_out[name]
+        method_name = f"emit_{self.name()}_{name}"
+
+        def write_signal() -> None:
+            interface.publish(read())
+
+        for aut in automata:
+            aut._bkd.addSensitiveMethod(method_name, write_signal)
+
+        # The seed, and it is load-bearing twice over. A signal variable is not
+        # reinitialised between steps -- it is a state, not a pulse -- so
+        # nothing else would give it the value its condition already has at
+        # t = 0, and a montage starting past its own threshold would sit idle
+        # until the reading came back and crossed it again.
+        self.addStartMethod(method_name, write_signal)
+        write_signal()
+
+        return automata
+
+    def build_emit_reader(self, out_name, node, path, automata):
+        """Compile one node to a closure, appending the automata it needs.
+
+        Depth first, so an operand's automata exist before the combination that
+        reads it. ``path`` is what makes an automaton's name a function of its
+        POSITION in the tree: two comparisons on the same input against
+        different thresholds are two automata, and they have to be tellable
+        apart in ``automata_d``.
+        """
+        if isinstance(node, CtrlCompare):
+            channel = self.controls_in[node.input]
+            compare_fun = comparator(node.operator)
+            threshold = float(node.threshold)
+
+            automata.append(self.add_compare_automaton(out_name, node, path))
+
+            def read_compare() -> bool:
+                return bool(compare_fun(channel.get_reading(), threshold))
+
+            return read_compare
+
+        if isinstance(node, CtrlBand):
+            aut, activated = self.add_band_automaton(out_name, node, path)
+            automata.append(aut)
+
+            def read_band() -> bool:
+                return bool(activated.isActive())
+
+            return read_band
+
+        if isinstance(node, CtrlCombine):
+            readers = [
+                self.build_emit_reader(
+                    out_name, operand, f"{path}_operand_{index}", automata
+                )
+                for index, operand in enumerate(node.operands)
+            ]
+
+            return combine_reader(node, readers)
+
+        channel = self.controls_in[node.input]
+
+        def read_value() -> float:
+            return float(channel.get_reading())
+
+        return read_value
+
+    def emit_automaton_base(self, out_name: str, path: str, suffix: str) -> str:
+        """The name every part of one node's automaton is derived from."""
+        return f"{out_name}{path}_{suffix}"
+
+    def add_emit_automaton(self, base, states, conditions):
+        """The watched two-state automaton one grammar node compiles to (R42).
+
+        The very shape the library already uses to catch a crossing -- a
+        capacity's empty/full bounds (R7), a rule set's mode automaton (R12),
+        the threshold of a discrete production condition (R22), an aggregation
+        kink (R41) -- and for the same reason: two INSTANTANEOUS transitions,
+        both registered as watched, so the solver root-finds the date the
+        condition turns and stops the integration there instead of picking the
+        change up at the following step.
+
+        Parameters
+        ----------
+        base : str
+            What the automaton, its states and its transitions are named from.
+        states : tuple
+            The two state suffixes, resting one first.
+        conditions : tuple
+            The two transition conditions, out of the resting state first.
+
+        Returns
+        -------
+        tuple
+            The automaton, and the backend object of its far state -- what a
+            band reads to know whether it is activated.
+        """
+        rest, far = (f"{base}_{suffix}" for suffix in states)
+        trans_up = f"{base}_up"
+        trans_down = f"{base}_down"
+
+        aut = cod3s.PycAutomaton(
+            name=f"{self.name()}_{base}",
+            states=[rest, far],
+            # Which side the condition designates cannot be known here: the
+            # connections carry their publishers' defaults until the first
+            # equation has run. The instantaneous transitions settle the
+            # automaton at t = 0, which is one more reason they are watched
+            # rather than merely conditioned.
+            init_state=rest,
+            transitions=[
+                {
+                    "name": trans_up,
+                    "source": rest,
+                    "target": far,
+                    "is_interruptible": True,
+                    # A fresh mapping per transition: cod3s rewrites the 'cls'
+                    # entry in place while sanitizing it.
+                    "occ_law": fresh_instant_occ_law(),
+                },
+                {
+                    "name": trans_down,
+                    "source": far,
+                    "target": rest,
+                    "is_interruptible": True,
+                    "occ_law": fresh_instant_occ_law(),
+                },
+            ],
+        )
+        aut.update_bkd(self)
+
+        for trans_name, condition in zip((trans_up, trans_down), conditions):
+            aut.get_transition_by_name(trans_name)._bkd.setCondition(condition)
+
+        self.system().pdmp_add_watched_automaton(aut)
+        self.automata_d[aut.name] = aut
+
+        return aut, aut.get_state_by_name(far)._bkd
+
+    def add_compare_automaton(self, out_name, node, path):
+        """The watched automaton one comparison compiles to (R42).
+
+        Symmetric with :meth:`add_band_automaton`: a comparison is the band
+        whose two edges coincide, read from one side and then the other.
+        """
+        base = self.emit_automaton_base(out_name, path, CTRL_OP_COMPARE)
+        channel = self.controls_in[node.input]
+        compare_fun = comparator(node.operator)
+        threshold = float(node.threshold)
+        read = channel.get_reading
+
+        aut, _ = self.add_emit_automaton(
+            base,
+            ("below", "above"),
+            (
+                band_edge_condition(read, compare_fun, threshold, True),
+                band_edge_condition(read, compare_fun, threshold, False),
+            ),
+        )
+
+        return aut
+
+    def add_band_automaton(self, out_name, node, path):
+        """The watched automaton one band compiles to (R42).
+
+        Two edges, two conditions, ONE automaton -- and the automaton's state
+        IS the band's value. That is what makes the hysteresis a property of
+        the compiled form rather than of a rule somebody has to remember: no
+        reading of the quantity alone can say whether the band is holding,
+        because the band's whole business is to answer differently at the same
+        level depending on where it came from.
+        """
+        base = self.emit_automaton_base(out_name, path, CTRL_OP_BAND)
+        channel = self.controls_in[node.input]
+        activate_op, release_op = node.edge_operators()
+        read = channel.get_reading
+
+        return self.add_emit_automaton(
+            base,
+            ("released", "activated"),
+            (
+                band_edge_condition(
+                    read, comparator(activate_op), float(node.activate), True
+                ),
+                band_edge_condition(
+                    read, comparator(release_op), float(node.release), True
+                ),
+            ),
+        )
+
+    def register_republication(self, out_name: str, read: typing.Callable) -> None:
+        """Declare a value output's republication to the solver (R42).
+
+        An equation and not a sensitive method, for the reason that governs the
+        whole module: the reading it republishes moves inside an integration
+        step and announces nothing, so the only way to keep the publication
+        current is to recompute it at every step.
+        """
+        system = self.system()
+        interface = self.controls_out[out_name]
+
+        # Every published variable, constituents included: PyCATSHOO refuses
+        # setValue on one its solver does not know about, and the refusal lands
+        # at the first integration step rather than here.
+        for var in interface.every_variable():
+            system.pdmp_add_explicit_variable(var)
+
+        self.emit_republications[out_name] = read
+
+        if self.emit_equation_registered:
+            return
+
+        system.pdmp_add_equation_method(
+            "compute_controls", self, allocate_measurement_equation_order(system)
+        )
+        self.emit_equation_registered = True
+
+    def compute_controls(self) -> None:
+        """PDMP equation: refresh every republication this controller carries.
+
+        One equation for the whole component, as ``compute_measurements`` is on
+        an ``ObjFlow``. The gain is applied by
+        :meth:`muscadet.MeasurementOut.publish`, so what a mode clamps there
+        reaches every reading this output carries and nothing else.
+        """
+        for out_name, read in self.emit_republications.items():
+            self.controls_out[out_name].publish(read())
 
     # ------------------------------------------------------------------
     # Aggregation kinks (R41)
