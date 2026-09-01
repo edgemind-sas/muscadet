@@ -1402,6 +1402,12 @@ def ctrl_node_thresholds(node, input_name):
     operator that carries it. Read through the grammar's own accessors
     (``operand_nodes``, ``inputs_read``) and never by class, which is what
     keeps this module free of an import of the controller unit.
+
+    The DECLARED number, deliberately, and since R44 that is the initial value
+    of a variable an instance may have been tuned away from and a failure mode
+    may move. What this renders is what somebody wrote, which is what a message
+    about a loop in a declaration has to name; the loop itself does not depend
+    on the number.
     """
     operands = node.operand_nodes()
 

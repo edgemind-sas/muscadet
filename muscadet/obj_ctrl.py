@@ -85,13 +85,58 @@ An output declaring no ``emit`` keeps the hand-written value
 :meth:`CtrlSignalOut.publish` and :meth:`muscadet.MeasurementOut.publish` give
 it, which is what a test drives and what the skeleton has always done.
 
+**Every number the grammar carries is a VARIABLE of the model** (R44). A
+threshold, a band's two edges and a republication's gain are engine variables
+on the controller, not constants captured in the closures that read them. That
+is one change with three consequences, and the third is the one this module was
+missing: two instances of one class can be tuned to different thresholds, an
+indicator can name a threshold as its target, and a **failure mode can move
+one**. While a threshold was a captured float there was no value anywhere for
+any of the three to reach, and none of them failed loudly -- a model simply
+could not be written.
+
+Three effects therefore reach a controller output, each an ordinary component
+variable a ``cod3s.ObjFM*`` names by its exact basename:
+
+============================================ ====================================
+``{output}_level_gain``                      a value output's publication, scaled
+``{output}_forced`` / ``{output}_forced_value``  that publication, replaced
+``{output}_signal_available``                a boolean output, blinded
+============================================ ====================================
+
+The exact-name spelling is not a fallback, it is the only one available: a
+controller is a peer of ``ObjFlow`` and declares no flow at all, so the
+muscadet regex-on-flows spelling of :class:`muscadet.ObjFailureMode` has
+nothing to match on it.
+
+**None of these endpoints is reinitialised, and a mode owes both polarities.**
+The PyCATSHOO flag governs the reset at every STEP, and a parameter reset at
+every step would flap against the standing clamp of the mode holding it -- an
+automaton condition reading such a threshold would flap with it. So they hold
+what was written, which means a mode that moves one hands it back explicitly,
+exactly as :func:`muscadet.derating.release_deratings` makes a mode hand back a
+rate. The engine still restores every declared init between Monte Carlo
+sequences, so nothing leaks from one run to the next. ``{name}_level_gain`` is
+the one endpoint that IS reinitialised: it belongs to
+:class:`muscadet.MeasurementOut`, which an ``ObjFlow`` shares, and it is left
+exactly as it was.
+
+**Why blinding a boolean output needs an automaton of its own.** A signal
+variable is not reinitialised either -- it is a state, not a pulse -- so it
+does not fall back when the clamp on its availability is released. Handing the
+availability back therefore has to RE-EVALUATE the output, on the returning
+edge as much as on the leaving one, and a controller re-evaluates on the
+notification of an automaton and on nothing else. Hence one two-state automaton
+per boolean output carrying a grammar, whose state IS "this output is blinded"
+(:meth:`ObjCtrl.add_blinding_automaton`). It is deliberately NOT watched: its
+condition is a boolean written by a discrete event, so there is no crossing for
+the integration manager to root-find.
+
 **Scope of this module today.** A controller declares, builds, connects,
 reduces several sources on one input (R40), declares that reduction's kinks
-(R41) and compiles its outputs from the closed grammar (R42). The ordering of
-controllers among themselves is a separate unit. So is making a threshold a
-VARIABLE of the model that a failure mode can move: a threshold is an ordinary
-parameter here, while the gain of a republication is already
-``{name}_level_gain``, the variable that unit will clamp.
+(R41), compiles its outputs from the closed grammar (R42) and exposes that
+grammar's numbers to whoever tunes, observes or breaks them (R44). The ordering
+of controllers among themselves is a separate unit.
 """
 
 import typing
@@ -247,6 +292,43 @@ CTRL_BAND_EDGE_OPERATORS = {
     CTRL_BAND_BELOW: ("<=", ">"),
 }
 
+#: What a comparison's threshold variable is named from: ``{output}{path}_
+#: threshold``, ``path`` being the node's POSITION in the output's tree, the
+#: very one :meth:`ObjCtrl.emit_automaton_base` names the automata from. Two
+#: comparisons on one input against two levels are therefore two variables, and
+#: a model rebuilt names them the same way.
+CTRL_PARAM_THRESHOLD = "threshold"
+
+#: What a band's activation edge is named from.
+CTRL_PARAM_ACTIVATE = "activate"
+
+#: What a band's release edge is named from.
+CTRL_PARAM_RELEASE = "release"
+
+#: Every number of the grammar that becomes a variable of the model (R44), in
+#: the order a node declares them.
+CTRL_PARAMS = (CTRL_PARAM_THRESHOLD, CTRL_PARAM_ACTIVATE, CTRL_PARAM_RELEASE)
+
+#: The variable a failure mode clamps to blind a BOOLEAN output:
+#: ``{output}_signal_available``, created at True. False makes the output carry
+#: its declared default -- for a control port, no order at all -- while
+#: everything upstream of it goes on being right.
+CTRL_AVAILABLE_SUFFIX = "signal_available"
+
+#: The variable a failure mode raises to force a VALUE output:
+#: ``{output}_forced``, created at False.
+CTRL_FORCED_SUFFIX = "forced"
+
+#: What a forced VALUE output publishes instead of its reading:
+#: ``{output}_forced_value``, created at 0. Two variables and not one because a
+#: number has no rest value a single flag could stand for -- which is exactly
+#: what a boolean output's default IS, and why blinding one takes no second
+#: variable.
+CTRL_FORCED_VALUE_SUFFIX = "forced_value"
+
+#: What the automaton carrying a boolean output's blinding is named from.
+CTRL_BLINDING_SUFFIX = "blinding"
+
 #: Conjunction: every operand holds.
 CTRL_LOGIC_AND = "and"
 
@@ -328,8 +410,10 @@ class CtrlCompare(CtrlNode):
     threshold: float = pydantic.Field(
         ...,
         description=(
-            "The level the reading is compared to. An ordinary parameter here; "
-            "making it a variable a failure mode can move is a later unit."
+            "The level the reading is compared to. The INITIAL value of "
+            "'{output}{path}_threshold' (R44): what the comparison reads is "
+            "that variable, so an instance may be tuned away from its class, "
+            "an indicator may name it and a failure mode may move it."
         ),
     )
 
@@ -381,13 +465,18 @@ class CtrlBand(CtrlNode):
     )
 
     activate: float = pydantic.Field(
-        ..., description="The level the band switches ON at"
+        ...,
+        description=(
+            "The level the band switches ON at, and the initial value of "
+            "'{output}{path}_activate' (R44)."
+        ),
     )
 
     release: typing.Optional[float] = pydantic.Field(
         None,
         description=(
-            "The level it switches OFF at. None -- the default -- coincides "
+            "The level it switches OFF at, and the initial value of "
+            "'{output}{path}_release' (R44). None -- the default -- coincides "
             "with the activation level, which is the degenerate band: no "
             "hysteresis, and the two edges still mutually exclusive because "
             "the release comparison is strict."
@@ -543,11 +632,16 @@ class CtrlRepublish(CtrlNode):
     **Where the gain lives, and why it matters here.** It is written into
     ``{name}_level_gain``, the public variable :class:`muscadet.MeasurementOut`
     creates on every publication and multiplies everything it publishes by. So
-    the number a model declares here is already the endpoint a failure mode
-    clamps -- a gain of 0 is a dead instrument, a gain of 5 a wild one -- and
-    the unit that makes a mode reach it adds no plumbing to this one. That is
-    also why ``gain_default`` may not be declared beside it: one number, one
-    spelling.
+    the number a model declares here IS the endpoint a failure mode clamps -- a
+    gain of 0 is a dead instrument, a gain of 5 a wild one -- and R44 added no
+    plumbing at all on this side. That is also why ``gain_default`` may not be
+    declared beside it: one number, one spelling.
+
+    A gain of 0 annuls the READING and nothing else: what the channel observes
+    goes on moving underneath it, which is the difference between a dead
+    instrument and an empty tank. Forcing the publication to a number of its
+    own is the other effect, and it is a different one:
+    :data:`CTRL_FORCED_SUFFIX`.
 
     Examples
     --------
@@ -673,7 +767,7 @@ def build_ctrl_node(where: str, spec: typing.Any) -> typing.Optional[CtrlNode]:
 def band_edge_condition(
     read: typing.Callable,
     compare_fun: typing.Callable,
-    level: float,
+    level: typing.Any,
     holds: bool,
 ) -> typing.Callable:
     """Condition of one edge of a band, or of one side of a comparison (R42).
@@ -683,15 +777,52 @@ def band_edge_condition(
     automaton of an aggregation kink (R41): the transition INTO the far state
     fires while the comparison holds, the one back out of it when it stops.
 
-    The reading is taken LIVE, so the automaton and whatever reads the output
-    can never disagree about a value: what the automaton contributes is the
-    STOP at the right date and the notification that re-runs the output there.
+    Both operands are taken LIVE, and for the same reason on each side. The
+    reading is live so that the automaton and whatever reads the output can
+    never disagree about a value: what the automaton contributes is the STOP at
+    the right date and the notification that re-runs the output there. The
+    LEVEL is live because it is a variable of the model since R44 -- an
+    instance is tuned by writing it and a failure mode moves it -- and a level
+    captured here would leave the automaton dating a crossing of the level the
+    declaration named while the output compared against the current one.
+
+    Parameters
+    ----------
+    read : callable
+        ``f() -> float``, the reading this edge compares.
+    compare_fun : callable
+        The comparison, from :func:`muscadet.rules.comparator`.
+    level : PyCATSHOO variable
+        The threshold or band edge, read at every evaluation.
+    holds : bool
+        True for the transition INTO the far state, False for the way back.
     """
 
     def condition() -> bool:
-        satisfied = bool(compare_fun(float(read()), level))
+        satisfied = bool(compare_fun(float(read()), float(level.value())))
 
         return satisfied if holds else (not satisfied)
+
+    return condition
+
+
+def blinding_condition(var: typing.Any, blinded: bool) -> typing.Callable:
+    """Condition of one edge of a boolean output's blinding automaton (R44).
+
+    ``blinded`` selects the direction, as ``holds`` does above: the transition
+    INTO the blinded state fires while the availability is False, the one back
+    out of it when the availability returns.
+
+    Both edges exist, and the returning one is the load-bearing half. A signal
+    variable is not reinitialised -- it is a state, not a pulse -- so releasing
+    the clamp does not put the output back: only a notification re-runs the
+    grammar, and only this automaton's second edge produces one.
+    """
+
+    def condition() -> bool:
+        available = bool(var.value())
+
+        return (not available) if blinded else available
 
     return condition
 
@@ -871,12 +1002,25 @@ class CtrlSignalOut(cod3s.ObjCOD3S):
     The box shape is that of a discrete output's data channel -- ``{name}_out``
     exporting under the alias ``{name}`` -- so a shipped component's control
     port imports it without knowing a controller exists. There is no
-    availability channel beside it: availability is a property of a transported
+    availability CHANNEL beside it: availability is a property of a transported
     quantity, and this carries a signal.
 
     The value is WRITTEN, never derived here: :meth:`publish` is the single
-    seam, used by a test today and by the output grammar tomorrow. Reading it
-    back is :meth:`get_signal`.
+    seam, used by a test and by the output grammar. Reading it back is
+    :meth:`get_signal`.
+
+    **What a failure mode reaches here** (R44): ``{name}_signal_available``, a
+    variable of the component created at True, read at that single seam. False
+    makes the output carry its declared ``default`` -- for a control port, no
+    order at all -- while the reading, the band and the whole of the montage
+    upstream go on being right. That is the blinded instrument, and it is why
+    the effect is not spelled as a value: a boolean output HAS a rest value,
+    and blinding it is publishing that one.
+
+    Blinding a hand-written output takes effect at the next call to
+    :meth:`publish`, there being no grammar to re-run; an output the grammar
+    drives is re-evaluated at the instant the availability turns, in either
+    direction (:meth:`ObjCtrl.add_blinding_automaton`).
     """
 
     model_config = pydantic.ConfigDict(extra="forbid")
@@ -904,6 +1048,16 @@ class CtrlSignalOut(cod3s.ObjCOD3S):
         description="The exported boolean variable, created at declaration",
     )
 
+    var_available: typing.Any = pydantic.Field(
+        None,
+        exclude=True,
+        repr=False,
+        description=(
+            "The public endpoint a failure mode clamps to blind this output "
+            "(R44). Created at True; muscadet never writes it."
+        ),
+    )
+
     def box_name(self) -> str:
         """Name of the box this output exports on."""
         return f"{self.name}_out"
@@ -917,8 +1071,12 @@ class CtrlSignalOut(cod3s.ObjCOD3S):
         """
         return f"{self.name}_signal_out"
 
+    def available_var_name(self) -> str:
+        """Name of the availability endpoint a failure mode clamps (R44)."""
+        return f"{self.name}_{CTRL_AVAILABLE_SUFFIX}"
+
     def add_variables(self, comp: typing.Any) -> None:
-        """Create the exported variable on ``comp``."""
+        """Create the exported variable and its availability endpoint."""
         py_type, pyc_type = get_pyc_type("bool")
         self.var = comp.addVariable(self.var_name(), pyc_type, py_type(self.default))
         # NOT reinitialised, and this is the load-bearing choice of the whole
@@ -935,17 +1093,45 @@ class CtrlSignalOut(cod3s.ObjCOD3S):
         # The counterpart is the write-safety invariant a non-reinitialised
         # gate carries (see ``FlowDiscreteOut.var_fed_available_out_reset``):
         # it can no longer fall back to rest on its own, so whatever drives it
-        # must write BOTH polarities.
+        # must write BOTH polarities. That invariant is exactly what
+        # ``ObjCtrl.add_blinding_automaton`` answers for the availability
+        # endpoint below.
         self.var.setReinitialized(False)
 
+        self.var_available = comp.addVariable(
+            self.available_var_name(), pyc_type, py_type(True)
+        )
+        # Not reinitialised either, and for the reason its own docstring gives
+        # (R44): reset at every step, it would flap against the standing clamp
+        # of the mode holding it. So it keeps what was written, and a mode that
+        # blinds this output hands the availability back itself.
+        self.var_available.setReinitialized(False)
+
     def add_mb(self, comp: typing.Any) -> None:
-        """Export the signal, one box and one alias."""
+        """Export the signal, one box and one alias.
+
+        The availability endpoint is deliberately NOT exported: it is what a
+        failure mode writes, not what a consumer reads. A control port sees one
+        boolean, and a blinded output is indistinguishable from an output whose
+        condition simply does not hold -- which is the whole of the scenario.
+        """
         comp.addMessageBox(self.box_name())
         comp.addMessageBoxExport(self.box_name(), self.var, self.name)
 
     def publish(self, value: typing.Any) -> None:
-        """Write the signal."""
-        self.var.setValue(bool(value))
+        """Write the signal, or the default while this output is blinded (R44).
+
+        The single write seam, so the blinding is honoured whether the value
+        comes from the output grammar or from a hand-written call.
+        """
+        self.var.setValue(bool(value) if self.get_available() else bool(self.default))
+
+    def get_available(self) -> bool:
+        """False while a failure mode holds this output blinded (R44)."""
+        if self.var_available is None:
+            return True
+
+        return bool(self.var_available.value())
 
     def get_signal(self) -> bool:
         """The signal currently carried."""
@@ -953,6 +1139,8 @@ class CtrlSignalOut(cod3s.ObjCOD3S):
 
     def __repr__(self) -> str:
         state = self.get_signal() if self.var is not None else "N/A"
+        if self.var is not None and not self.get_available():
+            state = f"{state} (blinded)"
         return f"{self.__class__.__name__} {self.name} = {state}"
 
     def __str__(self) -> str:
@@ -987,6 +1175,63 @@ class ObjCtrl(cod3s.PycComponent):
     controls_out : list of dict, optional
         Outputs, each ``{"name": ..., "kind": "bool"|"value", ...}``.
 
+    Tuning one instance away from its class (R44)
+    ---------------------------------------------
+    Every number the output grammar carries is a variable of the component, so
+    two instances of one class are separated by writing them. Written BEFORE
+    the run starts, which is when PyCATSHOO takes a write as the variable's
+    INITIAL value, so the tuning survives every Monte Carlo sequence::
+
+        system.comp["SENSOR_LOW"].variable("alarm_threshold").setValue(2.0)
+        system.comp["SENSOR_HIGH"].variable("alarm_threshold").setValue(8.0)
+
+    The same names are what an indicator targets::
+
+        system.add_indicator_var(component="^SENSOR_LOW$", var="^alarm_threshold$")
+
+    What a failure mode reaches, and how it is spelled (R44)
+    --------------------------------------------------------
+    A controller declares no flow, so the muscadet regex-on-flows spelling of
+    :class:`muscadet.ObjFailureMode` has nothing to match on it. The spelling
+    is the engine's own, an exact variable basename on a ``cod3s.ObjFM*``, and
+    the three effects are::
+
+        # a value output's publication, scaled -- 0 is a dead instrument
+        system.add_component(
+            cls="ObjFMDelay", fm_name="dead", targets=["CTRL"],
+            failure_param=6.0,
+            failure_effects={"gauge_level_gain": 0.0},
+            repair_param=2.0,
+            repair_effects={"gauge_level_gain": 1.0},
+        )
+
+        # a value output's publication, replaced by a number of its own
+        system.add_component(
+            cls="ObjFMDelay", fm_name="stuck", targets=["CTRL"],
+            failure_param=4.0,
+            failure_effects={"echo_forced": True, "echo_forced_value": 42.0},
+            repair_param=2.0,
+            repair_effects={"echo_forced": False},
+        )
+
+        # a boolean output blinded: the driven equipment stops being told
+        system.add_component(
+            cls="ObjFMDelay", fm_name="blind", targets=["CTRL"],
+            failure_param=9.0,
+            failure_effects={"fill_signal_available": False},
+            repair_param=3.0,
+            repair_effects={"fill_signal_available": True},
+        )
+
+    **Both directions, always.** None of these endpoints is reinitialised, so
+    releasing a clamp puts nothing back: a mode that moves one hands it back,
+    exactly as :func:`muscadet.derating.release_deratings` makes a mode hand a
+    rate back. A mode that never repairs (``repair_cond=False``) needs no
+    return effect, and models an instrument nobody comes to fix.
+
+    A misspelt endpoint is refused by ``cod3s.ObjFM`` at construction, naming
+    the variable and the target: the surface is closed, so a typo is loud.
+
     Notes
     -----
     A controller is NOT built by :func:`muscadet.build_component`, which owns
@@ -996,6 +1241,13 @@ class ObjCtrl(cod3s.PycComponent):
     the ORDER the two controller sections are declared in, and the two method
     names that declare them, so that a bridge reading that constant places them
     where they belong instead of forking the order.
+
+    What a mode clamps on a VALUE output is read back by the PDMP equation at
+    every integration step, so it is in force from its own event onward and
+    read at the first integration point past it -- the behaviour
+    ``{name}_level_gain`` has always had. What it clamps on a BOOLEAN output is
+    read at the single write seam, and the output is re-evaluated at the
+    instant the availability turns, in either direction.
     """
 
     #: The declaration keys the constructor reads. Anything else is refused by
@@ -1081,6 +1333,25 @@ class ObjCtrl(cod3s.PycComponent):
         #: interface name. Walked by :meth:`compute_controls`, the one PDMP
         #: equation a controller registers.
         self.emit_republications: typing.Dict[str, typing.Callable] = {}
+
+        #: Every number the grammar turned into a variable of the model (R44),
+        #: keyed by the variable's basename: the thresholds of the comparisons
+        #: and the two edges of the bands, in declaration order. What a model
+        #: tunes, what an indicator names, what a failure mode moves.
+        self.emit_params: typing.Dict[str, typing.Any] = {}
+
+        #: The forcing endpoints of each VALUE output that republishes (R44),
+        #: keyed by interface name: ``(flag, value)``. Read by
+        #: :meth:`compute_controls` at every integration step, which is what
+        #: makes a forced publication hold and what makes it retreat.
+        self.emit_forced: typing.Dict[str, typing.Tuple[typing.Any, typing.Any]] = {}
+
+        #: The blinding automaton of each BOOLEAN output carrying a grammar
+        #: (R44), keyed by interface name. Kept apart from
+        #: :attr:`emit_automata`, which is what the output's VALUE compiled to:
+        #: this one carries no threshold and dates no crossing, it only makes
+        #: the output re-evaluate when its availability turns.
+        self.blinding_automata: typing.Dict[str, typing.Any] = {}
 
         #: True once :meth:`compute_controls` is registered as an equation. One
         #: registration covers every republication of the component, as
@@ -1477,11 +1748,18 @@ class ObjCtrl(cod3s.PycComponent):
         nothing -- the silent failure this whole grammar exists to make
         unreachable.
 
+        A boolean output's blinding (R44) is registered on an automaton for the
+        very same reason, and not on the availability variable it reads: the
+        rule is one rule, whatever the nature of what is read.
+
         Returns
         -------
         list
-            The automata built, empty for a republication and for an output
-            emitting nothing.
+            The automata the output's VALUE compiled to, empty for a
+            republication and for an output emitting nothing. The blinding
+            automaton is NOT among them -- it is in
+            :attr:`blinding_automata` -- because it carries no threshold and
+            dates no crossing.
         """
         node = self.controls_emit.get(name)
         automata: typing.List[typing.Any] = []
@@ -1505,7 +1783,13 @@ class ObjCtrl(cod3s.PycComponent):
         def write_signal() -> None:
             interface.publish(read())
 
-        for aut in automata:
+        # The blinding automaton is registered on the SAME method and in the
+        # same breath as the grammar's own: what it announces is that this
+        # output has to be written again, which is the one thing every
+        # automaton here announces.
+        blinding = self.add_blinding_automaton(name)
+
+        for aut in automata if blinding is None else automata + [blinding]:
             aut._bkd.addSensitiveMethod(method_name, write_signal)
 
         # The seed, and it is load-bearing twice over. A signal variable is not
@@ -1524,23 +1808,34 @@ class ObjCtrl(cod3s.PycComponent):
         Depth first, so an operand's automata exist before the combination that
         reads it. ``path`` is what makes an automaton's name a function of its
         POSITION in the tree: two comparisons on the same input against
-        different thresholds are two automata, and they have to be tellable
-        apart in ``automata_d``.
+        different thresholds are two automata -- and two THRESHOLD VARIABLES
+        (R44) -- and they have to be tellable apart in ``automata_d`` and among
+        the component's variables.
         """
         if isinstance(node, CtrlCompare):
             channel = self.controls_in[node.input]
             compare_fun = comparator(node.operator)
-            threshold = float(node.threshold)
+            # Created BEFORE the automaton and handed to it: the condition the
+            # automaton dates and the closure the output reads must consult the
+            # same variable, or the two would answer differently the moment
+            # anything moved the threshold.
+            threshold = self.add_emit_param(
+                out_name, path, CTRL_PARAM_THRESHOLD, node.threshold
+            )
 
-            automata.append(self.add_compare_automaton(out_name, node, path))
+            automata.append(self.add_compare_automaton(out_name, node, path, threshold))
 
             def read_compare() -> bool:
-                return bool(compare_fun(channel.get_reading(), threshold))
+                return bool(compare_fun(channel.get_reading(), threshold.value()))
 
             return read_compare
 
         if isinstance(node, CtrlBand):
-            aut, activated = self.add_band_automaton(out_name, node, path)
+            edges = (
+                self.add_emit_param(out_name, path, CTRL_PARAM_ACTIVATE, node.activate),
+                self.add_emit_param(out_name, path, CTRL_PARAM_RELEASE, node.release),
+            )
+            aut, activated = self.add_band_automaton(out_name, node, path, edges)
             automata.append(aut)
 
             def read_band() -> bool:
@@ -1569,7 +1864,136 @@ class ObjCtrl(cod3s.PycComponent):
         """The name every part of one node's automaton is derived from."""
         return f"{out_name}{path}_{suffix}"
 
-    def add_emit_automaton(self, base, states, conditions):
+    def add_emit_param(self, out_name, path, suffix, value):
+        """Create the variable of ONE number the grammar declared (R44).
+
+        Named ``{output}{path}_{suffix}`` -- the very naming
+        :meth:`emit_automaton_base` gives the automata, so a threshold and the
+        automaton dating its crossing are read off the same position in the
+        tree and a model rebuilt names them the same way.
+
+        NOT reinitialised, and this is the choice the whole endpoint rests on.
+        The PyCATSHOO flag governs the reset at every STEP: a threshold reset
+        at every step would be restored under the standing clamp of the mode
+        holding it, and the watched automaton reading it would flap between the
+        two values inside a single integration step. So it holds what was
+        written, and the counterpart is the one
+        :func:`muscadet.derating.release_deratings` already carries -- what
+        does not fall back on its own has to be handed back. The engine still
+        restores the declared init between Monte Carlo sequences, so a moved
+        threshold leaks into no other run.
+
+        Writing it BEFORE the run starts is how an instance is tuned away from
+        its class: PyCATSHOO takes such a write as the variable's initial
+        value, so the tuning survives every sequence.
+
+        Parameters
+        ----------
+        out_name : str
+            The output whose grammar declares this number.
+        path : str
+            The node's position in that output's tree.
+        suffix : str
+            One of :data:`CTRL_PARAMS`.
+        value : float
+            The declared value, which becomes the variable's initial one.
+
+        Returns
+        -------
+        The PyCATSHOO variable, read live by the condition and by the closure.
+        """
+        basename = self.emit_automaton_base(out_name, path, suffix)
+        py_type, pyc_type = get_pyc_type("float")
+
+        var = self.addVariable(basename, pyc_type, py_type(value))
+        var.setReinitialized(False)
+
+        self.emit_params[basename] = var
+
+        return var
+
+    def add_forcing_params(self, out_name):
+        """Create the forcing endpoints of one VALUE output (R44).
+
+        ``{output}_forced`` and ``{output}_forced_value``: a flag a mode raises
+        and the number the output then publishes instead of its reading. Two
+        variables because a number has no rest value one flag could stand for,
+        which is what a boolean output's declared default IS -- and why
+        blinding one takes no second variable.
+
+        Declared here rather than at :meth:`add_control_out` because only an
+        output the equation refreshes can be forced: what forces a hand-written
+        publication is the hand that writes it.
+
+        Returns
+        -------
+        tuple
+            The flag and the value, in that order.
+        """
+        bool_py, bool_pyc = get_pyc_type("bool")
+        float_py, float_pyc = get_pyc_type("float")
+
+        forced = self.addVariable(
+            f"{out_name}_{CTRL_FORCED_SUFFIX}", bool_pyc, bool_py(False)
+        )
+        forced_value = self.addVariable(
+            f"{out_name}_{CTRL_FORCED_VALUE_SUFFIX}", float_pyc, float_py(0.0)
+        )
+
+        # Not reinitialised, exactly as the thresholds are not: see
+        # ``add_emit_param``. A mode that forces an output hands it back.
+        forced.setReinitialized(False)
+        forced_value.setReinitialized(False)
+
+        self.emit_forced[out_name] = (forced, forced_value)
+
+        return forced, forced_value
+
+    def add_blinding_automaton(self, out_name):
+        """The two-state automaton one BOOLEAN output's blinding compiles to (R44).
+
+        Its state IS "this output is blinded", and what it exists for is the
+        NOTIFICATION on both of its edges. The leaving one could be dispensed
+        with -- a mode blinding an output usually moves something else too --
+        but the returning one cannot: a signal variable is not reinitialised,
+        so releasing the clamp on the availability puts nothing back, and the
+        montage would stay idle with nothing wrong anywhere.
+
+        Registered on an AUTOMATON rather than on the availability variable,
+        which would work just as well on its own terms -- a boolean announces
+        its change -- because a controller re-evaluates on automata and on
+        nothing else. One rule, whatever the nature of what is read.
+
+        Deliberately NOT watched, unlike every other automaton of this module.
+        A watched transition is re-evaluated by the integration manager at
+        every step so it can root-find the date a CONTINUOUS condition turns;
+        this condition is a boolean written by a discrete event, and a discrete
+        event is already an exact date.
+
+        Returns
+        -------
+        The automaton, or ``None`` when the interface carries no availability
+        endpoint -- which is every VALUE output, forced rather than blinded.
+        """
+        interface = self.controls_out[out_name]
+        var = getattr(interface, "var_available", None)
+
+        if var is None:
+            return None
+
+        base = f"{out_name}_{CTRL_BLINDING_SUFFIX}"
+        aut, _ = self.add_emit_automaton(
+            base,
+            ("serving", "blinded"),
+            (blinding_condition(var, True), blinding_condition(var, False)),
+            watched=False,
+        )
+
+        self.blinding_automata[out_name] = aut
+
+        return aut
+
+    def add_emit_automaton(self, base, states, conditions, watched=True):
         """The watched two-state automaton one grammar node compiles to (R42).
 
         The very shape the library already uses to catch a crossing -- a
@@ -1588,6 +2012,14 @@ class ObjCtrl(cod3s.PycComponent):
             The two state suffixes, resting one first.
         conditions : tuple
             The two transition conditions, out of the resting state first.
+        watched : bool
+            Whether the integration manager watches the two transitions. True
+            for everything the output's VALUE compiles to, where the condition
+            turns on a CONTINUOUS reading and a date has to be root-found.
+            False for the blinding automaton of R44, whose condition is a
+            boolean written by a discrete event: there is no crossing to find,
+            and watching it would cost the integrator two evaluations per step
+            for a date it already has exactly.
 
         Returns
         -------
@@ -1632,21 +2064,27 @@ class ObjCtrl(cod3s.PycComponent):
         for trans_name, condition in zip((trans_up, trans_down), conditions):
             aut.get_transition_by_name(trans_name)._bkd.setCondition(condition)
 
-        self.system().pdmp_add_watched_automaton(aut)
+        if watched:
+            self.system().pdmp_add_watched_automaton(aut)
+
         self.automata_d[aut.name] = aut
 
         return aut, aut.get_state_by_name(far)._bkd
 
-    def add_compare_automaton(self, out_name, node, path):
+    def add_compare_automaton(self, out_name, node, path, threshold):
         """The watched automaton one comparison compiles to (R42).
 
         Symmetric with :meth:`add_band_automaton`: a comparison is the band
         whose two edges coincide, read from one side and then the other.
+
+        ``threshold`` is the VARIABLE :meth:`add_emit_param` created (R44), and
+        it is handed in rather than read off the node: the automaton and the
+        output's own closure have to compare against the same number at the
+        same instant, and a mode may move it between two instants.
         """
         base = self.emit_automaton_base(out_name, path, CTRL_OP_COMPARE)
         channel = self.controls_in[node.input]
         compare_fun = comparator(node.operator)
-        threshold = float(node.threshold)
         read = channel.get_reading
 
         aut, _ = self.add_emit_automaton(
@@ -1660,7 +2098,7 @@ class ObjCtrl(cod3s.PycComponent):
 
         return aut
 
-    def add_band_automaton(self, out_name, node, path):
+    def add_band_automaton(self, out_name, node, path, edges):
         """The watched automaton one band compiles to (R42).
 
         Two edges, two conditions, ONE automaton -- and the automaton's state
@@ -1669,22 +2107,26 @@ class ObjCtrl(cod3s.PycComponent):
         reading of the quantity alone can say whether the band is holding,
         because the band's whole business is to answer differently at the same
         level depending on where it came from.
+
+        ``edges`` is the ``(activate, release)`` pair of VARIABLES
+        :meth:`add_emit_param` created (R44). The band's declaration-time check
+        that the release edge sits on the far side of the activation one
+        therefore covers the DECLARED values and not every value the two
+        variables may later hold: a mode is free to invert a band, as it is
+        free to declare any other unusable model.
         """
         base = self.emit_automaton_base(out_name, path, CTRL_OP_BAND)
         channel = self.controls_in[node.input]
         activate_op, release_op = node.edge_operators()
+        activate, release = edges
         read = channel.get_reading
 
         return self.add_emit_automaton(
             base,
             ("released", "activated"),
             (
-                band_edge_condition(
-                    read, comparator(activate_op), float(node.activate), True
-                ),
-                band_edge_condition(
-                    read, comparator(release_op), float(node.release), True
-                ),
+                band_edge_condition(read, comparator(activate_op), activate, True),
+                band_edge_condition(read, comparator(release_op), release, True),
             ),
         )
 
@@ -1695,6 +2137,11 @@ class ObjCtrl(cod3s.PycComponent):
         whole module: the reading it republishes moves inside an integration
         step and announces nothing, so the only way to keep the publication
         current is to recompute it at every step.
+
+        That is also why a VALUE output needs no automaton to be forced (R44),
+        where a boolean one does: the equation runs at every step, so a
+        forcing flag is read the instant it is raised and the instant it is
+        released, in both directions and without anything else to declare.
         """
         system = self.system()
         interface = self.controls_out[out_name]
@@ -1704,6 +2151,8 @@ class ObjCtrl(cod3s.PycComponent):
         # at the first integration step rather than here.
         for var in interface.every_variable():
             system.pdmp_add_explicit_variable(var)
+
+        self.add_forcing_params(out_name)
 
         self.emit_republications[out_name] = read
 
@@ -1722,8 +2171,21 @@ class ObjCtrl(cod3s.PycComponent):
         an ``ObjFlow``. The gain is applied by
         :meth:`muscadet.MeasurementOut.publish`, so what a mode clamps there
         reaches every reading this output carries and nothing else.
+
+        **A forced output publishes its forced value, gain and all** (R44). One
+        publication path and one gain: routing a forced value around the gain
+        would make a mode that kills the gain of a forced instrument a silent
+        no-op, and a silent no-op is the one outcome this module refuses
+        everywhere else. With the gain at its declared 1, forcing publishes
+        exactly the number the mode named.
         """
         for out_name, read in self.emit_republications.items():
+            forced = self.emit_forced.get(out_name)
+
+            if forced is not None and bool(forced[0].value()):
+                self.controls_out[out_name].publish(float(forced[1].value()))
+                continue
+
             self.controls_out[out_name].publish(read())
 
     # ------------------------------------------------------------------
