@@ -47,11 +47,25 @@ controller therefore reads its channels on demand, and the dating of a
 threshold crossing is the business of the watched automata the output grammar
 compiles into, not of a notification.
 
-**Scope of this module today.** A controller declares, builds, connects, and
-reduces several sources on one input (R40). The closed output grammar (compare,
-band, combine, republish) and the ordering of controllers among themselves are
-separate units; the value a ``"bool"`` output carries is written through
-:meth:`CtrlSignalOut.publish` until the grammar writes it.
+**Where an aggregation stops being differentiable** (R41). ``min``, ``max`` and
+``median`` are continuous in their readings and change ARGUMENT -- or
+representative -- when two of them cross. Nothing announces that: the solver
+extrapolates through the kink inside an integration step and picks up the new
+representative at the next watched event, silently and by an amount that
+depends on the step size. So a rank-sensitive input declares one watched
+two-state automaton per PAIR of sources, which is what makes the solver stop AT
+the crossing. ``sum`` and ``mean`` are linear and declare none. The count grows
+as ``N (N - 1) / 2`` and is capped -- see :data:`AGGREGATION_CROSSING_CAP`. The
+library carries kinks of its own that predate this and are NOT declared, its
+allocation and reactant minimums among them; this is the doctrine for what a
+controller introduces, not a sweep of what came before.
+
+**Scope of this module today.** A controller declares, builds, connects,
+reduces several sources on one input (R40) and declares that reduction's kinks
+(R41). The closed output grammar (compare, band, combine, republish) and the
+ordering of controllers among themselves are separate units; the value a
+``"bool"`` output carries is written through :meth:`CtrlSignalOut.publish`
+until the grammar writes it.
 """
 
 import typing
@@ -60,8 +74,17 @@ import pydantic
 
 import cod3s
 
-from .capacity import COMBINE_POLICIES, MeasurementIn, MeasurementOut
-from .common import get_pyc_type
+from .capacity import (
+    COMBINE_MAX,
+    COMBINE_MEAN,
+    COMBINE_MEDIAN,
+    COMBINE_MIN,
+    COMBINE_POLICIES,
+    COMBINE_SUM,
+    MeasurementIn,
+    MeasurementOut,
+)
+from .common import fresh_instant_occ_law, get_pyc_type
 
 #: The CLOSED list an observation input's aggregation is chosen from (R40):
 #: minimum, maximum, mean, median and sum, under the names
@@ -78,6 +101,42 @@ from .common import get_pyc_type
 #: surface and keeps it; that is an inherited exception of that surface, not a
 #: door onto this one. See :meth:`ObjCtrl.check_aggregation`.
 CONTROL_AGGREGATIONS = COMBINE_POLICIES
+
+#: The aggregations that are SENSITIVE TO RANK, and therefore the ones a
+#: crossing of two readings makes non-differentiable (R41). A minimum and a
+#: maximum change ARGUMENT when two readings cross; a median changes
+#: REPRESENTATIVE. The reduced value stays continuous through such a point --
+#: the two readings are equal there -- so nothing is discontinuous and nothing
+#: is refused; what breaks is the derivative, which is what an integration step
+#: extrapolates from.
+AGGREGATION_KINK_POLICIES = (COMBINE_MIN, COMBINE_MAX, COMBINE_MEDIAN)
+
+#: The aggregations that are LINEAR in their readings, and therefore carry no
+#: kink at all: a sum and a mean have the same derivative whatever the order of
+#: their arguments, so a crossing is not an event for them.
+AGGREGATION_SMOOTH_POLICIES = (COMBINE_SUM, COMBINE_MEAN)
+
+#: How many pair crossings ONE aggregating input may declare.
+#:
+#: The count grows as ``N (N - 1) / 2`` in the number of sources, and every
+#: crossing costs the solver two watched transitions it re-evaluates at each
+#: integration step plus, when it happens, two stops.
+#:
+#: 120 crossings is 16 sources. Dimensioned on the four measurements recorded
+#: at the head of ``tests/test_obj_ctrl_kinks_001.py``, not guessed: the cost
+#: of the crossings is SUPERLINEAR in their number -- it grows roughly as the
+#: 1.5th power of the pair count, so as the third power of the source count --
+#: and 120 is the last measured point where the crossings stay under a quarter
+#: of the run time. The reference case
+#: of seven redundant instruments is 21 crossings and costs under 1 %, so the
+#: cap leaves it a factor of six of headroom; what it refuses is a model far
+#: past any voting architecture.
+#:
+#: This is an EARLY refusal, not the guard that matters: the count depends on
+#: what a model wires, so the operational ceiling is a role limit applied by
+#: whoever emits the model. Lowering it on a subclass is a supported seam --
+#: it is read as ``self.CROSSING_CAP`` at every check.
+AGGREGATION_CROSSING_CAP = 120
 
 #: A controller output carrying a BOOLEAN signal, exported on ``{name}_out``
 #: under the alias ``{name}``: the very box shape a discrete input imports, so
@@ -161,6 +220,61 @@ def check_declaration_keys(where, params, accepted):
         f"{where} does not accept declaration key{plural} {unknown_str}; "
         f"it accepts {accepted_str}"
     )
+
+
+def crossing_count(sources: int) -> int:
+    """How many pair crossings ``sources`` readings can produce (R41).
+
+    ``N (N - 1) / 2``: every unordered pair of readings is one place where the
+    rank of the two can swap. Fewer than two readings produce none, which is
+    why a single-source input -- the default one -- costs nothing at all.
+
+    **Every pair is watched, and not only the pairs that currently matter.** A
+    minimum only bends when the crossing involves its current argument, a
+    median only when it involves the middle rank -- but WHICH pairs those are
+    is a function of the state, and the state is precisely what these automata
+    track. Selecting on it would mean knowing the answer before integrating.
+    So the count is the pair count, conservatively, and the cap is set on it.
+    """
+    if sources < 2:
+        return 0
+
+    return sources * (sources - 1) // 2
+
+
+def crossing_pairs(sources: int) -> typing.List[typing.Tuple[int, int]]:
+    """The index pairs of :func:`crossing_count`, in a stable order.
+
+    Ordered ``(0, 1), (0, 2), ..., (1, 2), ...`` so that an automaton's name
+    is a function of the pair alone: the same model rebuilt names the same
+    automata, whatever else changed around it.
+    """
+    return [
+        (first, second)
+        for first in range(sources)
+        for second in range(first + 1, sources)
+    ]
+
+
+def crossing_condition(var, first, second, above):
+    """Condition of one crossing transition of a pair (R41).
+
+    ``above`` selects the direction, exactly as it does for the threshold
+    automaton of a discrete production condition: the transition INTO the
+    "greater" state fires while ``first`` reads above ``second``, the one back
+    out of it when it stops doing so.
+
+    The readings are taken LIVE off the reference, by connection index, so the
+    condition and the reduction can never disagree about a value: they read the
+    same connections of the same reference. ``value(index)`` is what
+    :meth:`muscadet.MeasurementIn.readings` reads too.
+    """
+
+    def condition():
+        holds = float(var.value(first)) > float(var.value(second))
+        return holds if above else (not holds)
+
+    return condition
 
 
 class CtrlSignalOut(cod3s.ObjCOD3S):
@@ -300,6 +414,12 @@ class ObjCtrl(cod3s.PycComponent):
     #: name, BEFORE the engine object exists -- see :meth:`__init__`.
     DECLARATION_KEYS = ("controls_in", "controls_out")
 
+    #: The ceiling on the pair crossings ONE aggregating input may declare
+    #: (R41). Read as ``self.CROSSING_CAP`` at every check, so a subclass
+    #: lowers it by declaring it -- which is what a test of the refusal does,
+    #: and what a deployment wanting a tighter library-side ceiling would do.
+    CROSSING_CAP = AGGREGATION_CROSSING_CAP
+
     def __init__(
         self,
         name,
@@ -336,6 +456,16 @@ class ObjCtrl(cod3s.PycComponent):
         #: Every message box the interfaces have claimed, mapped to the
         #: interface that claimed it. See :meth:`claim_box` for what it buys.
         self.interface_boxes: typing.Dict[str, str] = {}
+
+        #: The crossing automata of each aggregating input, keyed by interface
+        #: name, once :meth:`add_crossing_automata` has run (R41). An input
+        #: that reached it and produced none holds an empty list, which is what
+        #: tells "no kink" apart from "not declared yet".
+        self.crossing_automata: typing.Dict[str, typing.List[typing.Any]] = {}
+
+        #: How many sources each of those inputs was wired to when its automata
+        #: were built. Read back by :meth:`check_crossings_unchanged`.
+        self.crossing_sources: typing.Dict[str, int] = {}
 
         for entry in kwargs.get("controls_in") or []:
             self.add_control_in(**dict(entry))
@@ -586,3 +716,232 @@ class ObjCtrl(cod3s.PycComponent):
         self.controls_out[name] = interface
 
         return interface
+
+    # ------------------------------------------------------------------
+    # Aggregation kinks (R41)
+    # ------------------------------------------------------------------
+
+    def aggregation_has_kinks(self, name: str) -> bool:
+        """True when input ``name`` reduces by a rank-sensitive aggregation.
+
+        The whole of what decides whether an input costs crossing automata:
+        :data:`AGGREGATION_KINK_POLICIES` on one side, and on the other the
+        sum and the mean, which are linear in their readings and therefore have
+        the same derivative whatever order the readings arrive in.
+        """
+        channel = self.controls_in.get(name)
+
+        return channel is not None and channel.combine in AGGREGATION_KINK_POLICIES
+
+    def check_crossing_cap(self, name: str, sources: int) -> None:
+        """Refuse an aggregation over too many sources, naming the ceiling.
+
+        Raises
+        ------
+        ValueError
+            Naming the cap, the count reached and the source count that
+            produced it.
+        """
+        count = crossing_count(sources)
+
+        if count <= self.CROSSING_CAP:
+            return
+
+        raise ValueError(
+            f"Object {self.name()}: controller input {name!r} aggregates by "
+            f"{self.controls_in[name].combine!r} over {sources} sources, which "
+            f"is {count} pair crossings, above the cap of {self.CROSSING_CAP}. "
+            "A rank-sensitive aggregation declares one watched automaton per "
+            "pair of sources, and the pair count grows as N (N - 1) / 2: "
+            "reduce the sources, or aggregate them in stages through a second "
+            "controller"
+        )
+
+    def check_incoming_crossing_cap(self, box: str) -> None:
+        """Refuse, at the connection that breaks it, a cap the model exceeds.
+
+        The EARLY refusal, and deliberately not the guard: the guard is
+        :meth:`add_crossing_automata`, which runs once every connection exists
+        and therefore sees the count whatever route the connections took. This
+        one is worth having because it names the connection that broke the cap,
+        which a refusal raised at the first run cannot do.
+
+        Called by :meth:`muscadet.System.connect` BEFORE the connection is
+        made, so a refused model keeps the wiring it had.
+        """
+        name = self.interface_boxes.get(box)
+
+        if name is None or not self.aggregation_has_kinks(name):
+            return
+
+        channel = self.controls_in[name]
+
+        self.check_crossing_cap(name, channel.var_level.cnctCount() + 1)
+
+    def add_crossing_automata(self, system: typing.Any) -> typing.List[typing.Any]:
+        """Declare every aggregation kink this controller carries (R41).
+
+        Called once per engine system, from
+        :meth:`muscadet.System.prerun_step`, and it has to be called there
+        rather than at declaration: the number of sources is a property of the
+        WIRING, and no connection exists yet when an input is declared.
+
+        Returns
+        -------
+        list
+            The automata built, empty when no input aggregates by rank.
+        """
+        built: typing.List[typing.Any] = []
+
+        for name in self.controls_in:
+            built.extend(self.add_input_crossing_automata(system, name))
+
+        return built
+
+    def add_input_crossing_automata(
+        self, system: typing.Any, name: str
+    ) -> typing.List[typing.Any]:
+        """Declare the kinks of ONE input. See :meth:`add_crossing_automata`."""
+        if name in self.crossing_automata:
+            return []
+
+        channel = self.controls_in[name]
+        sources = channel.var_level.cnctCount()
+        automata: typing.List[typing.Any] = []
+
+        if self.aggregation_has_kinks(name):
+            self.check_crossing_cap(name, sources)
+
+            automata = [
+                self.add_one_crossing_automaton(system, name, first, second)
+                for first, second in crossing_pairs(sources)
+            ]
+
+        # EVERY input is recorded, a mean and a single-source one included, and
+        # an empty list is a real answer: it says this input was looked at and
+        # carries no kink. An input MISSING from the record is a different
+        # thing entirely -- a controller the pre-run step never reached -- and
+        # the two would be indistinguishable if only the kinked ones were kept.
+        self.crossing_automata[name] = automata
+        self.crossing_sources[name] = sources
+
+        return automata
+
+    def add_one_crossing_automaton(
+        self, system: typing.Any, name: str, first: int, second: int
+    ) -> typing.Any:
+        """The watched two-state automaton of one pair of sources (R41).
+
+        The very shape the library already uses three times to catch a
+        crossing -- a capacity's empty/full bounds, a rule set's mode automaton
+        and the threshold automaton of a discrete production condition -- and
+        for the same reason: two INSTANTANEOUS transitions, both registered as
+        watched, so the solver root-finds the date the two readings meet and
+        stops the integration there instead of extrapolating past it.
+
+        The automaton is NOT what the aggregation reads.
+        :meth:`muscadet.MeasurementIn.reduce` reads the same references live,
+        so the two cannot disagree about a value. What the automaton
+        contributes is the STOP at the right date: a continuous reading moving
+        inside an integration step announces no change of its own, so nothing
+        else would.
+
+        Only the reading the controller consumes is watched -- the channel
+        total, what :meth:`muscadet.MeasurementIn.get_reading` answers and what
+        the output grammar compares, bands and republishes. A channel's
+        constituent and fill readings are reduced by the same policy and carry
+        kinks of their own; they belong to the sensor's surface, no controller
+        reads them, and watching them would multiply the automata by the
+        constituent count for nobody.
+        """
+        channel = self.controls_in[name]
+        var = channel.var_level
+
+        base = f"{name}_cross_{first}_{second}"
+        st_le = f"{base}_le"
+        st_gt = f"{base}_gt"
+        trans_up = f"{base}_up"
+        trans_down = f"{base}_down"
+
+        aut = cod3s.PycAutomaton(
+            name=f"{self.name()}_{base}",
+            states=[st_le, st_gt],
+            # Which of the two readings leads cannot be known here: the
+            # connections carry their publishers' defaults until the first
+            # equation has run. The instantaneous transitions settle the
+            # automaton at t = 0, which is one more reason they are watched
+            # rather than merely conditioned.
+            init_state=st_le,
+            transitions=[
+                {
+                    "name": trans_up,
+                    "source": st_le,
+                    "target": st_gt,
+                    "is_interruptible": True,
+                    # A fresh mapping per transition: cod3s rewrites the 'cls'
+                    # entry in place while sanitizing it.
+                    "occ_law": fresh_instant_occ_law(),
+                },
+                {
+                    "name": trans_down,
+                    "source": st_gt,
+                    "target": st_le,
+                    "is_interruptible": True,
+                    "occ_law": fresh_instant_occ_law(),
+                },
+            ],
+        )
+        aut.update_bkd(self)
+
+        aut.get_transition_by_name(trans_up)._bkd.setCondition(
+            crossing_condition(var, first, second, True)
+        )
+        aut.get_transition_by_name(trans_down)._bkd.setCondition(
+            crossing_condition(var, first, second, False)
+        )
+
+        system.pdmp_add_watched_automaton(aut)
+
+        self.automata_d[aut.name] = aut
+
+        return aut
+
+    def crossing_source_counts(self) -> typing.Dict[str, int]:
+        """How many sources each rank-sensitive input reads RIGHT NOW."""
+        return {
+            name: self.controls_in[name].var_level.cnctCount()
+            for name in self.controls_in
+            if self.aggregation_has_kinks(name)
+        }
+
+    def check_crossings_unchanged(self) -> None:
+        """Refuse a run whose controller gained a source since its kinks were declared.
+
+        The automata are built once, at the pre-run step, from the connections
+        that existed then. A source wired after it would be reduced by the
+        aggregation like any other -- ``reduce`` reads ``cnctCount()`` live --
+        and its crossings would be the only ones the solver never stopped at.
+        Nothing raises on that, and nothing is visibly wrong: the model simply
+        overshoots some of its kinks, which is the failure this whole unit
+        exists to remove.
+
+        Raises
+        ------
+        ValueError
+            Naming the input and both counts.
+        """
+        for name, sources in self.crossing_source_counts().items():
+            declared = self.crossing_sources.get(name)
+
+            if declared is None or declared == sources:
+                continue
+
+            raise ValueError(
+                f"Object {self.name()}: controller input {name!r} read "
+                f"{declared} sources when its crossing automata were declared "
+                f"and reads {sources} now. Those automata are built once, at "
+                "the start of the first run, so the crossings of a source "
+                "wired since would never stop the integration and the "
+                "aggregation would overshoot them silently. Wire every "
+                "publisher before the first simulate() / isimu_start()"
+            )

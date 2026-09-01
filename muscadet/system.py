@@ -461,6 +461,7 @@ class System(cod3s.PycSystem):
         """
         if self.prerun_done:
             self.check_model_unchanged_since_prerun()
+            self.check_controller_crossings_unchanged()
             return False
 
         # Counted per ATTEMPT, which is what it says: a step that raised was
@@ -509,7 +510,70 @@ class System(cod3s.PycSystem):
             flows and never take part in the check.
         """
         self._equation_order = register_equation_order(self)
+
+        # After the equation order, and for one reason: a kink automaton is
+        # registered as a WATCHED transition, which creates the PDMP manager if
+        # it does not exist. Running it second means a purely discrete system
+        # has already been left alone by ``register_equation_order`` and is
+        # left alone here too -- see the gate at the head of the method below.
+        self.register_controller_crossings()
+
         return self._equation_order
+
+    def register_controller_crossings(self):
+        """Declare every controller's aggregation kinks to the solver (R41).
+
+        Called from the pre-run step, which is the only moment that satisfies
+        both ends of the problem: every connection exists, so the source count
+        of an aggregating input is known, and no integration has started, so a
+        watched transition still registers.
+
+        **A purely discrete system registers nothing**, and the gate is not a
+        precaution: with nothing integrated there is no step to overshoot, a
+        reading only changes at an event that announces itself, and creating a
+        PDMP manager here would drag such a system onto the continuous solver
+        for no gain at all.
+
+        Returns
+        -------
+        list
+            Every crossing automaton built, over every controller.
+        """
+        if self.pdmp_manager is None:
+            return []
+
+        built = []
+
+        for comp in self.comp.values():
+            declare = getattr(comp, "add_crossing_automata", None)
+
+            if declare is None:
+                continue
+
+            built.extend(declare(self))
+
+        return built
+
+    def check_controller_crossings_unchanged(self):
+        """Refuse a re-entered run whose controllers gained sources since.
+
+        The counterpart, for the kinks of R41, of
+        :meth:`check_model_unchanged_since_prerun`: the pre-run step is
+        one-shot, so a publisher wired after it gets no crossing automaton and
+        its kinks are stepped over in silence.
+
+        Raises
+        ------
+        ValueError
+            Raised by the controller, naming the input and both counts.
+        """
+        for comp in self.comp.values():
+            check = getattr(comp, "check_crossings_unchanged", None)
+
+            if check is None:
+                continue
+
+            check()
 
     # ------------------------------------------------------------------
     # Run entry points -- both must go through the pre-run step
@@ -714,6 +778,8 @@ class System(cod3s.PycSystem):
             interface_target,
         )
 
+        self.check_controller_crossing_cap(component_target, interface_target)
+
         return super().connect(
             component_source,
             interface_source,
@@ -722,6 +788,26 @@ class System(cod3s.PycSystem):
             *args,
             **kwargs,
         )
+
+    def check_controller_crossing_cap(self, component_target, interface_target):
+        """Refuse the connection that takes an aggregation past its cap (R41).
+
+        An EARLY refusal, and it names the connection that broke the ceiling,
+        which the guard at the pre-run step cannot: by then the wiring is done
+        and all that is left to report is a total. Both exist for that reason
+        alone -- the guard is what a model cannot get past, whatever route its
+        connections took.
+
+        Everything that is not a controller input is untouched: a component
+        with no such interface answers nothing to ask.
+        """
+        comp = self.comp.get(component_target)
+        check = getattr(comp, "check_incoming_crossing_cap", None)
+
+        if check is None:
+            return
+
+        check(interface_target)
 
     def measurement_publisher(self, component, interface):
         """What publishes a reading behind an observation box, or None.

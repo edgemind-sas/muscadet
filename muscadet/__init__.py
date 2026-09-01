@@ -46,12 +46,17 @@ from .capacity import (
 )
 from .obj_logic import LogicOr, LogicAnd, ObjLogicGate
 from .obj_ctrl import (
+    AGGREGATION_CROSSING_CAP,
+    AGGREGATION_KINK_POLICIES,
+    AGGREGATION_SMOOTH_POLICIES,
     CONTROL_AGGREGATIONS,
     CTRL_OUT_BOOL,
     CTRL_OUT_KINDS,
     CTRL_OUT_VALUE,
     CtrlSignalOut,
     ObjCtrl,
+    crossing_count,
+    crossing_pairs,
 )
 from .declare import (
     check_spec,
