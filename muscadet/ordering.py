@@ -1725,6 +1725,16 @@ def mark_algebraic_readings(components, by_engine_name, connections_of):
 def find_rate_observation_loops(system, graph):
     """Every instantaneous loop closed by a threshold on an OBSERVED rate (R43).
 
+    Known gap, measured rather than suspected: two sibling sources feeding one
+    consumer, with a controller observing one and driving the other, is accepted.
+    The loop exists, since the rate published by the first depends on what the
+    second produces once the allocation pass lowers it. Neither detector can see
+    it: both close on "upstream BY TRANSPORT", and sibling coupling runs sideways
+    through a shared demand without ever traversing an edge. Closing it means
+    widening ``ContinuousFlowGraph.ancestors``, which also widens the comparison
+    path and would newly refuse the common main-plus-backup shape. In a module
+    where refusing wrongly costs more than missing, that is its own change.
+
     Reads the same system as :func:`build_continuous_flow_graph` and the same
     already-acyclic graph, but takes its edges from the raw wiring of the
     measurement boxes instead of from the flow collections -- which is what

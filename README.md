@@ -700,6 +700,7 @@ Per continuous flow named `f`, MUSCADET creates:
 - `f_capability_in` — on an input flow, the capabilities published by its producers
 - `f_out_rate` — on an output flow, the rate its production is multiplied by, holding `1.0`. The one endpoint a failure mode clamps; see [deratings](#failure-modes-on-a-continuous-output-deratings)
 - `f_out_profile` — on an output flow **that declares a time profile**, the factor currently applied. A read-only publication, rewritten at every step; see [time profiles](#time-profiles-production-as-a-function-of-the-clock)
+- `f_rate_out`: on an output flow, the rate it currently **delivers**, exported read-only so a third party may watch it without consuming it. Not to be confused with `f_out_rate` above, which is the multiplier: this one is the result. An observer imports it on `f_rate_in`; see [controllers](#controllers-reading-a-quantity-publishing-a-signal)
 - `f_fed_in` — on an input flow, the value received: the **sum**, over every incoming connection, of the share that producer allocated to this consumer
 - `f_demand_out` — on an input flow, the demand this consumer publishes upstream
 
@@ -1693,6 +1694,302 @@ rather than printing it:
 cod3s-isimu --factory examples.continuous_01.continuous_01:build_system
 ```
 
+## Controllers: reading a quantity, publishing a signal
+
+A model carries two natures of thing. An `ObjFlow` transports a **conserved quantity**: what leaves one component arrives at another, the sum over a connection is permanent, and that is why a flow takes part in allocation, in the acyclicity check and in the balance sweeps. A **controller** transports a reading, or an order. Nothing is conserved there, and republishing a value creates no matter.
+
+Until 4.0.0 the library had a word for the first nature only, so an instrument had to be written as an `ObjFlow` that transports nothing: discrete flows pressed into carrying a signal, a production condition standing in for a threshold, and a hidden two-state automaton standing in for the memory of a band. `muscadet.ObjCtrl` is the second word. It is a **peer** of `ObjFlow` and not a subclass: it derives straight from the cod3s component, mounts its variables and message boxes by hand as `ObjLogicGate` does, and holds no flow collection at all. A controller is therefore not a node of the continuous flow graph, and none of its links is ever an edge of it.
+
+`SensorContinuous` is unchanged on its surface and now says what it means in this vocabulary: its band and its republication are the same grammar nodes a controller compiles. A model using one has nothing to change.
+
+### A controlled tank, in full
+
+Three instruments watch one tank and publish what they read. A controller votes on the three by median, holds a hysteresis band between 3 and 7, and drives the source that refills the tank. The third instrument drifts: it reports half as much again as the other two.
+
+```python
+import muscadet
+from muscadet.kb.continuous import (
+    CapacityContinuous,
+    ConsumerContinuous,
+    SourceContinuous,
+)
+
+TANK_INIT = 10.0
+HORIZON = 16.0
+
+
+class Instrument(muscadet.ObjFlow):
+    """Reads the tank level and republishes it on a channel of its own."""
+
+    def add_flows(self, gain=1.0, **kwargs):
+        super().add_flows(**kwargs)
+        self.add_measurement_in(name="tank")
+        self.add_measurement_out(
+            name="reading",
+            source="tank",
+            gain_default=gain,  # 1 is an honest instrument
+            level_default=TANK_INIT,  # what it reports before the first step
+        )
+
+
+plant = muscadet.System(name="Controlled tank")
+
+# The tank starts at 10, is drained at 1, and refilled at 2 while it is told to.
+plant.add_component(
+    name="SRC", cls="SourceContinuous", flow="q", rate=2.0, control="fill"
+)
+plant.add_component(
+    name="TANK",
+    cls="CapacityContinuous",
+    flow="q",
+    capacity=100.0,
+    capacity_name="tank",
+    content_init={"q": TANK_INIT},
+    fill_rate=float("inf"),
+)
+plant.add_component(name="SINK", cls="ConsumerContinuous", flow="q", demand=1.0)
+
+plant.connect_flow(source="SRC", target="TANK", flow_name="q")
+plant.connect_flow(source="TANK", target="SINK", flow_name="q")
+
+# Three instruments on one tank. The third one drifts: it reports half as much
+# again as the other two.
+for name, gain in (("I1", 1.0), ("I2", 1.0), ("I3", 1.5)):
+    plant.add_component(name=name, cls="Instrument", gain=gain)
+    plant.connect("TANK", "tank_level_out", name, "tank_level_in")
+
+# The controller: one observation input voting on the three readings, one
+# boolean output holding a band between 3 and 7.
+plant.add_component(
+    name="CTRL",
+    cls="ObjCtrl",
+    controls_in=[{"name": "reading", "aggregate": "median"}],
+    controls_out=[
+        {
+            "name": "fill",
+            "kind": "bool",
+            "emit": {
+                "op": "band",
+                "input": "reading",
+                "direction": "below",
+                "activate": 3.0,
+                "release": 7.0,
+            },
+        }
+    ],
+)
+
+for name in ("I1", "I2", "I3"):
+    plant.connect(name, "reading_level_out", "CTRL", "reading_level_in")
+
+plant.connect("CTRL", "fill_out", "SRC", "fill_in")
+
+# A stop at the horizon, so the session always has somewhere to step to.
+plant.comp["SINK"].add_atm2states(
+    name="horizon",
+    st1="before",
+    st2="after",
+    occ_law_12={"cls": "delay", "time": HORIZON},
+    cond_occ_21=False,
+)
+
+
+def row():
+    """One line of trace: the tank, what each instrument says, what was voted."""
+    ctrl = plant.comp["CTRL"]
+    readings = " ".join(
+        f"{plant.comp[name].measurements_out['reading'].get_level():6.2f}"
+        for name in ("I1", "I2", "I3")
+    )
+
+    return (
+        f"{plant.currentTime():8.4f}"
+        f" {plant.comp['TANK'].capacities['tank'].get_quantity('q'):6.2f}"
+        f" {readings}"
+        f" {ctrl.controls_in['reading'].get_reading():6.2f}"
+        f"  {ctrl.controls_out['fill'].get_signal()}"
+    )
+
+
+plant.isimu_start()
+
+trace = [row()]
+
+while plant.currentTime() < HORIZON:
+    plant.isimu_step_forward()
+    if row() != trace[-1]:
+        trace.append(row())
+
+print(f"{'time':>8} {'level':>6} {'I1':>6} {'I2':>6} {'I3':>6} {'vote':>6}  fill")
+print("\n".join(trace))
+```
+
+which prints:
+
+```
+    time  level     I1     I2     I3   vote  fill
+  0.0000  10.00  10.00  10.00  10.00  10.00  False
+  7.0000   3.00   3.00   3.00   4.50   3.00  False
+  7.0000   3.00   3.00   3.00   4.50   3.00  True
+ 11.0006   7.00   7.00   7.00  10.50   7.00  True
+ 11.0006   7.00   7.00   7.00  10.50   7.00  False
+ 15.0014   3.00   3.00   3.00   4.50   3.00  False
+ 15.0014   3.00   3.00   3.00   4.50   3.00  True
+ 16.0000   4.00   4.00   4.00   6.00   4.00  True
+```
+
+Three things to read off that trace:
+
+- the vote follows the two honest instruments. At t = 7 the drifting one reports 4.50 and the controller acts on 3.00, which is what a median is installed for;
+- the run **stops at the crossing** rather than discovering it at the next integration point. That is why each crossing shows two rows, one before the signal turns and one after;
+- the release lands at 11.0006 and not at 11. A band's release edge is a strict comparison, so that the two edges stay mutually exclusive, and a strict crossing is dated one solver minimum step past the exact value. The activation edge is not strict and lands exact.
+
+### What a controller declares
+
+Two sections, `controls_in` and `controls_out`, and nothing else.
+
+An **observation input** is a measurement channel, the very one the sensor pattern already used. `kind="level"`, the default, reads a capacity level or an instrument's republication, on `{name}_level_in`; `kind="rate"` reads what a continuous output delivers, on `{name}_rate_in`. Either way the channel reads through a PyCATSHOO reference, which carries no setter: an observation cannot be written, takes no share of what it watches, and adds no edge to the graph the acyclicity check walks.
+
+An input observes **one** publisher unless it declares an `aggregate`, which is what lifts the cap and what says how the readings reduce: `"sum"`, `"mean"`, `"median"`, `"min"` or `"max"`, with the meaning [measurement channels](#redundant-instruments-combining-several-readings-on-one-channel) already give them, the even-count median included. There is no way to reach many-to-one without stating the policy.
+
+An **output** carries one of two natures:
+
+| `kind`    | published on                                              | read by                                          |
+|-----------|-----------------------------------------------------------|--------------------------------------------------|
+| `"bool"`  | `{name}_out`, exporting under the alias `{name}`           | a discrete control port, with no adapter on either side |
+| `"value"` | `{name}_level_out`, an ordinary measurement publication    | any observer, a second controller included       |
+
+Both are wired with the plain `connect`, never with `connect_flow`: an information edge is not a flow edge, and it may cross the discrete / continuous boundary a flow edge may not.
+
+```python
+plant.connect("TANK", "tank_level_out", "CTRL", "reading_level_in")   # an observation
+plant.connect("CTRL", "fill_out", "SRC", "fill_in")                   # an order
+plant.connect("CTRL", "gauge_level_out", "CTRL2", "gauge_level_in")   # a controller into a controller
+```
+
+### The four operators
+
+An output says what it carries under `emit`. What may be written there is a composition of exactly four operators:
+
+| `op`        | answers   | what it is                                                            |
+|-------------|-----------|-----------------------------------------------------------------------|
+| `compare`   | a boolean | one reading against one threshold                                     |
+| `band`      | a boolean | two thresholds and the direction they are read in: a hysteresis band   |
+| `combine`   | a boolean | booleans reduced by `and`, `or`, `not` or k-of-n                      |
+| `republish` | a number  | one reading, times a gain                                             |
+
+A minimal declaration of each:
+
+```python
+{"op": "compare", "input": "tank", "operator": ">=", "threshold": 80.0}
+
+{"op": "band", "input": "tank", "direction": "below", "activate": 3.0, "release": 7.0}
+
+{"op": "combine", "logic": "k", "k": 2, "operands": [
+    {"op": "compare", "input": "a", "operator": ">=", "threshold": 1.0},
+    {"op": "compare", "input": "b", "operator": ">=", "threshold": 1.0},
+    {"op": "compare", "input": "c", "operator": ">=", "threshold": 1.0},
+]}
+
+{"op": "republish", "input": "reading", "gain": 2.0}
+```
+
+`compare` takes its `operator` from the vocabulary a rule guard and a discrete production condition already use: `<`, `<=`, `>`, `>=`, `==`, `!=`. `band` declares which side of the activation level its release edge sits on: `"above"` for a high-level detector, whose release must not exceed its activation, `"below"` for a low-level one, whose release must not fall below it. Declaring no `release` makes the two coincide, which is the degenerate band, and a band declared the wrong way round is refused at declaration. `combine` is the only operator whose operands are themselves nodes, so a vote on conditions is written there. `republish` is the only one that answers a number, so it is the only one a `"value"` output may emit, and the three others are the only ones a `"bool"` output may.
+
+An output declaring no `emit` keeps a value written by hand, which is what a test drives.
+
+### What is refused, and why the solver decides it
+
+**No function supplied by the modeller**, whatever it attests:
+
+```python
+controls_out=[{"name": "fill", "kind": "bool", "emit": lambda reading: reading > 3}]
+# ValueError: Object CTRL: controller output 'fill' emit: an output value is a
+# COMPOSITION of the closed operators compare, band, combine, republish, written
+# as a mapping carrying an 'op' key, and <function ...> is not one. A Python
+# callable is refused here whatever it attests ...
+```
+
+The reason is the solver, and it is the one the library already gave on production profiles. A crossing can be dated exactly only on a form the solver **recognises**: a threshold it can root-find, an edge it can watch. Nothing can read a threshold out of arbitrary Python, so nothing could compile one into a watched transition. The fallback would be a sensitive method, and that is worse than slow: a sensitive method fires when a variable announces a change, a quantity moving inside an integration step announces nothing, so such a reading would never re-evaluate at all. A closed grammar is what makes every form compilable. A comparison and each edge of a band become a watched two-state automaton, and the output is re-evaluated on the notification of those automata, which are discrete objects and do announce their state.
+
+The same closure holds on an input's **aggregation**: five names, and a Python callable refused among the rest. An output grammar reasons about what its inputs compute, and it can do that over five names and not over arbitrary Python. `SensorContinuous` accepts a `combine_fun` on its own surface and keeps it, as an exception of that surface and not as a door onto this one.
+
+A **rank-sensitive aggregation declares its kinks.** `min`, `max` and `median` are continuous in their readings but change argument, or representative, when two of those readings cross, and nothing announces that: measured before the fix, a crossing at t = 5 was picked up three time units late and nothing was raised. Such an input therefore registers one watched two-state automaton per **pair** of sources, which is what makes the run stop at the crossing. `sum` and `mean` are linear and register none. The pair count grows as `N (N - 1) / 2` and is capped at 120 crossings, which is 16 sources: the cost of a crossing is superlinear in the count, and 120 is the last measured point where the crossings stay under a quarter of the run time. Seven redundant instruments, the industrial reference case, is 21 crossings and under 1 %.
+
+A **cycle between controllers is refused**, with a `muscadet.ControllerSignalCycleError`, at the first run and before a single equation is registered. One controller's value output is another's observation input, so a chain of them has exactly one evaluation order, upstream first, and a chain closing on itself has none. Controllers take their integers from a band of their own above the measurements, and within that band from a topological sort of the signal graph, so a chain of three settles in one evaluation whatever order the components were declared in. Ties break on declaration order.
+
+Everything above is refused **at declaration**, except what needs the whole wiring to be known: a signal cycle, and a source count past the crossing cap. Those two are refused at the pre-run step, and a declaration refused leaves no variable and no message box behind. The same step refuses a **value output declared after the first run**, because the equation refreshing it is registered there and the step is one-shot: such an output would otherwise publish its declared default for the whole run, with nothing raised to say so.
+
+### Tuning an instance, and what a failure mode reaches
+
+Every number the grammar carries is a **variable of the model**, not a constant captured in a closure: `{output}{path}_threshold`, `{output}{path}_activate` and `{output}{path}_release`, where `path` is the node's position in the output's tree, empty at the root and `_operand_0`, `_operand_1` below a `combine`. Three consequences, and not one of them was reachable before: two instances of one class can be tuned apart, an indicator can name a threshold as its target, and a failure mode can move one.
+
+```python
+# written BEFORE the run: PyCATSHOO takes such a write as the initial value,
+# so the tuning survives every Monte Carlo sequence
+plant.comp["SENSOR_LOW"].variable("alarm_threshold").setValue(2.0)
+plant.comp["SENSOR_HIGH"].variable("alarm_threshold").setValue(8.0)
+```
+
+A controller declares no flow, so the muscadet regex-on-flows spelling of a failure mode has nothing to match on it. The spelling is the engine's own, an exact variable basename on a `cod3s.ObjFM*`, and three effects reach an output:
+
+| variable                                    | effect                                                                       |
+|---------------------------------------------|------------------------------------------------------------------------------|
+| `{output}_level_gain`                       | a value output's publication, scaled: 0 is a dead instrument, 5 a wild one    |
+| `{output}_forced`, `{output}_forced_value`  | that publication, replaced by a number of its own                             |
+| `{output}_signal_available`                 | a boolean output blinded: it publishes its declared default, and the equipment it drives stops being told |
+
+```python
+plant.add_component(
+    cls="ObjFMDelay",
+    fm_name="blind",
+    targets=["CTRL"],
+    failure_param=9.0,
+    failure_effects={"fill_signal_available": False},
+    repair_param=3.0,
+    repair_effects={"fill_signal_available": True},
+)
+```
+
+Blinding is the scenario worth knowing: the reading is still right, the band is still activated, the montage still believes it is filling its tank, and the pump never receives the order. Nothing raises, and the only observable is a trajectory that diverges from the healthy one.
+
+**A mode owes both polarities.** None of these endpoints is reinitialised, so releasing a clamp puts nothing back: a mode that moves one hands it back itself, exactly as a mode derating a continuous output does. A mode that never repairs needs no return effect, and models an instrument nobody comes to fix. The engine still restores every declared init between Monte Carlo sequences, so nothing leaks from one run to the next. A misspelt endpoint is refused by `cod3s.ObjFM` at construction, naming the variable and the target.
+
+### Known limits
+
+Four, named rather than smoothed over.
+
+- **Two sibling sources coupled by a shared demand escape both loop detectors.** Two sources feeding one consumer, with a controller observing one and driving the other, is accepted. The coupling runs sideways through the shared demand and traverses no edge, and the two detectors share one upstream-by-transport criterion. Widening it would newly refuse the ordinary main-plus-backup shape, which is why it is left alone in a module where refusing wrongly is worse than missing.
+- **A republication routed through an `ObjFlow` instrument is neither ordered nor refused.** Controller, instrument, controller is not an edge of the signal graph. The instrument draws from the measurement band, so it is refreshed before the controller feeding it and reads that controller one evaluation late whatever order the controllers take. Put the two controllers side by side, or take the lag knowingly.
+- **A numeric effect is readable from its occurrence date, not at it.** What a mode clamps on a value output is read back by the equation at every integration step, so it stands from its own event onward and is read at the first integration point past it. That is the behaviour `{name}_level_gain` has always had. What a mode clamps on a boolean output is read at the single write seam, and the output is re-evaluated at the instant the availability turns, in either direction.
+- **Two modes clamping one endpoint are last-writer-wins.** There is no composition by minimum here like the one concurrent deratings get on a continuous output. In the same family: a mode may move a band's edges into the inverted configuration the declaration validator refuses, and such a band latches on its first activation and never releases. Documented, and unguarded at run time.
+
+### Breaking change in 4.0.0: `{f}_rate` is no longer an available output flow name
+
+A continuous output now publishes the rate it delivers on `{flow}_rate_out`, export only, paired with `{flow}_rate_in` on the observing side. Reading a rate no longer means becoming a consumer: that box carries no demand alias, so an observer publishes no demand, enters no allocation and takes no share of what it watches.
+
+The box name is derived from the flow name, so a component carrying both `q` and `q_rate` on its **output** side would have two declarations claiming `q_rate_out`. That is refused, and the refusal names both:
+
+```python
+# ValueError: Output flow q: the rate observation box 'q_rate_out' is derived
+# from this flow's name, and output flow 'q_rate' claims the very same box as
+# its own data channel. Rename one of the two: a continuous output always
+# publishes its rate for observation (R38), so the two names cannot coexist on
+# one component
+```
+
+Rename one of the two, and nothing else in the model changes. The refusal bears on the **pair** of names, not on either name alone, so a component carrying `q_rate` and no `q` is untouched, and so is every discrete flow.
+
+What the refusal buys is the separation the whole design rests on. Left through, `q_rate_out` would resolve as the data channel of a flow named `q_rate`: an observation link would enter the continuous flow graph as a transport edge, and the acyclicity check would refuse a loop the model does not close.
+
+### Reading a controller out of a COD3S Platform export
+
+The platform importer builds one. A KB class template carrying `metadata.controller: true` declares a controller: it holds no `interfaces` at all, and states `controls_in` and `controls_out` beside them instead, the placement `capacities` and `rule_sets` already established. Its `emit` tree travels verbatim and is validated by this library's own node builder, so there is one grammar and not two free to drift apart at the first operator added on either side.
+
+`_SUPPORTS_CONTROLLERS` is the marker the platform probes before translating one, and it matters more than most markers of its family: the template carries no interfaces, so an older muscadet would build a component with no port, drop its edges, and run the study to completion on a plant whose regulation is simply absent. A false reliability figure, not an error.
+
+One constraint follows from PyCATSHOO's aliasing rather than from a choice: both ends of an information edge carry the same name. A controller class therefore names its input after the capacity it will observe, and is not reusable across components whose capacities are named differently. That is refused with an explicit message rather than papered over by a hidden rename.
+
 ## Interactive simulation
 
 `simulate()` runs a mission and gives back indicators. An interactive session
@@ -1814,7 +2111,18 @@ a playback and points at reset.
 
 ## Modelling pitfalls
 
-Five things measured on real models, none of them visible from the API, each of which cost a debugging cycle.
+Six things measured on real models, none of them visible from the API, each of which cost a debugging cycle.
+
+### An instrument publishes its default until the first integration step
+
+A `MeasurementOut` carries `level_default`, which is 0 unless declared, until the
+integrator first refreshes it. A band reading a level *through instruments* is
+therefore evaluated against 0 at t = 0, so a low detector activates when the tank
+is in fact full, and the run starts in the wrong state. Nothing is raised.
+
+Reading a capacity directly does not have this defect: its published level starts
+at its content. Declare `level_default` on any instrument whose reading a band or
+a comparison will see at t = 0.
 
 ### The time unit decides whether a model is simulable
 

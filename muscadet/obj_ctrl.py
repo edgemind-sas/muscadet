@@ -313,6 +313,11 @@ CTRL_PARAM_RELEASE = "release"
 CTRL_PARAMS = (CTRL_PARAM_THRESHOLD, CTRL_PARAM_ACTIVATE, CTRL_PARAM_RELEASE)
 
 #: The variable a failure mode clamps to blind a BOOLEAN output:
+#: Two modes clamping one endpoint are last-writer-wins. The min-composition
+#: that ``derating.py`` gives a continuous output has no equivalent here, so a
+#: redundancy model pinching one endpoint from two modes reads whichever wrote
+#: last. Named rather than guarded.
+#:
 #: ``{output}_signal_available``, created at True. False makes the output carry
 #: its declared default -- for a control port, no order at all -- while
 #: everything upstream of it goes on being right.
