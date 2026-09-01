@@ -1443,11 +1443,18 @@ class ObjFlow(cod3s.PycComponent):
         """
         Declares the importing side of a measurement link (R33, R37).
 
-        The observing component reads a level through a pair of PyCATSHOO
-        references, which carry no setter: the link is read-only by
-        construction, exchanges no quantity and enters no allocation. Connect
-        it with ``system.connect(holder, f"{name}_level_out", observer,
-        f"{name}_level_in")``.
+        The observing component reads through PyCATSHOO references, which carry
+        no setter: the link is read-only by construction, exchanges no quantity
+        and enters no allocation. Connect it with ``system.connect(holder,
+        f"{name}_level_out", observer, f"{name}_level_in")``.
+
+        ``kind="rate"`` observes what a continuous OUTPUT delivers instead of a
+        capacity level (R38), over the box pair ``{name}_rate_out`` /
+        ``{name}_rate_in`` that output publishes beside its transport box. Same
+        observer, same read-only construction, and the same "an observer is not
+        a consumer" guarantee: the rate box carries no demand alias, so watching
+        a producer takes no share of what it produces. Read it with
+        ``get_rate()``; there is no fill and no constituent behind a rate.
 
         The channel observes exactly ONE publisher unless ``combine`` (or
         ``combine_fun``) says how several readings reduce to one (R37):
@@ -1466,8 +1473,12 @@ class ObjFlow(cod3s.PycComponent):
             Measurement channel name. Matches the observed publisher's name,
             which is what makes the exported and imported aliases line up.
         **params : dict
-            Additional measurement parameters: ``flows``, ``level_default``,
-            ``fill_default``, ``combine``, ``combine_fun``.
+            Additional measurement parameters: ``kind``, ``flows``,
+            ``level_default``, ``fill_default``, ``rate_default``, ``combine``,
+            ``combine_fun``.
+
+            ``kind`` is what the channel reads: ``"level"`` -- the default, and
+            what muscadet has always carried -- or ``"rate"`` (R38).
 
             ``flows`` names constituents of the observed volume to read
             individually, beside the total. It is what an intensive property
@@ -1631,7 +1642,9 @@ class ObjFlow(cod3s.PycComponent):
             Published channel name.
         **params : dict
             ``source``, ``flows``, ``level_default``, ``fill_default``,
-            ``gain_default``.
+            ``gain_default``. ``source`` names a capacity, a measurement
+            channel or a continuous OUTPUT of this same component; the last of
+            the three republishes that output's delivered rate (R38).
 
             ``flows`` republishes those constituents of the source beside its
             total, so an instrument standing between a multi-constituent

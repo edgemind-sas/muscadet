@@ -52,6 +52,19 @@ list of ``(mode, continuous output)`` pairs whose variable is allocated after
 ``muscadet.declare.DECLARATION_SECTIONS`` rather than restated here: it belongs
 to the library, and three of its refusals are only reachable when the thing
 doing the refusing exists first.
+
+Controllers (2026-09) : a component need not transport anything. A KB class
+template carrying ``metadata.controller: true`` declares a CONTROLLER, the peer
+of ``ObjFlow`` that observes readings and publishes signals (R39, R46). It
+carries no ``interfaces`` at all -- it holds no flow -- and states instead two
+sections beside them, ``controls_in`` and ``controls_out``, the placement
+``capacities`` and ``rule_sets`` already established. A controller is
+materialised as a ``muscadet.ObjCtrl`` OUTSIDE the regular component path, like
+a logic gate and for the same reason: neither has the ``ObjFlow`` construction
+lifecycle. Every edge touching one is an INFORMATION edge, wired with the raw
+``System.connect`` on boxes the parse layer resolves, because neither of its two
+endpoint names is a declared flow. ``_SUPPORTS_CONTROLLERS`` is the marker the
+platform probes before translating one.
 """
 
 from __future__ import annotations
@@ -353,6 +366,154 @@ class DeratingSpec:
     flow: str
 
 
+# ---------------------------------------------------------------------------
+# Controllers (R46)
+# ---------------------------------------------------------------------------
+#
+# A controller observes quantities and publishes signals. It is a PEER of
+# ``ObjFlow`` and not a kind of it (R39): nothing is conserved along a signal,
+# so it declares no flow, enters no allocation and is connected with the raw
+# ``System.connect``. The platform declares one as a class template carrying
+# ``metadata.controller: true`` -- the discriminant, on the model of the logic
+# gate's ``metadata.logic_gate`` -- plus two sections BESIDE ``interfaces``.
+#
+# Beside, and never inside, for a reason stronger than the one that put
+# ``capacities`` there: a controller carries no interface at all, so there is no
+# port for an observation input to be a property of.
+
+#: An observation input reads a capacity LEVEL, or a republished reading.
+CONTROL_IN_LEVEL = "level"
+
+#: An observation input reads the RATE a continuous output delivers (R38).
+CONTROL_IN_RATE = "rate"
+
+#: Every nature an observation input may be declared with.
+_VALID_CONTROL_IN_KINDS = frozenset({CONTROL_IN_LEVEL, CONTROL_IN_RATE})
+
+#: A boolean output: one signal exported on ``{name}_out``, which a discrete
+#: input flow of the same name imports with no adapter.
+CONTROL_OUT_BOOL = "bool"
+
+#: A value output: a publication on ``{name}_level_out``, which any observer
+#: reads -- a second controller included (R4).
+CONTROL_OUT_VALUE = "value"
+
+#: Every nature an output may be declared with.
+_VALID_CONTROL_OUT_KINDS = frozenset({CONTROL_OUT_BOOL, CONTROL_OUT_VALUE})
+
+#: How SEVERAL publishers reduce to one reading on one observation input (R40).
+#: A closed list, and restated here rather than imported from
+#: :data:`muscadet.CONTROL_AGGREGATIONS`: this layer imports no muscadet, and
+#: restating is what makes a misspelt policy a PARSE-time refusal naming the
+#: platform's own key instead of a runtime one naming a muscadet field.
+_VALID_CONTROL_AGGREGATIONS = frozenset({"sum", "mean", "median", "min", "max"})
+
+#: Keys one ``controls_in`` entry may carry -- the mirror of
+#: ``muscadet.obj_ctrl.CONTROL_IN_KEYS``, plus the ``name`` that identifies it.
+_CONTROL_IN_KEYS = frozenset(
+    {
+        "name",
+        "kind",
+        "aggregate",
+        "flows",
+        "level_default",
+        "fill_default",
+        "rate_default",
+    }
+)
+
+#: Keys one BOOLEAN ``controls_out`` entry may carry.
+_CONTROL_OUT_BOOL_KEYS = frozenset({"name", "kind", "default", "emit"})
+
+#: Keys one VALUE ``controls_out`` entry may carry. ``source`` is absent on both
+#: sides of the bridge: what a value output publishes comes from its ``emit``
+#: grammar, and a second way of saying it would be a second answer.
+_CONTROL_OUT_VALUE_KEYS = frozenset(
+    {
+        "name",
+        "kind",
+        "flows",
+        "level_default",
+        "fill_default",
+        "gain_default",
+        "emit",
+    }
+)
+
+
+@dataclass(frozen=True)
+class ControlInSpec:
+    """One observation input declared on a controller class template."""
+
+    name: str
+    # ``level`` or ``rate``. It decides the box the input imports on --
+    # ``{name}_level_in`` or ``{name}_rate_in`` -- and therefore what a
+    # publisher must export on the other end.
+    kind: str = CONTROL_IN_LEVEL
+    # ``None`` is the single-publisher input, capped at one connection by
+    # muscadet. Any policy lifts the cap and says how the readings reduce.
+    aggregate: Optional[str] = None
+    # Constituents of the observed volume to read individually, beside the
+    # total. Passed through verbatim: muscadet deliberately judges a
+    # constituent at CONNECT time, against what the publisher actually holds.
+    flows: Tuple[str, ...] = ()
+    level_default: Optional[float] = None
+    fill_default: Optional[float] = None
+    rate_default: Optional[float] = None
+
+
+@dataclass(frozen=True)
+class ControlOutSpec:
+    """One output declared on a controller class template."""
+
+    name: str
+    kind: str = CONTROL_OUT_BOOL
+    # Boolean outputs only: the value the signal holds before anything writes
+    # it, and the value a blinded output carries.
+    default: Optional[bool] = None
+    # The closed output grammar (R42), verbatim. NOT validated here: what may
+    # be written is a composition of four operators whose one implementation is
+    # ``muscadet.build_ctrl_node``, and a second reading of it in this layer
+    # would be a second grammar, free to drift. It is refused by name, before a
+    # single engine object exists, at ``ObjCtrl`` construction.
+    emit: Optional[Dict[str, Any]] = None
+    # Value outputs only, forwarded to ``muscadet.MeasurementOut``.
+    flows: Tuple[str, ...] = ()
+    level_default: Optional[float] = None
+    fill_default: Optional[float] = None
+    gain_default: Optional[float] = None
+
+
+@dataclass(frozen=True)
+class ControllerSpec:
+    """What a controller class template declares, in declaration order."""
+
+    controls_in: Tuple[ControlInSpec, ...] = ()
+    controls_out: Tuple[ControlOutSpec, ...] = ()
+
+    def input_named(self, name: str) -> Optional[ControlInSpec]:
+        """The observation input of that name, or ``None``."""
+        for entry in self.controls_in:
+            if entry.name == name:
+                return entry
+        return None
+
+    def output_named(self, name: str) -> Optional[ControlOutSpec]:
+        """The output of that name, or ``None``."""
+        for entry in self.controls_out:
+            if entry.name == name:
+                return entry
+        return None
+
+    @property
+    def input_names(self) -> List[str]:
+        return [entry.name for entry in self.controls_in]
+
+    @property
+    def output_names(self) -> List[str]:
+        return [entry.name for entry in self.controls_out]
+
+
 @dataclass(frozen=True)
 class ComponentSpec:
     """One component instance parsed from the model + KB pair."""
@@ -399,6 +560,12 @@ class ComponentSpec:
     # ``(mode, continuous output)`` pairs whose derating variable this
     # component allocates after ``set_flows()``.
     deratings: Tuple[DeratingSpec, ...] = ()
+    # R46 -- controller discriminator. ``None`` for everything that transports
+    # a quantity; a :class:`ControllerSpec` when the component's KB class
+    # carries ``metadata.controller``. Such a component is materialised as a
+    # ``muscadet.ObjCtrl`` (neither ObjFlow nor ObjLogicGate) and holds no flow
+    # at all, which is why ``flows`` stays empty on it.
+    controller: Optional[ControllerSpec] = None
 
 
 @dataclass(frozen=True)
@@ -424,6 +591,14 @@ class ConnectionSpec:
     # existing 3-arg construction keeps working unchanged.
     source_interface: str = ""
     target_interface: str = ""
+    # R46 -- an INFORMATION edge (one touching a controller) is wired with the
+    # raw ``System.connect`` on these two message boxes, and a regular flow edge
+    # leaves both at ``None``. Resolved by the parse layer rather than by the
+    # apply layer: deciding which box an endpoint exports on takes the whole
+    # matrix of natures (level / rate / bool / value), and a second site
+    # deciding it would be a second answer to one question.
+    source_box: Optional[str] = None
+    target_box: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -572,6 +747,20 @@ _SUPPORTS_INSTANCE_CAPACITY_OVERRIDE = True
 # attribute, so the platform can refuse rather than emit a mode clamping a
 # variable nothing created. Cf. the continuous flows chantier (2026-08).
 _SUPPORTS_DERATING_PREALLOCATION = True
+
+# Capability marker (jumeau of _SUPPORTS_DERATING_PREALLOCATION): this muscadet
+# reads a CONTROLLER declaration -- a KB class template carrying
+# ``metadata.controller`` and the two sections ``controls_in`` /
+# ``controls_out`` -- and materialises it as a ``muscadet.ObjCtrl`` (R39, R46),
+# wiring every edge that touches it as an information edge. An older muscadet
+# lacks this attribute, and the degradation it would produce is the worst of the
+# lot: the class template carries no ``interfaces``, so the controller would
+# import as a component with NO port, its observation and signal edges would be
+# refused or dropped, and a study would run to completion on a plant whose
+# regulation is simply absent -- a false reliability figure, not an error. The
+# platform therefore probes this before translating a model that carries one.
+# Cf. the controller chantier (2026-09).
+_SUPPORTS_CONTROLLERS = True
 
 # ---------------------------------------------------------------------------
 # Flow families (2026-08)
@@ -1759,6 +1948,251 @@ def _read_gate_k(attributes: List[Dict[str, Any]], *, comp_name: str) -> int:
     return k
 
 
+# ---------------------------------------------------------------------------
+# Controller templates (R46) -- parse layer
+# ---------------------------------------------------------------------------
+#
+# The discriminant is ``metadata.controller``, truthy. It is required even
+# though the two sections would be enough to guess: a template that declares
+# ``controls_in`` without the marker is far more likely to be a mistake than a
+# shorthand, and guessing would import it as a component with no port and no
+# regulation, which no reading of the built system distinguishes from a plant
+# that was never regulated.
+
+#: Metadata key marking a class template as a controller.
+CONTROLLER_MARKER = "controller"
+
+#: The two sections a controller template declares, and the ONLY two. Their
+#: order is muscadet's, recorded in ``muscadet.declare.DECLARATION_SECTIONS``
+#: and applied by ``ObjCtrl.__init__``; this tuple only says which sections
+#: belong to a controller, so that a section found on the wrong kind of
+#: template can be refused by name.
+_CONTROLLER_SECTIONS = ("controls_in", "controls_out")
+
+#: Sections that belong to a component that TRANSPORTS something, and are
+#: therefore refused on a controller. ``interfaces`` is a mapping and the other
+#: two are lists, so they are named rather than walked.
+_TRANSPORT_SECTIONS = ("interfaces", "capacities", "rule_sets")
+
+
+def _is_controller_template(template: Any) -> bool:
+    """True when the KB class template carries the controller marker.
+
+    ``Any`` and not ``Dict``, like :func:`_gate_kind_of_template`: what a
+    payload puts under a class name is whatever it puts there, and answering
+    "not a controller" is a better outcome than an attribute error.
+    """
+    if not isinstance(template, dict):
+        return False
+    return bool((template.get("metadata") or {}).get(CONTROLLER_MARKER))
+
+
+def _parse_control_in(entry: Dict[str, Any], *, class_name: str) -> ControlInSpec:
+    """One observation input, validated against the closed vocabularies."""
+    where = f"Class {class_name!r}, controller input"
+    _check_entry_keys(entry, _CONTROL_IN_KEYS, where=where)
+
+    name = entry.get("name")
+    if not name or not isinstance(name, str):
+        raise Cod3sPlatformImportError(
+            f"{where}: every entry carries a non-empty 'name'; it is also the "
+            "name of the publisher it observes, the two message-box aliases "
+            "being matched by string equality"
+        )
+
+    kind = entry.get("kind") or CONTROL_IN_LEVEL
+    if kind not in _VALID_CONTROL_IN_KINDS:
+        raise Cod3sPlatformImportError(
+            f"{where} {name!r}: unknown kind {kind!r}, expected one of "
+            f"{sorted(_VALID_CONTROL_IN_KINDS)}"
+        )
+
+    aggregate = entry.get("aggregate")
+    if aggregate is not None and aggregate not in _VALID_CONTROL_AGGREGATIONS:
+        raise Cod3sPlatformImportError(
+            f"{where} {name!r}: unknown aggregate {aggregate!r}, expected one "
+            f"of {sorted(_VALID_CONTROL_AGGREGATIONS)}. Omit it for the "
+            "single-publisher input; there is no way to read several sources "
+            "without saying how their readings reduce"
+        )
+
+    return ControlInSpec(
+        name=name,
+        kind=kind,
+        aggregate=aggregate,
+        flows=_parse_control_flows(entry.get("flows"), where=f"{where} {name!r}"),
+        level_default=_parse_control_number(entry, "level_default", where, name),
+        fill_default=_parse_control_number(entry, "fill_default", where, name),
+        rate_default=_parse_control_number(entry, "rate_default", where, name),
+    )
+
+
+def _parse_control_flows(raw: Any, *, where: str) -> Tuple[str, ...]:
+    """The constituent list of a channel, refusing anything but names."""
+    if raw is None:
+        return ()
+    if not isinstance(raw, list) or not all(
+        isinstance(item, str) and item for item in raw
+    ):
+        raise Cod3sPlatformImportError(
+            f"{where}: 'flows' is a list of constituent names, got {raw!r}"
+        )
+    return tuple(raw)
+
+
+def _parse_control_number(
+    entry: Dict[str, Any], key: str, where: str, name: str
+) -> Optional[float]:
+    """One optional numeric declaration key of a controller interface."""
+    if entry.get(key) is None:
+        return None
+    return _coerce_number(entry[key], where=f"{where} {name!r}: {key}")
+
+
+def _parse_control_out(entry: Dict[str, Any], *, class_name: str) -> ControlOutSpec:
+    """One output, validated against the closed vocabularies.
+
+    ``emit`` is carried through untouched. What may be written there is the
+    closed grammar of :func:`muscadet.build_ctrl_node`, which refuses a
+    malformed one by name and BEFORE the engine object exists; re-deciding it
+    here would be a second grammar, and the two would drift on the first
+    operator either side gained.
+    """
+    where = f"Class {class_name!r}, controller output"
+    kind = entry.get("kind") or CONTROL_OUT_BOOL
+    if kind not in _VALID_CONTROL_OUT_KINDS:
+        raise Cod3sPlatformImportError(
+            f"{where} {entry.get('name')!r}: unknown kind {kind!r}, expected "
+            f"one of {sorted(_VALID_CONTROL_OUT_KINDS)}"
+        )
+
+    accepted = (
+        _CONTROL_OUT_BOOL_KEYS if kind == CONTROL_OUT_BOOL else _CONTROL_OUT_VALUE_KEYS
+    )
+    _check_entry_keys(entry, accepted, where=f"{where} ({kind})")
+
+    name = entry.get("name")
+    if not name or not isinstance(name, str):
+        raise Cod3sPlatformImportError(
+            f"{where}: every entry carries a non-empty 'name'; it is also the "
+            "exported alias, so the importing end must bear the same name"
+        )
+
+    emit = entry.get("emit")
+    if emit is not None and not isinstance(emit, dict):
+        raise Cod3sPlatformImportError(
+            f"{where} {name!r}: 'emit' is a mapping naming an operator, got "
+            f"{type(emit).__name__}"
+        )
+
+    default = entry.get("default")
+    if default is not None and not isinstance(default, bool):
+        raise Cod3sPlatformImportError(
+            f"{where} {name!r}: 'default' is the boolean the signal rests at, "
+            f"got {default!r}"
+        )
+
+    return ControlOutSpec(
+        name=name,
+        kind=kind,
+        default=default,
+        emit=copy.deepcopy(emit) if emit is not None else None,
+        flows=_parse_control_flows(entry.get("flows"), where=f"{where} {name!r}"),
+        level_default=_parse_control_number(entry, "level_default", where, name),
+        fill_default=_parse_control_number(entry, "fill_default", where, name),
+        gain_default=_parse_control_number(entry, "gain_default", where, name),
+    )
+
+
+def _parse_controller_template(
+    template: Dict[str, Any], *, class_name: str
+) -> ControllerSpec:
+    """The two sections of one controller class template, in declaration order."""
+    if _gate_kind_of_template(template) is not None:
+        raise Cod3sPlatformImportError(
+            f"Class {class_name!r} is marked BOTH a controller and a logic "
+            "gate. The two are different components: a gate aggregates "
+            "booleans through its kind, a controller observes readings and "
+            "publishes signals. Declare one or the other."
+        )
+
+    for section in _TRANSPORT_SECTIONS:
+        if template.get(section):
+            raise Cod3sPlatformImportError(
+                f"Class {class_name!r} is a controller and declares "
+                f"{section!r}. A controller transports nothing: it holds no "
+                "flow, therefore no volume and no recipe. Its own two sections "
+                f"are {', '.join(_CONTROLLER_SECTIONS)}."
+            )
+
+    controls_in = tuple(
+        _parse_control_in(entry, class_name=class_name)
+        for entry in _section_entries(template, "controls_in", class_name=class_name)
+    )
+    controls_out = tuple(
+        _parse_control_out(entry, class_name=class_name)
+        for entry in _section_entries(template, "controls_out", class_name=class_name)
+    )
+
+    if not controls_in and not controls_out:
+        raise Cod3sPlatformImportError(
+            f"Class {class_name!r} is a controller and declares neither an "
+            "observation input nor an output. It would observe nothing and "
+            "drive nothing."
+        )
+
+    # One name space across both sections, which is muscadet's own rule
+    # (``ObjCtrl.claim_name``): an output grammar names an INTERFACE, and a name
+    # standing for two of them has no unambiguous answer. Refused here so the
+    # message names the class rather than the engine object.
+    seen: set = set()
+    for entry_name in list(controls_in) + list(controls_out):
+        if entry_name.name in seen:
+            raise Cod3sPlatformImportError(
+                f"Class {class_name!r}: controller interface "
+                f"{entry_name.name!r} is declared twice. An interface name is "
+                "unique across a controller, inputs and outputs together."
+            )
+        seen.add(entry_name.name)
+
+    return ControllerSpec(controls_in=controls_in, controls_out=controls_out)
+
+
+def _build_controller_specs(kb: Dict[str, Any]) -> Dict[str, ControllerSpec]:
+    """Compute ``{class_name: ControllerSpec}`` for every controller template.
+
+    Empty for a KB with no controller -- which is every KB written before this
+    existed, and the reason the whole feature costs such a payload nothing.
+
+    Also the one place a controller SECTION on a non-controller template is
+    refused. Left unchecked, it would be dropped in silence, and a class meant
+    to regulate would build as a plain transporter.
+    """
+    templates = kb.get("component_templates") or {}
+    out: Dict[str, ControllerSpec] = {}
+
+    for class_name, template in templates.items():
+        if not _is_controller_template(template):
+            declared = [
+                section
+                for section in _CONTROLLER_SECTIONS
+                if isinstance(template, dict) and template.get(section)
+            ]
+            if declared:
+                raise Cod3sPlatformImportError(
+                    f"Class {class_name!r} declares {', '.join(declared)} but "
+                    f"carries no {CONTROLLER_MARKER!r} marker in its metadata. "
+                    "Only a controller reads those sections; without the "
+                    "marker the class would build as a plain transporter and "
+                    "the declaration would be lost."
+                )
+            continue
+
+        out[class_name] = _parse_controller_template(template, class_name=class_name)
+
+    return out
+
+
 # Mapping of P1.6 instance-override roles to the flow direction they
 # apply to. The composite key for indexing instance attributes is
 # (name, role) — direction is derived from the role at apply time.
@@ -2296,6 +2730,7 @@ def _parse_components(
     gate_kinds: Optional[Dict[str, str]] = None,
     capacities_lookup: Optional[Dict[str, Tuple[CapacitySpec, ...]]] = None,
     rule_sets_lookup: Optional[Dict[str, Tuple[RuleSetSpec, ...]]] = None,
+    controller_specs: Optional[Dict[str, ControllerSpec]] = None,
 ) -> List[ComponentSpec]:
     """Translate the model components dict into a list of ComponentSpec.
 
@@ -2311,10 +2746,16 @@ def _parse_components(
     for connection validation, but its ``check_fed`` / ``k`` instance
     attributes are read out so the apply layer can build the muscadet
     ``ObjLogicGate``.
+
+    ``controller_specs`` (R46) maps controller class names to what their
+    template declares. A component of such a class carries NO flow -- it
+    transports nothing -- so it takes none of the flow machinery above: no
+    instance override, no capacity, no rule set, no derating.
     """
     gate_kinds = gate_kinds or {}
     capacities_lookup = capacities_lookup or {}
     rule_sets_lookup = rule_sets_lookup or {}
+    controller_specs = controller_specs or {}
     seen_names: set[str] = set()
     out: List[ComponentSpec] = []
     for cid, comp in (components_raw or {}).items():
@@ -2338,6 +2779,27 @@ def _parse_components(
             )
         seen_names.add(name)
         instance_attrs = list(comp.get("attributes") or [])
+
+        controller = controller_specs.get(class_name)
+        if controller is not None:
+            if comp.get("deratings"):
+                raise Cod3sPlatformImportError(
+                    f"Component {name!r} is a controller and declares "
+                    "deratings. A controller carries no continuous output, so "
+                    "it has no rate to derate; what a failure mode reaches on "
+                    "one is its output endpoints, named exactly."
+                )
+            out.append(
+                ComponentSpec(
+                    id=cid,
+                    name=name,
+                    class_name=class_name,
+                    flows=[],
+                    metadata={"platform_id": cid, "attributes_initial": instance_attrs},
+                    controller=controller,
+                )
+            )
+            continue
 
         gate_kind = gate_kinds.get(class_name)
         if gate_kind is not None:
@@ -2406,6 +2868,236 @@ def _parse_components(
     return out
 
 
+# ---------------------------------------------------------------------------
+# Information edges (R46) -- the branch neither flow validation applies to
+# ---------------------------------------------------------------------------
+#
+# An edge touching a controller carries a READING or a SIGNAL, never a
+# quantity. Its two endpoint names are therefore validated against DIFFERENT
+# vocabularies, and neither of them is the flow vocabulary the regular branch
+# below checks: on the publishing end a capacity name, a continuous output's
+# name or a controller output's name; on the observing end a controller's
+# observation input, or -- for a boolean signal alone -- a discrete input flow.
+#
+# One rule spans them all and is checked last, because a name may be legitimate
+# on each end and still not line up: PyCATSHOO matches an import to an export by
+# ALIAS, and every alias here is derived from the interface name, so the two
+# ends of an information edge must bear the SAME name. Left to the engine, the
+# mismatch fails the whole ``connect`` on a missing alias, which names neither
+# of the two declarations that disagreed.
+
+
+def _control_in_box(entry: ControlInSpec) -> str:
+    """The box an observation input imports on, per its nature (R38)."""
+    if entry.kind == CONTROL_IN_RATE:
+        return f"{entry.name}_rate_in"
+    return f"{entry.name}_level_in"
+
+
+def _observation_input(
+    conn_id: str, *, tgt: ComponentSpec, tgt_iface: str
+) -> ControlInSpec:
+    """The observation input an edge lands on, or a refusal naming what exists."""
+    controller = tgt.controller
+    if controller is None:
+        raise Cod3sPlatformImportError(
+            f"Connection {conn_id!r}: {tgt.name!r} is not a controller, so it "
+            f"declares no observation input {tgt_iface!r}. A published reading "
+            "is read by a controller; a flow carries a quantity and is wired "
+            "as a flow."
+        )
+
+    entry = controller.input_named(tgt_iface)
+    if entry is None:
+        raise Cod3sPlatformImportError(
+            f"Connection {conn_id!r}: {tgt_iface!r} is not an observation "
+            f"input of controller {tgt.name!r} (inputs: "
+            f"{controller.input_names}). A controller declares no flow at all, "
+            "so an edge onto it lands on one of its observation inputs."
+        )
+
+    return entry
+
+
+def _signal_target_box(
+    conn_id: str,
+    *,
+    src: ComponentSpec,
+    src_iface: str,
+    tgt: ComponentSpec,
+    tgt_iface: str,
+) -> str:
+    """The box a BOOLEAN signal is imported on: a discrete input flow's own."""
+    if tgt.controller is not None:
+        raise Cod3sPlatformImportError(
+            f"Connection {conn_id!r}: {src.name}.{src_iface} is a boolean "
+            f"output and {tgt.name!r} is a controller, whose observation "
+            "inputs read numbers. A boolean signal is imported by a discrete "
+            "input flow; to feed another controller, declare the output with "
+            f"kind={CONTROL_OUT_VALUE!r}."
+        )
+
+    inputs = {
+        flow.name
+        for flow in tgt.flows
+        if flow.direction == "input" and flow.flow_family == DISCRETE_FAMILY
+    }
+    if tgt_iface not in inputs:
+        raise Cod3sPlatformImportError(
+            f"Connection {conn_id!r}: {tgt_iface!r} is not a discrete input "
+            f"flow of {tgt.name!r} (discrete inputs: {sorted(inputs)}). A "
+            "controller's boolean signal is imported by a discrete input "
+            "flow: a continuous port carries a quantity, which a signal is not."
+        )
+
+    return f"{tgt_iface}_in"
+
+
+def _observed_publisher_box(
+    conn_id: str,
+    *,
+    src: ComponentSpec,
+    src_iface: str,
+    observed: ControlInSpec,
+) -> str:
+    """The box a transporter publishes an observed quantity on.
+
+    Which of the two it is follows from what the OBSERVER declared it reads, and
+    from nothing on the publishing side: the very same continuous output is a
+    transport port on ``{f}_out`` and a read-only rate export on
+    ``{f}_rate_out``, and only the observer's nature tells the two apart.
+    """
+    if observed.kind == CONTROL_IN_RATE:
+        rates = {
+            flow.name
+            for flow in src.flows
+            if flow.direction == "output" and flow.flow_family == CONTINUOUS_FAMILY
+        }
+        if src_iface not in rates:
+            raise Cod3sPlatformImportError(
+                f"Connection {conn_id!r}: observation input {observed.name!r} "
+                f"reads a rate, and {src_iface!r} is not a continuous output "
+                f"flow of {src.name!r} (continuous outputs: {sorted(rates)}). "
+                "A delivered rate is published on '{flow}_rate_out' by a "
+                "continuous output, and by nothing else."
+            )
+        return f"{src_iface}_rate_out"
+
+    holders = {capacity.name for capacity in src.capacities}
+    if src_iface not in holders:
+        raise Cod3sPlatformImportError(
+            f"Connection {conn_id!r}: observation input {observed.name!r} "
+            f"reads a level, and {src_iface!r} is not a capacity of "
+            f"{src.name!r} (capacities: {sorted(holders)}). A level is "
+            "published on '{name}_level_out' by a capacity, or by another "
+            "controller's value output."
+        )
+    return f"{src_iface}_level_out"
+
+
+def _parse_information_connection(
+    conn_id: str,
+    *,
+    src: ComponentSpec,
+    tgt: ComponentSpec,
+    src_iface: str,
+    tgt_iface: str,
+) -> ConnectionSpec:
+    """One edge touching a controller, resolved to the two boxes it wires."""
+    src_ctrl = src.controller
+
+    if src_ctrl is not None:
+        published = src_ctrl.output_named(src_iface)
+        if published is None:
+            raise Cod3sPlatformImportError(
+                f"Connection {conn_id!r}: {src_iface!r} is not an output of "
+                f"controller {src.name!r} (outputs: {src_ctrl.output_names}). "
+                "A controller declares no flow at all, so an edge leaving it "
+                "leaves one of its outputs."
+            )
+
+        if published.kind == CONTROL_OUT_BOOL:
+            source_box = f"{src_iface}_out"
+            target_box = _signal_target_box(
+                conn_id, src=src, src_iface=src_iface, tgt=tgt, tgt_iface=tgt_iface
+            )
+        else:
+            observed = _observation_input(conn_id, tgt=tgt, tgt_iface=tgt_iface)
+            if observed.kind != CONTROL_IN_LEVEL:
+                raise Cod3sPlatformImportError(
+                    f"Connection {conn_id!r}: {src.name}.{src_iface} publishes "
+                    f"a value on '{src_iface}_level_out', and observation "
+                    f"input {tgt.name}.{tgt_iface} reads a {observed.kind}. "
+                    f"Declare it kind={CONTROL_IN_LEVEL!r}: a rate is "
+                    "published by a continuous output, never by a controller."
+                )
+            source_box = f"{src_iface}_level_out"
+            target_box = _control_in_box(observed)
+    else:
+        observed = _observation_input(conn_id, tgt=tgt, tgt_iface=tgt_iface)
+        target_box = _control_in_box(observed)
+        source_box = _observed_publisher_box(
+            conn_id, src=src, src_iface=src_iface, observed=observed
+        )
+
+    if src_iface != tgt_iface:
+        raise Cod3sPlatformImportError(
+            f"Connection {conn_id!r}: an information edge is matched by alias, "
+            "and both aliases are derived from the interface name, so the two "
+            f"ends must bear the same one -- got {src.name}.{src_iface!r} and "
+            f"{tgt.name}.{tgt_iface!r}. Rename one of the two declarations."
+        )
+
+    return ConnectionSpec(
+        source_component=src.name,
+        target_component=tgt.name,
+        flow_name=src_iface,
+        source_interface=src_iface,
+        target_interface=tgt_iface,
+        source_box=source_box,
+        target_box=target_box,
+    )
+
+
+def _check_observation_fan_in(
+    connections: List[ConnectionSpec], components: List[ComponentSpec]
+) -> None:
+    """Refuse a second publisher on an input that states no reduction (R40).
+
+    muscadet caps a single-source channel at one connection, so the engine
+    already refuses this -- at the SECOND ``connect``, naming a connection
+    limit. Caught here, the message names the input and the closed list of
+    policies, which is what the modeller has to choose from.
+    """
+    by_name = {comp.name: comp for comp in components}
+    seen: set = set()
+
+    for conn in connections:
+        if conn.target_box is None:
+            continue
+
+        target = by_name.get(conn.target_component)
+        controller = target.controller if target is not None else None
+        if controller is None:
+            continue
+
+        entry = controller.input_named(conn.target_interface)
+        if entry is None or entry.aggregate is not None:
+            continue
+
+        key = (conn.target_component, conn.target_interface)
+        if key in seen:
+            raise Cod3sPlatformImportError(
+                f"Controller {conn.target_component!r}: observation input "
+                f"{conn.target_interface!r} is wired to several publishers but "
+                "declares no 'aggregate'. State how the readings reduce "
+                f"({sorted(_VALID_CONTROL_AGGREGATIONS)}), or wire one "
+                "publisher: a silent sum over redundant sources is a wrong "
+                "model, not a default."
+            )
+        seen.add(key)
+
+
 def _parse_connections(
     connections_raw: Dict[str, Dict[str, Any]],
     components: List[ComponentSpec],
@@ -2444,6 +3136,25 @@ def _parse_connections(
             )
         src = by_id[src_id]
         tgt = by_id[tgt_id]
+        if src.controller is not None or tgt.controller is not None:
+            # R46 -- an INFORMATION edge. Neither endpoint name need be a
+            # declared flow, so neither of the two validations below applies;
+            # each end is validated against its OWN set of ports instead.
+            if not isinstance(src_iface, str) or not isinstance(tgt_iface, str):
+                raise Cod3sPlatformImportError(
+                    f"Connection {conn_id!r}: an interface name is a string, "
+                    f"got {src_iface!r} and {tgt_iface!r}"
+                )
+            out.append(
+                _parse_information_connection(
+                    conn_id,
+                    src=src,
+                    tgt=tgt,
+                    src_iface=src_iface,
+                    tgt_iface=tgt_iface,
+                )
+            )
+            continue
         src_outputs = {f.name for f in src.flows if f.direction == "output"}
         tgt_inputs = {f.name for f in tgt.flows if f.direction == "input"}
         if src_iface not in src_outputs:
@@ -2504,6 +3215,7 @@ def _parse_connections(
                 target_interface=src_iface,
             )
         )
+    _check_observation_fan_in(out, components)
     return out
 
 
@@ -2569,8 +3281,11 @@ def parse_platform_export(payload: Dict[str, Any]) -> ImporterContext:
     Raises:
         Cod3sPlatformImportError: payload malformed, KB missing,
             unknown class, dangling component reference, missing
-            interface, duplicate component name, or unsupported
-            ``export_version`` major.
+            interface, duplicate component name, unsupported
+            ``export_version`` major, or a malformed controller declaration
+            (R46) -- a section without its marker, a controller carrying a
+            transport section, an information edge whose two ends do not line
+            up, or several publishers on an input stating no reduction.
     """
     _check_export_version(payload)
     kb = _resolve_kb(payload)
@@ -2579,6 +3294,7 @@ def parse_platform_export(payload: Dict[str, Any]) -> ImporterContext:
 
     kb_lookup = _build_kb_lookup(kb)
     gate_kinds = _build_gate_kinds(kb)
+    controller_specs = _build_controller_specs(kb)
     # Capacities before rule sets, and both after the flows: the same
     # dependency muscadet's own ``DECLARATION_SECTIONS`` encodes, for the same
     # reason -- a capacity names flows, and a rule refuses a capacity name.
@@ -2590,6 +3306,7 @@ def parse_platform_export(payload: Dict[str, Any]) -> ImporterContext:
         gate_kinds,
         capacities_lookup=capacities_lookup,
         rule_sets_lookup=rule_sets_lookup,
+        controller_specs=controller_specs,
     )
     connections = _parse_connections(elements.get("connections") or {}, components)
 
@@ -2815,6 +3532,104 @@ def _create_logic_gate(
                 "class_name": gate.class_name,
                 "platform_id": gate.metadata.get("platform_id"),
                 "logic_gate": gate.gate_kind,
+            }
+        )
+
+
+# ---------------------------------------------------------------------------
+# Controller synthesis (R46) -- apply layer
+# ---------------------------------------------------------------------------
+#
+# A controller is built by ``system.add_component(cls="ObjCtrl", ...)`` and NOT
+# by ``muscadet.build_component``. That function owns the ``ObjFlow``
+# construction lifecycle -- ``partial_init``, ``add_flows``, then one
+# ``set_flows()`` -- and ``ObjCtrl`` is a peer of ``ObjFlow``, not a subclass of
+# it: it has none of those three methods. ``ObjLogicGate`` stands outside the
+# same function for the same reason, and putting a class test inside the one
+# function whose job IS that lifecycle would buy nothing here, since a
+# controller's own constructor declares both its sections itself.
+#
+# Which is also why the declaration ORDER is not forked: ``ObjCtrl.__init__``
+# walks ``controls_in`` and then ``controls_out``, which is the order
+# ``muscadet.declare.DECLARATION_SECTIONS`` records, and it is the library's own
+# implementation of it. Handing both sections to the constructor keeps a second
+# property worth having: the output grammar is refused BEFORE the engine object
+# exists, so a malformed one leaves no half-built component behind.
+
+
+def _control_in_kwargs(entry: ControlInSpec) -> Dict[str, Any]:
+    """Declaration kwargs of one observation input, as ``ObjCtrl`` takes them.
+
+    ``aggregate`` is the interface's own word; the measurement channel
+    underneath says ``combine``, and ``ObjCtrl.add_control_in`` is the one place
+    that translates. Passing ``combine`` here would reach the channel's second
+    key, ``combine_fun``, and with it the Python callable the closed list of
+    policies exists to refuse.
+    """
+    kwargs: Dict[str, Any] = {"name": entry.name, "kind": entry.kind}
+    if entry.aggregate is not None:
+        kwargs["aggregate"] = entry.aggregate
+    if entry.flows:
+        kwargs["flows"] = list(entry.flows)
+    for key in ("level_default", "fill_default", "rate_default"):
+        value = getattr(entry, key)
+        if value is not None:
+            kwargs[key] = value
+    return kwargs
+
+
+def _control_out_kwargs(entry: ControlOutSpec) -> Dict[str, Any]:
+    """Declaration kwargs of one output, as ``ObjCtrl`` takes them."""
+    kwargs: Dict[str, Any] = {"name": entry.name, "kind": entry.kind}
+    if entry.emit is not None:
+        # Copied: a spec is data the caller keeps and may build twice, and
+        # ``build_ctrl_node`` reads the mapping it is handed.
+        kwargs["emit"] = copy.deepcopy(entry.emit)
+
+    if entry.kind == CONTROL_OUT_BOOL:
+        if entry.default is not None:
+            kwargs["default"] = entry.default
+        return kwargs
+
+    if entry.flows:
+        kwargs["flows"] = list(entry.flows)
+    for key in ("level_default", "fill_default", "gain_default"):
+        value = getattr(entry, key)
+        if value is not None:
+            kwargs[key] = value
+    return kwargs
+
+
+def _create_controller(
+    spec: ComponentSpec, controller: ControllerSpec, system: Any
+) -> None:
+    """Instantiate one ``ObjCtrl`` on ``system`` from its parse spec."""
+    kwargs: Dict[str, Any] = {
+        "cls": "ObjCtrl",
+        "name": spec.name,
+        "controls_in": [_control_in_kwargs(entry) for entry in controller.controls_in],
+        "controls_out": [
+            _control_out_kwargs(entry) for entry in controller.controls_out
+        ],
+    }
+    try:
+        comp = system.add_component(**kwargs)
+    except Exception as e:
+        raise Cod3sPlatformImportError(
+            f"Failed to create controller {spec.name!r}: {e}"
+        ) from e
+
+    if (
+        comp is not None
+        and hasattr(comp, "metadata")
+        and isinstance(comp.metadata, dict)
+    ):
+        comp.metadata.update(
+            {
+                "class_name": spec.class_name,
+                "platform_id": spec.metadata.get("platform_id"),
+                "attributes_initial": spec.metadata.get("attributes_initial", []),
+                CONTROLLER_MARKER: True,
             }
         )
 
@@ -3142,8 +3957,14 @@ def apply_to_system(
        restating its order, call ``set_flows()`` once, and pre-allocate the
        derating variable of each declared ``(mode, continuous output)`` pair
        (cf. :func:`_declare_component`).
-    5. After all components and flows are declared, wire connections via
-       ``system.connect_flow``.
+    5. Materialise every **controller** as a ``muscadet.ObjCtrl`` (R46), after
+       the regular components and the logic gates. It is built by
+       ``add_component`` and not by ``muscadet.build_component``, which owns the
+       ``ObjFlow`` lifecycle a peer class does not have.
+    6. After all components and flows are declared, wire connections. An
+       information edge -- one touching a controller -- goes through the raw
+       ``system.connect`` on the two boxes the parse layer resolved; everything
+       else through ``system.connect_flow``.
 
     Output flows are created via the dict-based ``add_flow`` API, which
     resolves ``var_prod_cond`` against ``flows_in ∪ flows_out`` (unlike
@@ -3181,7 +4002,9 @@ def apply_to_system(
     # resolve their source variables at construction time.
     gate_specs = [c for c in ctx.components if c.gate_kind is not None]
     gate_names = {g.name for g in gate_specs}
-    normal_specs = [c for c in ctx.components if c.gate_kind is None]
+    normal_specs = [
+        c for c in ctx.components if c.gate_kind is None and c.controller is None
+    ]
 
     for spec in normal_specs:
         # ``partial_init=True`` skips the ObjFlow constructor's automatic
@@ -3226,8 +4049,39 @@ def apply_to_system(
     for gate in _order_gates(gate_specs, ctx.connections, gate_names):
         _create_logic_gate(gate, system, ctx.connections, gate_names)
 
+    # R46 -- controllers, in declaration order and after everything else. No
+    # ordering among themselves is derived here, unlike the gates: an
+    # ``ObjLogicGate`` resolves its ``cond`` leaves against other components at
+    # CONSTRUCTION, while a controller reads its sources through references
+    # resolved at connection time, so nothing it declares can name a component
+    # that does not exist yet. The order the controllers RUN in is a separate
+    # question, answered by the signal graph at the pre-run step (R45).
+    for spec in ctx.components:
+        controller = spec.controller
+        if controller is None:
+            continue
+        _create_controller(spec, controller, system)
+
     # Connections — once all flows exist.
     for conn in ctx.connections:
+        # R46 -- an information edge, wired raw on the two boxes the parse layer
+        # resolved. First, because neither of its ends need be a flow: falling
+        # through to ``connect_flow`` would look for one and find nothing.
+        if conn.source_box is not None and conn.target_box is not None:
+            try:
+                system.connect(
+                    conn.source_component,
+                    conn.source_box,
+                    conn.target_component,
+                    conn.target_box,
+                )
+            except Exception as e:
+                raise Cod3sPlatformImportError(
+                    f"Failed to connect {conn.source_component}."
+                    f"{conn.source_box} --> {conn.target_component}."
+                    f"{conn.target_box}: {e}"
+                ) from e
+            continue
         # Inbound connections to a gate are NOT wired: the gate reads its
         # sources directly through ``cond`` (no input message box exists
         # on an ObjLogicGate). They only contributed to the gate's cond.

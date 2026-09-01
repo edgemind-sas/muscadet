@@ -242,6 +242,42 @@ DERATING_VAR_FMT = "{mode}_derating_{flow}"
 #: muscadet-specific call.
 RATE_VAR_FMT = "{flow}_out_rate"
 
+#: The name fragment every endpoint of the rate observation link is built from
+#: (R38). ``q`` publishes on ``q_rate_out`` and is read on ``q_rate_in``, under
+#: the alias ``q_rate``. Written once, here, for the reason
+#: :func:`muscadet.capacity.level_alias` exists: publisher and observer are
+#: matched by string equality inside PyCATSHOO, and a convention that drifted by
+#: one underscore fails the whole ``connect``.
+RATE_OBSERVATION_INFIX = "_rate"
+
+#: The box a continuous output publishes its delivered rate on, and the import
+#: that reads it (R38).
+RATE_OBSERVATION_OUT_FMT = "{flow}" + RATE_OBSERVATION_INFIX + "_out"
+RATE_OBSERVATION_IN_FMT = "{flow}" + RATE_OBSERVATION_INFIX + "_in"
+
+#: The two suffixes :meth:`muscadet.System.measurement_publisher` and
+#: :meth:`muscadet.System.measurement_observer` resolve a rate link by.
+RATE_OBSERVATION_OUT_SUFFIX = RATE_OBSERVATION_OUT_FMT.format(flow="")
+RATE_OBSERVATION_IN_SUFFIX = RATE_OBSERVATION_IN_FMT.format(flow="")
+
+
+def rate_alias(flow: str) -> str:
+    """The message-box alias carrying a continuous output's delivered rate.
+
+    The exact counterpart of :func:`muscadet.capacity.level_alias`, and built in
+    one place for the same reason: the export and the import are matched by
+    string equality, and an export naming an alias the importing box does not
+    know fails the whole ``connect`` rather than only that alias.
+    """
+    return f"{flow}{RATE_OBSERVATION_INFIX}"
+
+
+def rate_observation_box(flow: str, port: str) -> str:
+    """Name of the rate observation box of ``flow`` on ``port`` (R38)."""
+    fmt = RATE_OBSERVATION_OUT_FMT if port == "out" else RATE_OBSERVATION_IN_FMT
+
+    return fmt.format(flow=flow)
+
 
 # ----------------------------------------------------------------------
 # Allocation policies (R16) -- closed-form splits of a known quantity
@@ -1074,6 +1110,77 @@ class FlowContinuousOut(FlowContinuous):
         comp.addMessageBoxExport(
             f"{self.name}_out", self.var_capability, f"{self.name}_capability"
         )
+
+        self.add_rate_observation_mb(comp)
+
+    # -- what a third party may LOOK at, without consuming (R38) --------
+
+    def rate_observation_box_name(self) -> str:
+        """Name of this output's rate observation box. ``q`` gives ``q_rate_out``."""
+        return rate_observation_box(self.name, "out")
+
+    def add_rate_observation_mb(self, comp: typing.Any) -> None:
+        """Publish the delivered rate as a read-only export, beside transport (R38).
+
+        **Why a second box.** The transport box ``{f}_out`` is bidirectional: it
+        exports the rate and the capability, and IMPORTS the demand. Its only
+        foreseen importer is a continuous input, so wiring onto it is publishing
+        a demand and entering the allocation -- there was no way to look at a
+        rate without competing for it. This one exports the delivered rate and
+        imports nothing, so an observer is not a consumer: it publishes no
+        demand, appears in no :meth:`consumer_demands`, and takes no share.
+
+        **What it exports is ``var_fed``**, the total this output DELIVERS, and
+        deliberately not ``var_fed_default`` nor the capability: ``var_fed`` is
+        the variable :meth:`restrict_allocation` lowers when a consumer hands a
+        surplus back, so a reader sees the rate after the last restriction
+        rather than a nominal figure nothing carried.
+
+        **Why the clash below is refused** (KD19). The box name is derived from
+        the flow name, so a component carrying both ``q`` and ``q_rate`` on its
+        output side has two declarations claiming ``q_rate_out``. Left alone the
+        engine refuses the second ``addMessageBox`` -- naming a box the modeller
+        never asked for -- and, worse, ``q_rate_out`` would then resolve through
+        :func:`muscadet.ordering.continuous_data_channel` as the data channel of
+        the flow ``q_rate``: an observation link would enter the continuous flow
+        graph as a transport edge, and the acyclicity check would refuse a loop
+        the model does not close. Refused here, where the two names are visible
+        together, the message names them.
+
+        Raises
+        ------
+        ValueError
+            When another output flow of ``comp`` is named ``{this flow}_rate``.
+        """
+        clash = rate_alias(self.name)
+        flows_out = getattr(comp, "flows_out", None) or {}
+
+        if clash in flows_out:
+            raise ValueError(
+                f"Output flow {self.name}: the rate observation box "
+                f"{self.rate_observation_box_name()!r} is derived from this "
+                f"flow's name, and output flow {clash!r} claims the very same "
+                "box as its own data channel. Rename one of the two: a "
+                "continuous output always publishes its rate for observation "
+                "(R38), so the two names cannot coexist on one component"
+            )
+
+        mb_name = self.rate_observation_box_name()
+        comp.addMessageBox(mb_name)
+        comp.addMessageBoxExport(mb_name, self.var_fed, rate_alias(self.name))
+
+    def published_flows(self) -> typing.List[str]:
+        """The constituents this output publishes per flow: none, ever (R38).
+
+        Named to match :meth:`muscadet.capacity.Capacity.published_flows` so
+        that :meth:`muscadet.System.check_measurement_constituents` can ask any
+        publisher the same question. A rate is ONE number: a capacity holds a
+        volume that may be several substances at once and can report each, a
+        rate has nothing to decompose, so an observer asking a rate for a
+        constituent is asking for something no publisher of a rate could ever
+        carry.
+        """
+        return []
 
     def get_var_demand_value(self):
         """Return the total demand published by the downstream consumers."""

@@ -89,6 +89,11 @@ CONSTRUCTOR_KEYS = (
 #:   channel has to exist for that operand to resolve. The channel itself
 #:   depends on nothing -- its own ``flows`` are constituent names of the remote
 #:   volume, not flows of this component;
+#: - ``controls_in`` after the flows: a controller input observes a quantity,
+#:   and one of the two quantities it may observe is the rate a continuous
+#:   OUTPUT publishes (R38), so the flow has to exist for the box to;
+#: - ``controls_out`` after ``controls_in``, because an output says what it is
+#:   made of and names an input to say it;
 #: - ``capacities`` name flows, so they follow them;
 #: - ``measurements_out`` may take their ``source`` from a capacity or from an
 #:   imported channel, so they follow both;
@@ -96,12 +101,24 @@ CONSTRUCTOR_KEYS = (
 #:   ``cons`` map, which is only refusable once those exist;
 #: - ``transfers`` last: a conduit refuses a flow a rule already consumes.
 #:
+#: The two controller sections are declared by :class:`muscadet.ObjCtrl`, which
+#: is a PEER of ``ObjFlow`` and not a subclass of it (R39), so no single
+#: component ever carries both them and the flow sections. What this constant
+#: records for them is the ORDER and the two method names, in the one place the
+#: order is written down, so that a bridge reading it places a controller's
+#: sections without forking the sequence. :func:`build_component` owns the
+#: ``ObjFlow`` construction lifecycle and does not build controllers; a spec
+#: carrying a controller section on a component that has no builder for it is
+#: refused BY NAME below rather than crashing on a missing attribute.
+#:
 #: Every one of these runs BEFORE ``set_flows()``. The two sections that run
 #: after it are handled apart, in :data:`POST_SET_FLOWS_SECTIONS`, because they
 #: need the variables their effects clamp to exist.
 DECLARATION_SECTIONS = (
     ("measurements_in", "add_measurement_in"),
     ("flows", "add_flow"),
+    ("controls_in", "add_control_in"),
+    ("controls_out", "add_control_out"),
     ("capacities", "add_capacity"),
     ("measurements_out", "add_measurement_out"),
     ("rules", "add_rules"),
@@ -642,8 +659,28 @@ def build_component(system, spec):
     comp.add_flows(**class_params)
 
     for section, method_name in DECLARATION_SECTIONS:
-        method = getattr(comp, method_name)
-        for entry in _entries(spec, section, name):
+        entries = _entries(spec, section, name)
+
+        # Resolved only for a section the spec actually carries. Looked up for
+        # every section, an entry of :data:`DECLARATION_SECTIONS` that a given
+        # component class does not build -- the controller sections, which
+        # belong to a PEER of ``ObjFlow`` (R39) -- made EVERY build of EVERY
+        # component fail on a missing attribute, and the failure named a method
+        # rather than a section.
+        if not entries:
+            continue
+
+        method = getattr(comp, method_name, None)
+
+        if method is None:
+            raise ComponentSpecError(
+                f"Component {name}: section {section!r} is declared, but "
+                f"{clsname} has no {method_name}() to build it. A section a "
+                f"spec may carry and the component cannot build is a "
+                f"declaration silently lost"
+            )
+
+        for entry in entries:
             # ``add_flow`` takes the whole mapping positionally, the others take
             # it as keywords. A spec is data the caller keeps and may build
             # twice, so nothing here may write through it -- and ``add_flow``

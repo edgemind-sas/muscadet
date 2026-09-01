@@ -1,7 +1,12 @@
 import cod3s
 
+from .capacity import MEASUREMENT_LEVEL, MEASUREMENT_RATE
 from .obj_logic import LogicOr, LogicAnd
-from .flow_continuous import FlowContinuous
+from .flow_continuous import (
+    FlowContinuous,
+    RATE_OBSERVATION_IN_SUFFIX,
+    RATE_OBSERVATION_OUT_SUFFIX,
+)
 from .ordering import (
     CAPACITY_ORDER_BASE,
     MEASUREMENT_ORDER_BASE,
@@ -29,6 +34,12 @@ FLOW_OUT_SUFFIXES = ("_available_out", "_out")
 #: channel of a discrete trigger flow, whose flow object lives in ``flows_out``
 #: on the receiving component -- see :meth:`System.flow_behind_message_box`.
 FLOW_IN_SUFFIXES = ("_available_in", "_trigger_in", "_in")
+
+#: The box a capacity or a republishing instrument exports its level on, and the
+#: import that reads it (R33). The rate counterparts live in
+#: :mod:`muscadet.flow_continuous`, beside the output that publishes them.
+LEVEL_OUT_SUFFIX = "_level_out"
+LEVEL_IN_SUFFIX = "_level_in"
 
 
 class ModelChangedAfterPrerunError(ValueError):
@@ -450,6 +461,7 @@ class System(cod3s.PycSystem):
         """
         if self.prerun_done:
             self.check_model_unchanged_since_prerun()
+            self.check_controller_crossings_unchanged()
             return False
 
         # Counted per ATTEMPT, which is what it says: a step that raised was
@@ -498,7 +510,70 @@ class System(cod3s.PycSystem):
             flows and never take part in the check.
         """
         self._equation_order = register_equation_order(self)
+
+        # After the equation order, and for one reason: a kink automaton is
+        # registered as a WATCHED transition, which creates the PDMP manager if
+        # it does not exist. Running it second means a purely discrete system
+        # has already been left alone by ``register_equation_order`` and is
+        # left alone here too -- see the gate at the head of the method below.
+        self.register_controller_crossings()
+
         return self._equation_order
+
+    def register_controller_crossings(self):
+        """Declare every controller's aggregation kinks to the solver (R41).
+
+        Called from the pre-run step, which is the only moment that satisfies
+        both ends of the problem: every connection exists, so the source count
+        of an aggregating input is known, and no integration has started, so a
+        watched transition still registers.
+
+        **A purely discrete system registers nothing**, and the gate is not a
+        precaution: with nothing integrated there is no step to overshoot, a
+        reading only changes at an event that announces itself, and creating a
+        PDMP manager here would drag such a system onto the continuous solver
+        for no gain at all.
+
+        Returns
+        -------
+        list
+            Every crossing automaton built, over every controller.
+        """
+        if self.pdmp_manager is None:
+            return []
+
+        built = []
+
+        for comp in self.comp.values():
+            declare = getattr(comp, "add_crossing_automata", None)
+
+            if declare is None:
+                continue
+
+            built.extend(declare(self))
+
+        return built
+
+    def check_controller_crossings_unchanged(self):
+        """Refuse a re-entered run whose controllers gained sources since.
+
+        The counterpart, for the kinks of R41, of
+        :meth:`check_model_unchanged_since_prerun`: the pre-run step is
+        one-shot, so a publisher wired after it gets no crossing automaton and
+        its kinks are stepped over in silence.
+
+        Raises
+        ------
+        ValueError
+            Raised by the controller, naming the input and both counts.
+        """
+        for comp in self.comp.values():
+            check = getattr(comp, "check_crossings_unchanged", None)
+
+            if check is None:
+                continue
+
+            check()
 
     # ------------------------------------------------------------------
     # Run entry points -- both must go through the pre-run step
@@ -703,6 +778,8 @@ class System(cod3s.PycSystem):
             interface_target,
         )
 
+        self.check_controller_crossing_cap(component_target, interface_target)
+
         return super().connect(
             component_source,
             interface_source,
@@ -712,29 +789,94 @@ class System(cod3s.PycSystem):
             **kwargs,
         )
 
-    def measurement_publisher(self, component, interface):
-        """The capacity or publication behind a ``{name}_level_out`` box."""
-        if not interface.endswith("_level_out"):
-            return None
+    def check_controller_crossing_cap(self, component_target, interface_target):
+        """Refuse the connection that takes an aggregation past its cap (R41).
 
+        An EARLY refusal, and it names the connection that broke the ceiling,
+        which the guard at the pre-run step cannot: by then the wiring is done
+        and all that is left to report is a total. Both exist for that reason
+        alone -- the guard is what a model cannot get past, whatever route its
+        connections took.
+
+        Everything that is not a controller input is untouched: a component
+        with no such interface answers nothing to ask.
+        """
+        comp = self.comp.get(component_target)
+        check = getattr(comp, "check_incoming_crossing_cap", None)
+
+        if check is None:
+            return
+
+        check(interface_target)
+
+    def measurement_publisher(self, component, interface):
+        """What publishes a reading behind an observation box, or None.
+
+        Two box shapes, and they are disjoint by construction: a capacity or a
+        republishing instrument exports a LEVEL on ``{name}_level_out``, a
+        continuous output exports its delivered RATE on ``{flow}_rate_out``
+        (R38). Both answer :meth:`published_flows`, which is all
+        :meth:`check_measurement_constituents` asks of a publisher.
+
+        The collections are read DEFENSIVELY, like the flow dicts of
+        :meth:`flow_behind_message_box` and for the same reason: a component
+        need not be an ``ObjFlow``. A peer class -- a logic gate, a controller
+        (R39) -- carries no capacities and no continuous flows at all, and a
+        box of its own whose name happens to end in one of these two suffixes
+        must answer "no publisher here" rather than abort the connection on a
+        missing attribute.
+        """
         comp = self.comp.get(component)
         if comp is None:
             return None
 
-        name = interface[: -len("_level_out")]
+        if interface.endswith(LEVEL_OUT_SUFFIX):
+            name = interface[: -len(LEVEL_OUT_SUFFIX)]
+            capacities = getattr(comp, "capacities", None) or {}
+            published = getattr(comp, "measurements_out", None) or {}
 
-        return comp.capacities.get(name) or comp.measurements_out.get(name)
+            return capacities.get(name) or published.get(name)
+
+        if interface.endswith(RATE_OBSERVATION_OUT_SUFFIX):
+            name = interface[: -len(RATE_OBSERVATION_OUT_SUFFIX)]
+            outputs = getattr(comp, "flows_continuous_out", None) or {}
+
+            return outputs.get(name)
+
+        return None
 
     def measurement_observer(self, component, interface):
-        """The measurement import behind a ``{name}_level_in`` box."""
-        if not interface.endswith("_level_in"):
-            return None
+        """The measurement import behind a ``{name}_level_in`` / ``_rate_in`` box.
 
+        The channel's declared nature has to AGREE with the suffix the box was
+        named for: one class serves both natures (R38), so a channel named ``q``
+        and declared ``kind="rate"`` imports on ``q_rate_in`` and on nothing
+        else. Resolving ``q_level_in`` onto it would hand
+        :meth:`check_measurement_constituents` an observer that is not on the
+        wire being checked.
+
+        A :class:`muscadet.ObjCtrl` answers here too, and deliberately: its
+        observation inputs ARE measurement channels, and it exposes them under
+        this name so the constituent diagnostic reaches a controller instead of
+        leaving it to fail at the engine on a missing alias (R39).
+        """
         comp = self.comp.get(component)
         if comp is None:
             return None
 
-        return comp.measurements_in.get(interface[: -len("_level_in")])
+        for suffix, kind in (
+            (LEVEL_IN_SUFFIX, MEASUREMENT_LEVEL),
+            (RATE_OBSERVATION_IN_SUFFIX, MEASUREMENT_RATE),
+        ):
+            if not interface.endswith(suffix):
+                continue
+
+            observed = getattr(comp, "measurements_in", None) or {}
+            channel = observed.get(interface[: -len(suffix)])
+
+            return channel if channel is not None and channel.kind == kind else None
+
+        return None
 
     def check_measurement_constituents(
         self, component_source, interface_source, component_target, interface_target
@@ -746,6 +888,13 @@ class System(cod3s.PycSystem):
         and the refusal is **atomic**, so the observer loses the total it would
         otherwise have read. Caught here, the modeller is told which
         constituents exist.
+
+        Covers the RATE link of R38 under the same two resolutions, and it has
+        to: a rate publishes no constituent at all, so an observer declaring one
+        is asking a number for a decomposition it cannot have. Left out of this
+        check, that link would reach the engine and fail on the missing alias
+        alone, and the modeller would be told a box does not export
+        ``q_water_level`` rather than that a rate holds nothing.
 
         Silent on everything that is not a measurement-to-measurement link, and
         silent when either end is unknown: this is a diagnostic ahead of the
@@ -773,7 +922,8 @@ class System(cod3s.PycSystem):
             f"constituent{plural} {', '.join(repr(n) for n in missing)}, which "
             f"{component_source} does not publish; it publishes {available}. "
             "A constituent is published by the flows a capacity HOLDS, or by "
-            "the flows= list of a republished measurement"
+            "the flows= list of a republished measurement; a continuous "
+            "output's rate is one number and publishes none"
         )
 
     def auto_connect(

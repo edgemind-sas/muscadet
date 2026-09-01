@@ -23,10 +23,17 @@ def _prod_cond_quantity_reader(source):
     """Zero-arg reader of the quantity a COMPARISON operand reads.
 
     Every flow answers :meth:`FlowModel.live_value`; a measurement link is not
-    a flow and answers ``get_level``, the level of the capacity it observes.
+    a flow and answers ``get_reading`` -- the level of the capacity it observes,
+    or the rate of the continuous output it observes (R38). ``get_reading``
+    rather than ``get_level`` because the named accessors refuse the nature they
+    are not, and a comparison wants a number to threshold whichever nature the
+    channel was declared with.
     """
     reader = getattr(source, "live_value", None)
-    return reader if reader is not None else source.get_level
+    if reader is not None:
+        return reader
+
+    return getattr(source, "get_reading", None) or source.get_level
 
 
 def _prod_cond_state_reader(source):
