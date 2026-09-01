@@ -1970,6 +1970,8 @@ plant.comp["SENSOR_LOW"].variable("alarm_threshold").setValue(2.0)
 plant.comp["SENSOR_HIGH"].variable("alarm_threshold").setValue(8.0)
 ```
 
+A model **imported** from a COD3S Platform export tunes its instances through a channel of its own, which folds the level into the instance's declaration instead of writing the variable afterwards: see *Per-instance thresholds* below.
+
 A controller declares no flow, so the muscadet regex-on-flows spelling of a failure mode has nothing to match on it. The spelling is the engine's own, an exact variable basename on a `cod3s.ObjFM*`, and three effects reach an output:
 
 | variable                                    | effect                                                                       |
@@ -2028,6 +2030,26 @@ The platform importer builds one. A KB class template carrying `metadata.control
 `_SUPPORTS_CONTROLLERS` is the marker the platform probes before translating one, and it matters more than most markers of its family: the template carries no interfaces, so an older muscadet would build a component with no port, drop its edges, and run the study to completion on a plant whose regulation is simply absent. A false reliability figure, not an error.
 
 One constraint follows from PyCATSHOO's aliasing rather than from a choice: both ends of an information edge carry the same name. A controller class therefore names its input after the capacity it will observe, and is not reusable across components whose capacities are named differently. That is refused with an explicit message rather than papered over by a hidden rename.
+
+#### Per-instance thresholds
+
+The levels a controller's outputs switch at are declared on the **class** and tuned on the **instance**: three pumps of one model, three starting levels. The tuning rides on the model component's `attributes` list, the channel the capacity numbers already use, under the single role `controller_threshold`. A `value` of `null` means "take the class's", exactly as it does for a capacity volume.
+
+One role for every threshold, so the identity of the number travels in the attribute **name**: the output, then the chain of operand indices from the output's root node down to the node carrying the number, then the edge.
+
+| attribute name              | what it tunes                                                        |
+|-----------------------------|----------------------------------------------------------------------|
+| `run__threshold`            | the `threshold` of a `compare` sitting at the root of output `run`    |
+| `alarm__op1__activate`      | the activation edge of a `band`, second operand of a root `combine`   |
+| `alarm__op1__op0__release`  | the release edge of a band one level deeper still                     |
+
+The value is folded into a **per-instance copy of the emission grammar**, before a single engine object exists, rather than written onto the variable afterwards. Three things follow, and none of them would from the other route: `ObjCtrl` creates `{output}{path}_{edge}` already holding the instance's level, so PyCATSHOO takes it as the initial value and restores it between Monte Carlo sequences; every semantic refusal of the grammar applies to the **tuned** pair, so a band an override would leave unable to release is refused by name instead of latching on its first activation; and nothing depends on a write landing before the run starts.
+
+An override naming a threshold the class does not declare is **refused**, naming what was asked and listing what exists. The three ways a name can name nothing are one lookup: an unknown output, an operand chain that leads nowhere, an edge the operator does not carry. A stale entry is not dropped, for the reason a stale capacity volume is not: a controller silently reverting to its class level trips at the wrong moment and the study still runs to completion, reporting a figure that is wrong and looks right.
+
+The projection is **not injective** and cannot be made so, the separator being an ordinary character run: an output literally named `x__op0` produces the name `x`'s first operand produces. Injectivity is therefore verified over the set that exists, on a component someone tuned, and the refusal names both colliding thresholds rather than the name they landed on.
+
+`_SUPPORTS_CONTROLLER_THRESHOLD_OVERRIDE` is the marker the platform probes before translating a tuned model. **Measured on the montage of `tests/test_ctrl_threshold_override.py`**, one tank filling at 1 per unit time and three pumps of one class declared at 5 and tuned to 2, 5 and 8: with the channel they switch at 2, 5 and 8, and a band nested inside a combination fires at 3 on the one instance that tuned it. With the channel neutralised, all three switch together at 5 and the nested band never fires at all -- and the session runs to completion either way, which is what makes this the worst degradation of the family rather than a bug someone would notice.
 
 ## Interactive simulation
 

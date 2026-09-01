@@ -65,15 +65,28 @@ lifecycle. Every edge touching one is an INFORMATION edge, wired with the raw
 ``System.connect`` on boxes the parse layer resolves, because neither of its two
 endpoint names is a declared flow. ``_SUPPORTS_CONTROLLERS`` is the marker the
 platform probes before translating one.
+
+Per-instance controller thresholds (2026-09) : the levels a controller's outputs
+switch at are declared on the class and TUNED on the instance, so three pumps of
+one model start at three levels. They ride on the model component's
+``attributes`` list under the single ``controller_threshold`` role, the identity
+of the number travelling in the attribute NAME
+(:func:`controller_threshold_attribute_name`), and are folded into a per-instance
+copy of the emission grammar before any engine object exists -- so the variable
+``ObjCtrl`` creates already holds the instance's level, and every refusal of the
+grammar applies to the tuned declaration. An override naming a threshold the
+class does not declare is REFUSED, never dropped.
+``_SUPPORTS_CONTROLLER_THRESHOLD_OVERRIDE`` is the marker for this channel.
 """
 
 from __future__ import annotations
 
 import copy
+import hashlib
 import logging
 import math
 from dataclasses import dataclass, field, replace
-from typing import Any, Dict, List, Literal, Optional, Tuple, Union
+from typing import Any, Dict, Iterator, List, Literal, Optional, Tuple, Union
 
 logger = logging.getLogger(__name__)
 
@@ -776,6 +789,22 @@ _SUPPORTS_DERATING_PREALLOCATION = True
 # platform therefore probes this before translating a model that carries one.
 # Cf. the controller chantier (2026-09).
 _SUPPORTS_CONTROLLERS = True
+
+# Capability marker (jumeau of _SUPPORTS_CONTROLLERS): this muscadet reads the
+# PER-INSTANCE controller thresholds off a model component -- attributes under
+# the ``controller_threshold`` role, whose NAME carries the identity of the
+# number they tune -- and folds them into the emission grammar of THAT instance
+# before a single engine object exists. Three components of one class then trip
+# at three different levels.
+#
+# An older muscadet builds a controller from its CLASS template alone and is
+# handed no override index at all, so a tuned instance simulates at the class
+# value with nothing raised anywhere: a reliability figure that is wrong and
+# looks right, which is the worst degradation of the family. The platform
+# therefore refuses to translate a model carrying a tuned threshold unless this
+# attribute answers True.
+# Cf. the controller threshold override chantier (2026-09).
+_SUPPORTS_CONTROLLER_THRESHOLD_OVERRIDE = True
 
 # ---------------------------------------------------------------------------
 # Flow families (2026-08)
@@ -2273,6 +2302,65 @@ CAPACITY_FILL_RATE_ROLE = "capacity_fill_rate"
 _CAPACITY_OVERRIDE_ROLES: frozenset = frozenset(
     {CAPACITY_VOLUME_ROLE, CAPACITY_CONTENT_INIT_ROLE, CAPACITY_FILL_RATE_ROLE}
 )
+# --- Per-instance CONTROLLER THRESHOLD overrides (2026-09) -----------------
+#
+# A controller class declares the levels its outputs switch at, and two
+# instances of that class routinely want two different ones: three pumps of one
+# model, three starting levels. The channel is the same ``attributes`` list on
+# the MODEL COMPONENT the capacity numbers ride on, and the same rule applies to
+# a ``value`` of ``None`` -- it means "take the class's".
+#
+# ONE role for every threshold, and the whole identity of the number travels in
+# the attribute NAME. That is the platform's choice and this is the reading end
+# of it: a role per threshold would have capped, in silence, the number of
+# thresholds the grammar leaves free, the platform guarding a closed role
+# vocabulary with a label per role per language.
+#
+# The role must be REGISTERED rather than merely handled, exactly as the
+# capacity roles must: an unrecognised role is logged and dropped by
+# ``_build_overrides_index``, so an unregistered one would leave every instance
+# at the class level with nothing in the model saying so.
+
+#: The single role every per-instance controller threshold is carried under.
+CONTROLLER_THRESHOLD_ROLE = "controller_threshold"
+
+#: Which key of which emission operator carries a threshold, and in which order
+#: the two edges of a band are read. Restated here rather than imported from
+#: :data:`muscadet.obj_ctrl.CTRL_PARAMS` for the reason
+#: :data:`_VALID_CONTROL_AGGREGATIONS` is restated: this layer imports no
+#: muscadet, and restating is what makes an unreachable override a PARSE-time
+#: refusal. ``tests/test_ctrl_threshold_override.py`` locks the two together.
+#:
+#: ``republish`` is deliberately absent, on the platform's own grounds: its
+#: ``gain`` scales a publication, it decides nothing, and it already has an
+#: endpoint of its own (``{output}_level_gain``).
+CONTROLLER_THRESHOLD_EDGES: Dict[str, Tuple[str, ...]] = {
+    "compare": ("threshold",),
+    "band": ("activate", "release"),
+}
+
+#: The operator whose operands the traversal recurses into. The grammar is
+#: recursive, so a threshold sits at any depth and has to be reachable at each.
+_CONTROLLER_COMBINE_OP = "combine"
+
+#: How the levels of a threshold's identity are joined into its attribute name,
+#: how an operand index is spelled, and the budget the whole name is fitted to.
+#:
+#: A MIRROR of the platform's naming policy
+#: (``services/_pyc_naming.PLATFORM_NAMING_POLICY``), which is what produces the
+#: names this importer receives. Mirrored and not derived, there being no
+#: channel to derive it through; declared here rather than inlined so the
+#: platform has one place to read it back from, which is the only thing that
+#: keeps the two ends from drifting apart in silence.
+#:
+#: The level VALUES are not projected here. They reach this importer already
+#: PyCATSHOO-safe -- the platform sanitises the controller sections and the
+#: component attribute names in the same pass -- and a second sanitisation on
+#: this side would be a second answer to a question the platform has answered.
+CONTROLLER_THRESHOLD_NAME_SEPARATOR = "__"
+CONTROLLER_THRESHOLD_OPERAND_PREFIX = "op"
+CONTROLLER_THRESHOLD_NAME_MAX_LENGTH = 128
+
 # Roles that exist on the platform but are NOT instance configuration
 # overrides — they are runtime observables (is_available, fed_out,
 # fed_in, is_active) and the importer ignores them silently.
@@ -2378,6 +2466,12 @@ def _build_overrides_index(
             # Read by _build_capacity_overrides_index instead: ``name`` is a
             # capacity there, so this index -- keyed against flow specs --
             # would look it up among the flows and find nothing.
+            continue
+        if role == CONTROLLER_THRESHOLD_ROLE:
+            # Read by _build_controller_threshold_overrides_index instead, and
+            # only on a CONTROLLER component: ``name`` is the projected identity
+            # of one number of an emission grammar, which is no more a flow name
+            # than a capacity is.
             continue
         if role not in _OVERRIDE_ROLES:
             logger.warning(
@@ -2651,6 +2745,256 @@ def _apply_capacity_overrides(
     return tuple(out)
 
 
+def _fit_controller_threshold_name(name: str) -> str:
+    """Bring a projected threshold name within budget, as the platform does.
+
+    A mirror of ``PycNamingPolicy.truncate``, character for character: the cut
+    lands on a separator boundary so a truncated name never reads as a
+    well-formed name denoting something else, and a short digest of the full
+    name keeps two names truncated to one prefix apart. Deterministic, so both
+    ends land on the same string with no channel between them.
+
+    Reachable only past 128 characters, which takes an output name of about
+    that length. Mirrored anyway rather than left out: without it such a name
+    would match nothing here and the import would refuse a legitimate model,
+    naming a threshold the reader can see declared.
+    """
+    if len(name) <= CONTROLLER_THRESHOLD_NAME_MAX_LENGTH:
+        return name
+
+    digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:8]
+    suffix = CONTROLLER_THRESHOLD_NAME_SEPARATOR + digest
+    head = name[: CONTROLLER_THRESHOLD_NAME_MAX_LENGTH - len(suffix)]
+
+    # Never leave a partial separator at the cut: back off to the last complete
+    # boundary when the slice landed inside one.
+    tail = CONTROLLER_THRESHOLD_NAME_SEPARATOR[:-1]
+    while tail:
+        if head.endswith(tail):
+            head = head[: -len(tail)]
+            break
+        tail = tail[:-1]
+
+    return head.rstrip("_") + suffix
+
+
+def controller_threshold_attribute_name(
+    output_name: str, path: Tuple[int, ...], edge: str
+) -> str:
+    """Attribute name of ONE threshold of one controller output.
+
+    The identity of a threshold is ``(output, position in the emission grammar,
+    edge)``, and it travels in this NAME because every threshold shares a single
+    attribute role. ``path`` is the chain of operand indices from the output's
+    root node down to the node carrying the number -- ``()`` on the root
+    operator, ``(0,)`` for the first operand of a root combination, ``(0, 2)``
+    one level deeper -- and ``edge`` says WHICH number of that node is meant.
+
+    NOT injective, and it cannot be made so: the separator is an ordinary
+    character run, so an output literally named ``x__op0`` produces the name
+    ``x``'s first operand produces. Injectivity is therefore not assumed but
+    VERIFIED over the set that exists, in
+    :func:`_apply_controller_threshold_overrides`, which names both colliding
+    thresholds rather than the name they landed on. Same doctrine, and the same
+    reason, as on the platform's own write door.
+    """
+    parts = [
+        output_name,
+        *(f"{CONTROLLER_THRESHOLD_OPERAND_PREFIX}{index}" for index in path),
+        edge,
+    ]
+    joined = CONTROLLER_THRESHOLD_NAME_SEPARATOR.join(part for part in parts if part)
+
+    return _fit_controller_threshold_name(joined)
+
+
+def _iter_emit_thresholds(
+    node: Any, path: Tuple[int, ...]
+) -> Iterator[Tuple[Tuple[int, ...], str]]:
+    """``(path, edge)`` of every threshold under one emission node.
+
+    Recursive because the grammar is. Yields a band's ``release`` edge even when
+    the declaration omits it: the edge EXISTS -- an omitted one coincides with
+    the activation level, which is the degenerate band -- so it is overridable,
+    and refusing to name it would make a hysteresis unreachable on the very
+    instances that want one.
+    """
+    if not isinstance(node, dict):
+        return
+
+    operator = node.get("op")
+    if operator == _CONTROLLER_COMBINE_OP:
+        operands = node.get("operands")
+        for index, operand in enumerate(operands if isinstance(operands, list) else []):
+            yield from _iter_emit_thresholds(operand, path + (index,))
+        return
+
+    edges = (
+        CONTROLLER_THRESHOLD_EDGES.get(operator, ())
+        if isinstance(operator, str)
+        else ()
+    )
+    for edge in edges:
+        yield path, edge
+
+
+def _controller_emit_node(emit: Any, path: Tuple[int, ...]) -> Optional[Dict[str, Any]]:
+    """The grammar node of one output at ``path``, or ``None``.
+
+    The read counterpart of :func:`_iter_emit_thresholds`: the traversal says
+    WHICH thresholds exist and where, this says what the node at a position IS.
+    Both walk the operands the same way, and nothing else walks them.
+    """
+    node = emit
+    for index in path:
+        if not isinstance(node, dict) or node.get("op") != _CONTROLLER_COMBINE_OP:
+            return None
+        operands = node.get("operands")
+        if not isinstance(operands, list) or not 0 <= index < len(operands):
+            return None
+        node = operands[index]
+
+    return node if isinstance(node, dict) else None
+
+
+def _describe_controller_threshold(
+    output_name: str, path: Tuple[int, ...], edge: str
+) -> str:
+    """One threshold, spelled as a reader can find it in the declaration."""
+    position = "".join(f".operands[{index}]" for index in path)
+
+    return f"output {output_name!r}{position} edge {edge!r}"
+
+
+def _build_controller_threshold_overrides_index(
+    attributes: List[Any],
+) -> "OverridesIndex":
+    """Index a model component's CONTROLLER THRESHOLD overrides by ``(name, role)``.
+
+    Same ``attributes`` list as the flow and capacity overrides, read under
+    :data:`CONTROLLER_THRESHOLD_ROLE`. The ``name`` is neither a flow nor a
+    capacity here: it is the projected identity of one number of one output's
+    emission grammar (:func:`controller_threshold_attribute_name`).
+
+    A ``value`` of ``None`` means "use the class's", exactly as it does on the
+    two other sides.
+    """
+    out: OverridesIndex = {}
+    for attr in attributes or []:
+        if not isinstance(attr, dict):
+            continue
+        name = attr.get("name")
+        role = attr.get("role")
+        if not name or role != CONTROLLER_THRESHOLD_ROLE:
+            continue
+        if attr.get("value") is None:
+            continue
+        out[(name, role)] = attr["value"]
+
+    return out
+
+
+def _apply_controller_threshold_overrides(
+    controller: ControllerSpec,
+    overrides: "OverridesIndex",
+    *,
+    comp_name: str,
+) -> ControllerSpec:
+    """Return the controller declaration with this instance's levels folded in.
+
+    Folded into the DECLARATION, and not written onto the engine variable after
+    the fact. Three things follow from that and none of them would from the
+    other route: the number the grammar declares IS the instance's, so
+    ``ObjCtrl`` creates the variable at it and PyCATSHOO restores it between
+    Monte Carlo sequences; every semantic refusal of the grammar applies to the
+    tuned pair, so a band an override would leave unable to release is refused
+    by ``CtrlBand`` instead of latching in silence on its first activation; and
+    the automaton dating a crossing and the closure reading the output consult
+    one variable, which they already did.
+
+    A stale override -- one naming a threshold the class no longer declares --
+    is REFUSED rather than dropped, for the reason
+    :func:`_apply_capacity_overrides` refuses a stale capacity number and with
+    more at stake: a controller reverting to its class level trips at the wrong
+    moment and the study still runs to completion, reporting a figure that is
+    wrong and looks right.
+    """
+    if not overrides:
+        return controller
+
+    # The declared thresholds, indexed by the name the platform addresses them
+    # by. Built from the class's own grammar, so an override that resolves here
+    # is an override whose output exists, whose operand chain leads somewhere,
+    # and whose edge its operator actually carries -- the three ways a name can
+    # name nothing, answered by one lookup.
+    declared: Dict[str, Tuple[int, Tuple[int, ...], str]] = {}
+    sources: Dict[str, List[str]] = {}
+    for index, entry in enumerate(controller.controls_out):
+        for path, edge in _iter_emit_thresholds(entry.emit, ()):
+            key = controller_threshold_attribute_name(entry.name, path, edge)
+            sources.setdefault(key, []).append(
+                _describe_controller_threshold(entry.name, path, edge)
+            )
+            declared.setdefault(key, (index, path, edge))
+
+    collisions = {
+        key: found for key, found in sorted(sources.items()) if len(found) > 1
+    }
+    if collisions:
+        detail = "; ".join(
+            f"{key!r} <- {', '.join(found)}" for key, found in collisions.items()
+        )
+        raise Cod3sPlatformImportError(
+            f"Component {comp_name!r}: two controller thresholds project onto "
+            f"one attribute name, so an override cannot say which is meant "
+            f"({detail}). Rename an output so the projected names differ."
+        )
+
+    touched: Dict[int, Dict[str, Any]] = {}
+    for (name, role), value in sorted(overrides.items()):
+        target = declared.get(name)
+        if target is None:
+            raise Cod3sPlatformImportError(
+                f"Component {comp_name!r}: instance override role={role} names "
+                f"the controller threshold {name!r}, which its class does not "
+                f"declare (declared: {sorted(declared)})"
+            )
+
+        index, path, edge = target
+        entry = controller.controls_out[index]
+        # Copied once per touched output and edited in place afterwards, so two
+        # edges of one band land in ONE tree: a second copy would be taken from
+        # the class again and would drop the first write.
+        emit = touched.get(index)
+        if emit is None:
+            # Never ``None``: the traversal above only descends into a mapping,
+            # so an output with no grammar declares no threshold to override.
+            emit = copy.deepcopy(entry.emit) if entry.emit is not None else {}
+            touched[index] = emit
+
+        node = _controller_emit_node(emit, path)
+        if node is None:  # pragma: no cover - the path came from this very tree
+            raise Cod3sPlatformImportError(
+                f"Component {comp_name!r}: the controller threshold {name!r} "
+                f"resolves to {_describe_controller_threshold(entry.name, path, edge)}, "
+                "which the class declaration no longer carries"
+            )
+
+        node[edge] = _coerce_number(
+            value,
+            where=(
+                f"Component {comp_name!r}, controller threshold {name!r} "
+                f"({_describe_controller_threshold(entry.name, path, edge)})"
+            ),
+        )
+
+    controls_out = list(controller.controls_out)
+    for index, emit in touched.items():
+        controls_out[index] = replace(controls_out[index], emit=emit)
+
+    return replace(controller, controls_out=tuple(controls_out))
+
+
 def _parse_deratings(
     raw: Any, *, comp_name: str, flows: List[FlowSpec]
 ) -> Tuple[DeratingSpec, ...]:
@@ -2766,8 +3110,11 @@ def _parse_components(
 
     ``controller_specs`` (R46) maps controller class names to what their
     template declares. A component of such a class carries NO flow -- it
-    transports nothing -- so it takes none of the flow machinery above: no
-    instance override, no capacity, no rule set, no derating.
+    transports nothing -- so it takes none of the flow machinery above: no flow
+    override, no capacity, no rule set, no derating. It takes an override
+    channel of its OWN (2026-09): the levels its outputs switch at, under the
+    ``controller_threshold`` role, folded into a per-instance copy of the class
+    declaration.
     """
     gate_kinds = gate_kinds or {}
     capacities_lookup = capacities_lookup or {}
@@ -2806,13 +3153,27 @@ def _parse_components(
                     "it has no rate to derate; what a failure mode reaches on "
                     "one is its output endpoints, named exactly."
                 )
+            # The levels this INSTANCE trips at. Folded into its own copy of
+            # the class declaration -- resolved per component and not once per
+            # class, exactly as the capacities are, and for the same reason:
+            # the numbers are what an instance overrides.
+            threshold_overrides = _build_controller_threshold_overrides_index(
+                instance_attrs
+            )
+            controller = _apply_controller_threshold_overrides(
+                controller, threshold_overrides, comp_name=name
+            )
             out.append(
                 ComponentSpec(
                     id=cid,
                     name=name,
                     class_name=class_name,
                     flows=[],
-                    metadata={"platform_id": cid, "attributes_initial": instance_attrs},
+                    metadata={
+                        "platform_id": cid,
+                        "attributes_initial": instance_attrs,
+                        "controller_threshold_overrides": dict(threshold_overrides),
+                    },
                     controller=controller,
                 )
             )
@@ -3653,6 +4014,13 @@ def _create_controller(
                 "class_name": spec.class_name,
                 "platform_id": spec.metadata.get("platform_id"),
                 "attributes_initial": spec.metadata.get("attributes_initial", []),
+                # The levels this instance was tuned to, condensed. Preserved
+                # for the same reason ``instance_overrides`` is on a flow
+                # component: what a component ran at is the first thing asked
+                # of a result that surprises.
+                "controller_threshold_overrides": dict(
+                    spec.metadata.get("controller_threshold_overrides") or {}
+                ),
                 CONTROLLER_MARKER: True,
             }
         )
