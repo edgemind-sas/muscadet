@@ -1621,9 +1621,13 @@ class MeasurementOut(cod3s.ObjCOD3S):
     this very instant. Wire such a comparison back to the component producing
     the rate and the two regimes select each other within one instant, which is
     the chatter of R30. :func:`muscadet.ordering.find_rate_comparison_loops`
-    catches that shape when the rate arrives over a continuous INPUT, and does
-    not walk measurement links: a republished rate driven back onto its own
-    producer is therefore a loop nothing refuses yet.
+    catches that shape when the rate arrives over a continuous INPUT and does
+    not walk measurement links;
+    :func:`muscadet.ordering.find_rate_observation_loops` is the second path
+    that does walk them (R43), and it follows a republication: this channel
+    carries the mark of whatever its ``source`` reads, so a rate republished
+    here and thresholded back onto its own producer is refused at the first run,
+    however many instruments stand in between.
     """
 
     name: str = pydantic.Field(

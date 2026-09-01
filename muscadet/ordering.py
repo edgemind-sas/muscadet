@@ -103,6 +103,42 @@ carrying both the data alias and the demand alias. The box is therefore shared
 between the two directions, so the filter is on *the flow behind the box*, never
 on the box name alone -- see :func:`continuous_data_channel`.
 
+Two detection paths, and why the second is not a clause of the first (R43)
+--------------------------------------------------------------------------
+:func:`find_rate_comparison_loops` walks the channels the graph drops, and it
+walks them **from the flow collections of a component**: which continuous
+inputs it compares, which discrete outputs those comparisons drive. That
+indexing carried two assumptions, and R38 and R39 each broke one.
+
+* it exempted measurement links wholesale, on the written ground that a
+  measurement carries a capacity LEVEL -- an integrated state, which breaks a
+  loop. Since R38 a continuous output publishes the rate it DELIVERS, and a
+  measurement channel declared ``kind="rate"`` reads it. That number is
+  recomputed by the allocation sweep at every evaluation: a threshold on it is
+  as algebraic as a threshold on the transported flow, so the exemption now
+  waves through the very shape :class:`RateComparisonLoopError` exists for;
+* it can only see a component that HAS flow collections. A controller
+  (:class:`muscadet.ObjCtrl`, a peer of ``ObjFlow``) has none at all, so it is
+  neither a node of the graph nor a stop of that walk. Its edges are not
+  exempted, they are invisible.
+
+Hence :func:`find_rate_observation_loops`, a **second** path rather than a
+third clause of the first. It is indexed on readings instead of on flows: it
+reads its edges off the raw wiring of each component's measurement boxes, marks
+the readings that are algebraic, follows them through republishers, and closes
+the loop when the signal a marked reading drives reaches an ancestor -- in THIS
+module's graph -- of the component delivering the rate. The two paths meet only
+in :func:`_walk_signal` and in :meth:`ContinuousFlowGraph.ancestors`, which is
+what lets a node absent from the graph still be tested against it.
+
+**No observation edge ever enters the flow graph**, and that separation is
+deliberate on both sides. It is why R38 refuses an output flow named
+``{f}_rate`` beside ``{f}`` (KD19): the collection of output flows must never
+be able to hold that name, or :func:`continuous_data_channel` would resolve an
+observation box as a transport edge and the acyclicity check would refuse a
+loop the model does not close. This module upholds the same line from the other
+end -- :func:`find_rate_observation_loops` only ever READS the graph.
+
 The integer bands
 -----------------
 Every equation gets a **distinct** integer (KTD3): PyCATSHOO falls back to
@@ -139,7 +175,7 @@ import typing
 # copies of it would be two chances to disagree about what an empty matrix means.
 from .capability import register_capability_variables
 from .flow import _prod_cond_matrix_entry
-from .flow_continuous import FlowContinuous
+from .flow_continuous import FlowContinuous, rate_observation_box
 
 #: Equation method looked up on each component for the capability sweep (R-20).
 #: Registered FIRST, on the same topological order the production sweep uses: a
@@ -362,6 +398,30 @@ class SignalConnection(typing.NamedTuple):
         return f"{self.source}.{self.flow}_out -> {self.target}.{self.flow}_in"
 
 
+class ObservationConnection(typing.NamedTuple):
+    """One OBSERVATION link, named the way the modeller wired it (R33, R37, R38).
+
+    Reported beside the continuous and discrete connections of a loop, and kept
+    apart from both by its own type: it carries no quantity, so it is not a
+    :class:`ContinuousConnection`, and it carries a number rather than a state,
+    so it is not a :class:`SignalConnection`.
+
+    The two box names are stored rather than derived from ``channel``, because
+    the two natures of a measurement link spell them differently -- ``q_rate_out``
+    for a delivered rate (R38), ``q_level_out`` for a level -- and a rendering
+    that guessed would misname exactly the link a modeller has to go and find.
+    """
+
+    source: str
+    target: str
+    channel: str
+    source_box: str
+    target_box: str
+
+    def __str__(self) -> str:
+        return f"{self.source}.{self.source_box} -> {self.target}.{self.target_box}"
+
+
 class ContinuousFlowCycleError(ValueError):
     """A continuous-flow cycle, refused at the system's first run (R30).
 
@@ -439,6 +499,64 @@ class RateComparisonLoopError(ContinuousFlowCycleError):
                 "once. Gate production on a quantity through a sensor reading "
                 "a CAPACITY LEVEL over a measurement link: a level is "
                 "integrated, so it does break the loop."
+            ),
+        )
+
+
+class RateObservationLoopError(ContinuousFlowCycleError):
+    """A signal thresholded on an OBSERVED rate, wired back upstream (R30, R43).
+
+    The sibling of :class:`RateComparisonLoopError`, on the path that reaches
+    the rate through a measurement link instead of through transport. The
+    offence is the same and so is the physics; what differs is that neither the
+    flow graph nor the walk indexed on flows can see any part of it, which is
+    why it is a class of its own and not a second message of that one.
+
+    A modeller reaching this has almost always done the right thing in the
+    wrong place: the montage is the sensor pattern of F4/AE18, with the
+    threshold moved from the level of a buffer onto the rate that fills it. The
+    message therefore names the reading, what published it, and the way out.
+
+    Kept a :class:`ContinuousFlowCycleError`, so a caller already catching a
+    first-run cycle catches this one too.
+    """
+
+    def __init__(self, reader, channel, flow, producer, operand, connections):
+        #: Component carrying the threshold.
+        self.reader = reader
+        #: Its measurement channel the threshold reads.
+        self.channel = channel
+        #: The continuous output flow whose delivered rate that reading is.
+        self.flow = flow
+        #: The component delivering it.
+        self.producer = producer
+        #: The threshold, rendered as it was declared.
+        self.operand = operand
+
+        cycle = [cnct.source for cnct in connections] + [connections[-1].target]
+
+        super().__init__(
+            cycle,
+            connections,
+            message=(
+                "Continuous flow graph must be acyclic (R30, R43): "
+                f"{' -> '.join(cycle)} closes a loop through a rate "
+                f"observation. Connections closing the loop: "
+                f"{', '.join(str(cnct) for cnct in connections)}. "
+                f"{reader} thresholds the reading {channel} ({operand}) and "
+                f"drives a discrete signal from it, that reading is the rate "
+                f"{flow} delivered by {producer}, and that signal reaches a "
+                f"component producing the very {flow} it reads. A DELIVERED "
+                "RATE is not an integrated state, whatever the measurement "
+                "link it arrived on: the allocation sweep recomputes it at "
+                "every evaluation, so the regimes on either side of the "
+                "threshold select each other within one instant and the model "
+                "chatters instead of settling. A deadband does not damp it "
+                "either -- a rate JUMPS across the band instead of moving "
+                "through it, crossing both edges at once. Observe a CAPACITY "
+                "LEVEL instead: put a volume between the producer and this "
+                "reading and threshold its level, which is integrated and does "
+                "break the loop."
             ),
         )
 
@@ -747,10 +865,14 @@ def compared_continuous_inputs(comp):
     algebraic in the same way: a rule guard (R21) and a discrete production
     condition (R22) share one operand shape and one meaning.
 
-    A comparison reading a MEASUREMENT link is deliberately absent: what it
-    reads is a capacity level, which is integrated state, so a loop closed
-    through it is broken by that state. That is the sanctioned way to gate
-    production on a quantity (F4, AE18) and it must keep building.
+    A comparison reading a MEASUREMENT link is deliberately absent, and what
+    that absence means has narrowed (R43). It was written when a measurement
+    could only carry a capacity level -- integrated state, which breaks a loop,
+    and the sanctioned way to gate production on a quantity (F4, AE18), so it
+    must keep building. A measurement may now carry a delivered rate as well
+    (R38), which breaks nothing: that half is judged by
+    :func:`find_rate_observation_loops`, on a path indexed on readings rather
+    than on flows. This one stays about flows, and stays silent about readings.
     """
     compared = {}
     flows_in = getattr(comp, "flows_in", None) or {}
@@ -1059,6 +1181,553 @@ def _walk_signal(reader, outputs, upstream, components, by_engine_name, connecti
 
 
 # ----------------------------------------------------------------------
+# The loop the graph cannot even see (R30, R43)
+# ----------------------------------------------------------------------
+#
+# The walk above is indexed on FLOWS: which continuous inputs a component
+# compares, which discrete outputs those comparisons drive. Everything below is
+# indexed on READINGS instead, and it exists because two changes made the flow
+# indexing blind rather than merely permissive -- see the module docstring.
+#
+# The mechanism is a marking, and the thing marked is a reading. A reading is
+# ALGEBRAIC when what it reports is recomputed within the instant, and
+# INTEGRATED when it is a level a differential equation carries between
+# instants. Only the first can close an instantaneous loop, and the distinction
+# is invisible at the point of use on purpose: an observer must not be able to
+# tell a capacity from a republisher (R37), so nothing at the reading end says
+# which of the two arrived. What decides is where the reading CAME FROM, which
+# is why the mark has to travel from the publisher rather than be read off the
+# consumer.
+#
+# It travels over three hops and no more:
+#
+#   1. ``{f}_rate_out`` -- a continuous output publishing what it delivers
+#      (R38) -- and ``{name}_level_out`` of an instrument republishing one of
+#      its own continuous outputs. These are the only two ways a rate becomes a
+#      reading, and both are marked at the source;
+#   2. a marked publication marks the measurement channels wired to it;
+#   3. a marked channel marks whatever republishes it: a published measurement
+#      whose ``source`` names it, or a controller VALUE output whose grammar
+#      reads it (R42). A hand-written publication -- no ``source``, no ``emit``
+#      -- is NOT marked: nothing computes it from the reading, so it carries no
+#      algebraic dependency, only whatever a model or a failure mode wrote.
+#
+# A capacity level marks nothing, and that is the whole of why the sanctioned
+# montage of F4/AE18 keeps building: it has the topology of every refused
+# montage here and differs only in the state standing in the middle.
+
+
+#: Where a rate comes from: the component DELIVERING it, and its output flow.
+#: What the mark carries, and what :meth:`ContinuousFlowGraph.ancestors` is then
+#: asked about.
+RateOrigin = typing.Tuple[str, str]
+
+#: A publication box: the component holding it, and the box name.
+Publication = typing.Tuple[str, str]
+
+#: A reading: the component doing the reading, and its measurement channel.
+Reading = typing.Tuple[str, str]
+
+#: The observation links a rate travelled from its producer to one reading.
+ObservationPath = typing.List[ObservationConnection]
+
+
+def measurement_channels(comp):
+    """The measurement channels ``comp`` READS, whatever class it is.
+
+    One name for a collection two unrelated classes carry: ``ObjFlow`` holds
+    the channels declared by ``add_measurement_in``, ``ObjCtrl`` exposes its
+    observation inputs under the same property precisely so that the rest of
+    the library never has to ask which of the two it is holding.
+    """
+    return getattr(comp, "measurements_in", None) or {}
+
+
+def published_measurements(comp):
+    """The measurement channels ``comp`` PUBLISHES, whatever class it is."""
+    return getattr(comp, "measurements_out", None) or {}
+
+
+def publication_box(name):
+    """Name of the box a published measurement exports on.
+
+    Derived here rather than asked of the channel, exactly as
+    :meth:`muscadet.ObjCtrl.add_control_out` derives it: a published
+    measurement has no ``box_name``, its box being the one a capacity already
+    published under so that an observer cannot tell the two apart.
+    """
+    return f"{name}_level_out"
+
+
+def algebraic_publications(components):
+    """Every publication box carrying a RATE, with what produces it.
+
+    ``{(component key, box name): {(producer key, flow name)}}`` -- the seeds
+    of the marking, and the only two shapes a rate is published under:
+
+    * ``{f}_rate_out``, the observation box every continuous output carries
+      beside its transport box (R38). The producer is the component itself;
+    * ``{name}_level_out`` of a published measurement whose ``source`` names a
+      continuous output OF THE SAME COMPONENT -- an instrument reporting the
+      rate it delivers. The producer is again the component itself, and the
+      flow is what the source names.
+
+    A publication whose source is a capacity is deliberately absent: a level is
+    integrated state, so it breaks a loop rather than carrying one. So is a
+    publication whose source is another measurement channel, which is not a
+    seed but a hop -- :func:`find_rate_observation_loops` reaches it once it
+    knows what that channel reads.
+
+    **The precedence of the three is the one that resolves the source**, not the
+    one that reads best here. ``MeasurementOut.resolve_source`` tries capacities,
+    then measurement channels, then continuous outputs, and one component may
+    legitimately name a volume and the flow filling it alike -- a tank named
+    ``q`` holding ``q``. Testing membership of the outputs alone would then mark
+    a republished LEVEL as a rate and refuse a model the library sanctions.
+    """
+    seeds: typing.Dict[Publication, typing.Set[RateOrigin]] = {}
+
+    for key, comp in components.items():
+        outputs = getattr(comp, "flows_continuous_out", None) or {}
+
+        for flow_name in outputs:
+            seeds[(key, rate_observation_box(flow_name, "out"))] = {(key, flow_name)}
+
+        for name, published in published_measurements(comp).items():
+            source = published_measurement_rate(comp, published, outputs)
+
+            if source is not None:
+                seeds[(key, publication_box(name))] = {(key, source)}
+
+    return seeds
+
+
+def published_measurement_rate(comp, published, outputs):
+    """The continuous output ``published`` republishes the rate of, or None.
+
+    The resolution of :meth:`muscadet.MeasurementOut.resolve_source`, reduced to
+    the one question this module asks and answered in the SAME order, so the two
+    cannot disagree about a name that designates two things.
+    """
+    source = getattr(published, "source", None)
+
+    if source is None:
+        return None
+
+    if source in (getattr(comp, "capacities", None) or {}):
+        return None
+
+    if source in measurement_channels(comp):
+        return None
+
+    return source if source in outputs else None
+
+
+def republished_channels(comp, channel_name):
+    """Boxes on which ``comp`` republishes what it reads on ``channel_name``.
+
+    The two vocabularies a republication is written in, and the reason they
+    cannot be read the same way: an ``ObjFlow`` instrument names its source in
+    ``MeasurementOut.source``, while a controller's VALUE output names its
+    inputs inside the ``emit`` grammar (R42) and leaves ``source`` unset --
+    what refreshes it is ``compute_controls`` walking that tree.
+
+    An output computing nothing -- no ``source``, no ``emit`` -- is absent from
+    the result: its value is written by hand, so it carries no dependency on
+    any reading whatever the two are wired to.
+    """
+    emit = getattr(comp, "controls_emit", None)
+    capacities = getattr(comp, "capacities", None) or {}
+    boxes = []
+
+    for name, published in published_measurements(comp).items():
+        if emit is not None:
+            node = emit.get(name)
+
+            if node is not None and channel_name in node.inputs_read():
+                boxes.append(publication_box(name))
+
+            continue
+
+        source = getattr(published, "source", None)
+
+        # A capacity of the same name WINS the resolution (see
+        # ``published_measurement_rate``): this publication then carries a
+        # level, and following it would propagate a rate that never arrived.
+        if source == channel_name and source not in capacities:
+            boxes.append(publication_box(name))
+
+    return boxes
+
+
+def measurement_thresholds(comp, channel_name):
+    """How a DISCRETE production condition of ``comp`` thresholds a reading.
+
+    The measurement half of :func:`compared_continuous_inputs`, which reads the
+    same operand shape over continuous inputs. A rule guard is deliberately
+    absent and cannot be added: ``ObjFlow._resolve_rule_flow`` refuses a
+    measurement name in a guard outright (R29), so the discrete production
+    condition (R22) is the only vocabulary an ``ObjFlow`` can threshold a
+    reading in.
+
+    Returns
+    -------
+    list of str
+        One rendering per comparison, in declaration order, empty when this
+        component thresholds nothing on that channel.
+    """
+    channel = measurement_channels(comp).get(channel_name)
+
+    if channel is None:
+        return []
+
+    found = []
+
+    for flow in (getattr(comp, "flows_out", None) or {}).values():
+        if isinstance(flow, FlowContinuous):
+            continue
+
+        for source, compare in prod_cond_operands(flow):
+            if compare is not None and source is channel:
+                found.append(f"{channel_name} {compare['op']} {compare['value']:g}")
+
+    return found
+
+
+def ctrl_node_thresholds(node, input_name):
+    """How a controller's output grammar thresholds one observation input (R42).
+
+    Every LEAF of the tree reading ``input_name``, rendered the way it was
+    declared, so a refusal names the number a modeller wrote rather than the
+    operator that carries it. Read through the grammar's own accessors
+    (``operand_nodes``, ``inputs_read``) and never by class, which is what
+    keeps this module free of an import of the controller unit.
+    """
+    operands = node.operand_nodes()
+
+    if operands:
+        found = []
+        for operand in operands:
+            found.extend(ctrl_node_thresholds(operand, input_name))
+        return found
+
+    if input_name not in node.inputs_read():
+        return []
+
+    operator = getattr(node, "operator", None)
+
+    if operator is not None:
+        return [f"{input_name} {operator} {float(node.threshold):g}"]
+
+    direction = getattr(node, "direction", None)
+
+    if direction is not None:
+        return [
+            f"{input_name} {direction} {float(node.activate):g}, "
+            f"releasing at {float(node.release):g}"
+        ]
+
+    return [f"{node.op} of {input_name}"]
+
+
+def reading_driven_signals(comp, channel_name):
+    """The discrete signals ``comp`` derives from the reading ``channel_name``.
+
+    The one place the two component families meet, and they meet by union
+    rather than by dispatch: a component answers whichever of the two questions
+    it can, and a class that carries neither answers nothing.
+
+    * an ``ObjFlow`` thresholds the reading in a discrete production condition,
+      and :func:`signal_driven_outputs` then follows that output through the
+      production conditions and the mode automata reading it -- which is what
+      makes a deadband built out of two edge outputs visible;
+    * a controller's BOOLEAN output names the input in its ``emit`` grammar.
+      Nothing is followed onward there: a controller output is a leaf of the
+      component, and its grammar reads observation inputs only.
+
+    Returns
+    -------
+    tuple
+        ``(output names, thresholds rendered)``. Both empty when this component
+        derives no signal from that reading.
+    """
+    thresholds = measurement_thresholds(comp, channel_name)
+    outputs = measurement_driven_outputs(comp, channel_name) if thresholds else []
+
+    emit = getattr(comp, "controls_emit", None)
+    published = published_measurements(comp)
+
+    for name in getattr(comp, "controls_out", None) or {}:
+        # A VALUE output is a republication, handled as a hop by
+        # ``republished_channels``: what closes a loop is a SIGNAL.
+        if name in published:
+            continue
+
+        node = None if emit is None else emit.get(name)
+
+        if node is None or channel_name not in node.inputs_read():
+            continue
+
+        outputs.append(name)
+        thresholds.extend(ctrl_node_thresholds(node, channel_name))
+
+    return outputs, thresholds
+
+
+def measurement_driven_outputs(comp, channel_name):
+    """Discrete outputs of ``comp`` carrying a threshold on that reading.
+
+    The measurement counterpart of :func:`comparison_driven_outputs`, seeded
+    the same way and followed by the same fixpoint.
+    """
+    channel = measurement_channels(comp).get(channel_name)
+    seeds = set()
+
+    for name, flow in (getattr(comp, "flows_out", None) or {}).items():
+        if isinstance(flow, FlowContinuous):
+            continue
+
+        if any(
+            compare is not None and source is channel
+            for source, compare in prod_cond_operands(flow)
+        ):
+            seeds.add(state_var_name(flow) or f"{name}_fed_out")
+
+    return signal_driven_outputs(comp, seeds) if seeds else []
+
+
+def channel_behind_box(comp, box_name):
+    """The measurement channel of ``comp`` importing on ``box_name``, or None.
+
+    The observation counterpart of :func:`continuous_data_channel`: it resolves
+    a box back to the interface behind it rather than parsing the name, because
+    the two natures of a measurement link spell their box differently (R38) and
+    a controller and an ``ObjFlow`` hold their channels in different attributes.
+    """
+    for name, channel in measurement_channels(comp).items():
+        if channel.box_name() == box_name:
+            return name
+
+    return None
+
+
+def mark_algebraic_readings(components, by_engine_name, connections_of):
+    """Which readings carry a rate, where it came from, and how it got there.
+
+    The marking described at the head of this section, run to a fixpoint,
+    breadth first so that the wiring a reading is REPORTED with is the shortest
+    chain that brought the rate to it.
+
+    **Walked from the OBSERVERS, not from the producers**, and that is a cost
+    decision rather than a stylistic one. Every continuous output publishes a
+    rate box (R38), so seeding from the publishing side would ask the engine for
+    the connections of every producer in the model -- thousands of them on a
+    model that holds a handful of instruments. Asking each instrument who
+    publishes into it walks the small collection instead, and
+    :func:`algebraic_publications` answers the "is this box a rate" half without
+    touching the engine at all.
+
+    Returns
+    -------
+    dict
+        ``{(component key, channel name): {(producer, flow): [links]}}`` where
+        ``links`` is the observation path from the producer to that reading. A
+        reading absent from the mapping carries no rate: it reads an integrated
+        level, or a value nothing computes, or nothing at all.
+    """
+    marked: typing.Dict[Reading, typing.Dict[RateOrigin, ObservationPath]] = {}
+
+    # ``(component, its marked channel, what is new on it, how it got there)``.
+    # Deduplication happens on the READINGS, in ``mark`` below, and that is what
+    # bounds the walk: the set of (component, channel, origin) triples is finite
+    # and each is entered once, so a chain of republishers that circles back
+    # terminates instead of looping. Refusing such a circle is the ordering of
+    # controllers' business, not this one's.
+    queue: typing.List[
+        typing.Tuple[str, str, typing.Set[RateOrigin], ObservationPath]
+    ] = []
+
+    def mark(obs_key, channel_name, origins, path):
+        """Record what is NEW on one reading, and queue it for propagation."""
+        reached = marked.setdefault((obs_key, channel_name), {})
+        fresh = {origin for origin in origins if origin not in reached}
+
+        if not fresh:
+            return
+
+        reached.update({origin: path for origin in fresh})
+        queue.append((obs_key, channel_name, fresh, path))
+
+    def counterparts(key, box):
+        """``(component key, its box)`` for everything wired onto ``key.box``."""
+        info = connections_of(key).get(box) or {}
+
+        for target in info.get("targets", []):
+            other = by_engine_name.get(target.get("obj"), target.get("obj"))
+
+            if other in components:
+                yield other, target.get("cnct")
+
+    readers = [
+        (key, comp, name, channel)
+        for key, comp in components.items()
+        for name, channel in measurement_channels(comp).items()
+    ]
+
+    # Nothing observes anything: no reading exists to carry a rate, and the
+    # engine is not walked at all.
+    if not readers:
+        return marked
+
+    seeds = algebraic_publications(components)
+
+    # First hop: what publishes into each reading, and whether that publication
+    # is a rate.
+    for obs_key, obs_comp, channel_name, channel in readers:
+        box = channel.box_name()
+
+        for pub_key, pub_box in counterparts(obs_key, box):
+            origins = seeds.get((pub_key, pub_box))
+
+            if origins:
+                mark(
+                    obs_key,
+                    channel_name,
+                    origins,
+                    [
+                        ObservationConnection(
+                            pub_key, obs_key, channel_name, pub_box, box
+                        )
+                    ],
+                )
+
+    # Republication hops: one component's marked reading, published onward and
+    # read by the next. The connections of a republisher are already in the
+    # cache -- it had to read a measurement to be here.
+    while queue:
+        pub_key, channel_name, origins, path = queue.pop(0)
+
+        for box in republished_channels(components[pub_key], channel_name):
+            for obs_key, obs_box in counterparts(pub_key, box):
+                onward = channel_behind_box(components[obs_key], obs_box)
+
+                if onward is None:
+                    continue
+
+                mark(
+                    obs_key,
+                    onward,
+                    origins,
+                    path
+                    + [ObservationConnection(pub_key, obs_key, onward, box, obs_box)],
+                )
+
+    return marked
+
+
+def find_rate_observation_loops(system, graph):
+    """Every instantaneous loop closed by a threshold on an OBSERVED rate (R43).
+
+    Reads the same system as :func:`build_continuous_flow_graph` and the same
+    already-acyclic graph, but takes its edges from the raw wiring of the
+    measurement boxes instead of from the flow collections -- which is what
+    lets a controller, a component the graph holds no node for, take part in a
+    loop the graph is nonetheless the judge of.
+
+    The graph is only ever READ, through :meth:`ContinuousFlowGraph.ancestors`:
+    an observation link must never become an edge of it (KD19).
+
+    What this does NOT catch, and it is worth knowing which is which
+    ---------------------------------------------------------------
+    * a reading a model WRITES by hand -- ``MeasurementOut.publish`` called from
+      a sensitive method, a test, a failure mode -- carries no declared
+      dependency on anything, so nothing here can know it came from a rate.
+      Only the two declared republications, ``source`` and ``emit``, travel;
+    * the signal walk stops where :func:`_walk_signal` stops, which is at a
+      channel :func:`discrete_data_channel` does not recognise. A signal routed
+      through an :class:`muscadet.ObjLogicGate` is the case that matters: its
+      ``{f}_out`` is exported by no flow object at all, so the walk ends there.
+      That limit is shared with :func:`find_rate_comparison_loops` and predates
+      this path;
+    * a loop between CONTROLLERS closes nothing here on purpose: the marking
+      terminates on it rather than reporting it, because the order of
+      controllers among themselves is a unit of its own.
+
+    Where it over-approximates
+    --------------------------
+    ``ancestors`` is read over the WHOLE edge set, torn edges included, exactly
+    as :func:`find_rate_comparison_loops` reads it. A producer standing behind a
+    capacity is therefore still an ancestor of what that capacity serves, even
+    though the level makes the downstream rate independent of it within the
+    instant -- so a threshold on a rate delivered past a buffer, driven back
+    onto the source filling it, is refused although the volume breaks it. Both
+    paths inherit that from R-14, and they inherit it TOGETHER on purpose: two
+    detectors disagreeing about what "upstream" means would refuse a model or
+    not according to which of them looked first, which is a worse defect than
+    the over-approximation itself. Tightening it is one change, in
+    :meth:`ContinuousFlowGraph.ancestors`, for both.
+
+    Returns
+    -------
+    list of RateObservationLoopError
+        One per (reader, channel, producer) triple, in declaration order. Empty
+        for a model that closes no such loop.
+    """
+    components = getattr(system, "comp", None) or {}
+
+    by_engine_name = engine_name_index(components)
+
+    cnct_info = {}
+
+    def connections_of(key):
+        if key not in cnct_info:
+            cnct_info[key] = components[key].get_cnct_info()
+        return cnct_info[key]
+
+    marked = mark_algebraic_readings(components, by_engine_name, connections_of)
+
+    loops = []
+
+    for key, comp in components.items():
+        for channel_name in measurement_channels(comp):
+            reached = marked.get((key, channel_name))
+
+            if not reached:
+                continue
+
+            outputs, thresholds = reading_driven_signals(comp, channel_name)
+
+            if not outputs:
+                continue
+
+            operand = ", ".join(thresholds) or channel_name
+
+            for (producer, flow_name), path in reached.items():
+                walked = _walk_signal(
+                    key,
+                    outputs,
+                    graph.ancestors(producer),
+                    components,
+                    by_engine_name,
+                    connections_of,
+                )
+
+                if walked is not None:
+                    loops.append(
+                        RateObservationLoopError(
+                            key,
+                            channel_name,
+                            flow_name,
+                            producer,
+                            operand,
+                            path + walked,
+                        )
+                    )
+
+    return loops
+
+
+# ----------------------------------------------------------------------
 # The derived order
 # ----------------------------------------------------------------------
 
@@ -1153,9 +1822,11 @@ def compute_equation_order(system):
     ------
     ContinuousFlowCycleError
         When the continuous-flow graph carries a loop no integrated state
-        breaks (R30), or when a comparison on a continuous rate closes an
+        breaks (R30), when a comparison on a continuous rate closes an
         instantaneous loop the graph does not carry
-        (:class:`RateComparisonLoopError`).
+        (:class:`RateComparisonLoopError`), or when a threshold on an OBSERVED
+        rate closes one the graph cannot even see
+        (:class:`RateObservationLoopError`, R43).
     """
     graph = build_continuous_flow_graph(system)
 
@@ -1194,6 +1865,14 @@ def compute_equation_order(system):
 
     if loops:
         raise loops[0]
+
+    # Second, and in this order: a loop the flow indexing CAN see is reported
+    # with the message written for it, so a model refused today keeps its
+    # diagnostic word for word even when the second path would also match it.
+    observations = find_rate_observation_loops(system, graph)
+
+    if observations:
+        raise observations[0]
 
     return EquationOrder(graph, demand_order, production_order, torn=torn)
 

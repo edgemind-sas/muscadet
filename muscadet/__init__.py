@@ -24,7 +24,11 @@ from .transfer import (
     build_transfer,
     resolve_operand,
 )
-from .ordering import ContinuousFlowCycleError, RateComparisonLoopError
+from .ordering import (
+    ContinuousFlowCycleError,
+    RateComparisonLoopError,
+    RateObservationLoopError,
+)
 from .rules import Rule, RuleOperand, RuleSet
 from .capacity import (
     COMBINE_MAX,
