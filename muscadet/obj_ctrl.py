@@ -135,8 +135,12 @@ the integration manager to root-find.
 **Scope of this module today.** A controller declares, builds, connects,
 reduces several sources on one input (R40), declares that reduction's kinks
 (R41), compiles its outputs from the closed grammar (R42) and exposes that
-grammar's numbers to whoever tunes, observes or breaks them (R44). The ordering
-of controllers among themselves is a separate unit.
+grammar's numbers to whoever tunes, observes or breaks them (R44). The order the
+controllers run in among themselves is derived by :mod:`muscadet.ordering`, in a
+band of its own above the measurements (R45): the equation this module declares
+takes its integer from a topological sort of the signal graph, at the pre-run
+step, so a chain of controllers settles in ONE evaluation whatever order the
+components were declared in.
 """
 
 import typing
@@ -154,7 +158,6 @@ from .capacity import (
     COMBINE_SUM,
     MeasurementIn,
     MeasurementOut,
-    allocate_measurement_equation_order,
 )
 from .common import copy_declaration, fresh_instant_occ_law, get_pyc_type
 from .rules import COMPARISON_OPERATORS, comparator
@@ -1355,7 +1358,10 @@ class ObjCtrl(cod3s.PycComponent):
 
         #: True once :meth:`compute_controls` is registered as an equation. One
         #: registration covers every republication of the component, as
-        #: ``compute_measurements`` does on an ``ObjFlow``.
+        #: ``compute_measurements`` does on an ``ObjFlow``. Written at the
+        #: PRE-RUN step (R45), by :meth:`register_control_equation`: the
+        #: integer comes from the signal graph, which does not exist while a
+        #: component is still being declared.
         self.emit_equation_registered = False
 
         for entry in kwargs.get("controls_in") or []:
@@ -2142,8 +2148,41 @@ class ObjCtrl(cod3s.PycComponent):
         where a boolean one does: the equation runs at every step, so a
         forcing flag is read the instant it is raised and the instant it is
         released, in both directions and without anything else to declare.
+
+        **The equation itself is registered at the pre-run step** (R45), by
+        :meth:`register_control_equation`, and not here: its integer comes from
+        a topological sort of the signal graph, which does not exist until every
+        connection does. What happens here is everything that does not depend on
+        the wiring -- the published variables the solver has to know about, the
+        forcing endpoints, and the reader itself.
+
+        Raises
+        ------
+        ValueError
+            When the system's pre-run step has already run. That step is
+            one-shot, so this output would otherwise get no equation at all.
         """
         system = self.system()
+
+        # The pre-run step is one-shot, so an output declared after it would
+        # never have its equation registered and would publish its declared
+        # default for the whole run, in silence. Refused where the mistake was
+        # made, which is the counterpart, for this band, of
+        # ``System.check_model_unchanged_since_prerun``: a controller is not a
+        # node of the continuous-flow graph, so that check cannot see it.
+        if getattr(system, "prerun_done", False):
+            raise ValueError(
+                f"Object {self.name()}: controller output {out_name!r} "
+                "republishes a reading, and the equation refreshing it is "
+                "registered at the pre-run step (R45), which has already run "
+                "on this system. That step derives the order of the "
+                "controllers from the whole signal graph and runs once, so "
+                "this output would never be refreshed at all: it would publish "
+                "its declared default for the whole run, with nothing raised "
+                "to say so. Declare every controller before the first "
+                "simulate() / isimu_start()"
+            )
+
         interface = self.controls_out[out_name]
 
         # Every published variable, constituents included: PyCATSHOO refuses
@@ -2156,12 +2195,26 @@ class ObjCtrl(cod3s.PycComponent):
 
         self.emit_republications[out_name] = read
 
-        if self.emit_equation_registered:
-            return
+    def needs_control_equation(self) -> bool:
+        """True when this controller has an equation left to register (R45).
 
-        system.pdmp_add_equation_method(
-            "compute_controls", self, allocate_measurement_equation_order(system)
-        )
+        A controller carrying no republication has nothing for the solver to
+        evaluate: its boolean outputs are written on the notification of the
+        automata their grammar compiled to, which is not an equation. It is
+        still a node of the signal graph, so it still constrains the order of
+        the controllers around it -- it simply takes no integer.
+        """
+        return bool(self.emit_republications) and not self.emit_equation_registered
+
+    def register_control_equation(self, system: typing.Any, order: int) -> None:
+        """Register :meth:`compute_controls` at the derived order (R45).
+
+        Called from :func:`muscadet.ordering.register_controller_equations` at
+        the pre-run step, once every connection exists and the signal graph has
+        been sorted. One registration covers every republication of the
+        component, as ``compute_measurements`` does on an ``ObjFlow``.
+        """
+        system.pdmp_add_equation_method("compute_controls", self, order)
         self.emit_equation_registered = True
 
     def compute_controls(self) -> None:

@@ -151,12 +151,49 @@ evaluation sequence of one integration step:
 2. demand sweep, reverse-topological  -- allocated here, straight after
 3. production sweep, topological      -- allocated here, straight after that
 4. capacity levels integrate          -- :data:`CAPACITY_ORDER_BASE` upwards
+5. published measurements refresh     -- :data:`MEASUREMENT_ORDER_BASE` upwards
+6. controllers republish              -- :data:`CONTROL_ORDER_BASE` upwards (R45)
 
 The capability band is **first**, and it has to be: a demand is bounded by what
 the rule's other inputs could supply, so every capability in the system must be
 settled before the first demand equation runs. It carries no base constant of
 its own because it is graph-derived like the two sweeps below it -- the three
 share one allocator, which is also what keeps their integers distinct.
+
+The controller band, and why it is the top one (R45)
+----------------------------------------------------
+
+A controller republishes what its observation inputs currently carry, and one
+controller's value output IS another's observation input (R4). A chain of them
+therefore has an evaluation order, and only one: upstream first. Evaluated
+backwards, each controller republishes what the one before it published in the
+PREVIOUS evaluation, so a chain of three carries a number from end to end in
+three passes instead of one -- silently, and by a lag no reading shows, because
+the solver evaluates the equation set many times per integration step and the
+chain has caught up by the time anything is read back.
+
+The band is therefore its own, and it sits **above the measurement one**: a
+controller reads a measurement, so every published reading must be current
+before the first controller equation runs. Within the band the integer comes
+from a topological sort of the SIGNAL graph -- who publishes into whom -- and
+not from the order the components were declared in, which is what a chain
+written downstream first used to get.
+
+The signal graph is built by :func:`controller_signal_links` and is a graph of
+**controllers only**. Two limits follow, and both are deliberate:
+
+* a republication routed through an ``ObjFlow`` instrument -- controller,
+  instrument, controller -- is not an edge here. The instrument draws from the
+  measurement band, so it is refreshed BEFORE the controller feeding it and
+  reads that controller one evaluation late whatever this module does; no
+  ordering of the controllers repairs it. Such a montage is neither ordered nor
+  refused today. Put the two controllers side by side, or accept the lag
+  knowingly;
+* a loop closing through a rate OBSERVATION is not this graph's business:
+  :func:`find_rate_observation_loops` reports it, with the message written for
+  it. What is refused here is the shape that walk terminates on rather than
+  reports -- a chain of controller republications that closes on itself, which
+  has no evaluation order at all.
 
 A capacity equation only reads its own transit variables and writes its own
 levels, so it carries no cross-component constraint -- but it must still take a
@@ -168,6 +205,7 @@ capacity unit is superseded by this module's allocation.
 """
 
 import graphlib
+import itertools
 import typing
 
 # Reused rather than reimplemented: reading a production condition's aligned
@@ -191,6 +229,11 @@ DEMAND_EQUATION_METHOD = "compute_demand"
 #: Equation method looked up on each component for the production sweep.
 PRODUCTION_EQUATION_METHOD = "compute_production"
 
+#: Equation method a controller republishes under (R45). Looked up here only to
+#: name the registration; the controller owns the registration itself, which is
+#: what keeps this module free of an import of the controller unit.
+CONTROL_EQUATION_METHOD = "compute_controls"
+
 #: First integer of the capacity band. Capacity equations are registered when a
 #: capacity is *declared*, before any graph exists, so they cannot be part of the
 #: graph-derived allocation -- they take the top band instead, which also makes
@@ -201,6 +244,13 @@ CAPACITY_ORDER_BASE = 1_000_000
 #: because a republished reading is taken from a level a capacity holds: the
 #: level must be current before the instrument reporting it is refreshed.
 MEASUREMENT_ORDER_BASE = 2_000_000
+
+#: First integer of the controller band (R45). The top band, above the
+#: measurement one: a controller READS a measurement, so every published reading
+#: must be current before the first controller equation runs. Within the band the
+#: integers follow a topological sort of the signal graph, which is what makes a
+#: chain of controllers settle in ONE evaluation of the equation set.
+CONTROL_ORDER_BASE = 3_000_000
 
 
 # ----------------------------------------------------------------------
@@ -556,6 +606,47 @@ class RateObservationLoopError(ContinuousFlowCycleError):
                 "through it, crossing both edges at once. Observe a CAPACITY "
                 "LEVEL instead: put a volume between the producer and this "
                 "reading and threshold its level, which is integrated and does "
+                "break the loop."
+            ),
+        )
+
+
+class ControllerSignalCycleError(ContinuousFlowCycleError):
+    """A chain of controller republications that closes on itself (R45).
+
+    One controller's value output is another's observation input (R4), so a
+    model may hold a chain of them. A chain has exactly one evaluation order,
+    upstream first; a chain that comes back to its own start has none, and no
+    integer this module could hand out would make it settle.
+
+    Refused rather than ordered arbitrarily, and refused where every other
+    first-run model error is: while the order is derived, before a single
+    equation is registered. :func:`mark_algebraic_readings` terminates on this
+    shape rather than reporting it, deliberately, because refusing it belongs
+    here.
+
+    Kept a :class:`ContinuousFlowCycleError`, so a caller already catching a
+    first-run refusal catches this one too.
+    """
+
+    def __init__(self, cycle, connections):
+        super().__init__(
+            cycle,
+            connections,
+            message=(
+                "Controller signal graph must be acyclic (R45): "
+                f"{' -> '.join(cycle)} closes a loop. "
+                "Links closing the loop: "
+                f"{', '.join(str(cnct) for cnct in connections) or 'none found'}. "
+                "A controller republishes what its observation inputs carry at "
+                "the moment its equation runs, so a chain of them settles in "
+                "one evaluation only when every controller runs after the one "
+                "it reads. A chain that returns to its own start has no such "
+                "order: whichever controller ran first would republish the "
+                "previous evaluation's value, and the loop would crawl one hop "
+                "per evaluation instead of settling. Break the chain, or put "
+                "an integrated state on it -- a capacity level read over a "
+                "measurement link, which is carried between instants and does "
                 "break the loop."
             ),
         )
@@ -1734,6 +1825,163 @@ def find_rate_observation_loops(system, graph):
 
 
 # ----------------------------------------------------------------------
+# The order of the controllers among themselves (R45)
+# ----------------------------------------------------------------------
+#
+# A graph of its own, and it has to be: a controller carries no flow, so the
+# continuous-flow graph holds no node for it, and it carries no transported
+# quantity, so none of its links may ever become an edge of that graph (KD19).
+# What is walked here is the SIGNAL wiring -- who publishes a computed value
+# into whose observation input -- and the walk is over controllers only. The
+# two montages it deliberately leaves alone are named in the module docstring.
+
+
+def is_controller(comp):
+    """True when ``comp`` is an :class:`muscadet.ObjCtrl`, without importing it.
+
+    Asked of the collection a controller and nothing else carries. Duck-typed
+    on purpose, exactly as :func:`republished_channels` reads ``controls_emit``:
+    an import of the controller unit here would tie the ordering of a model to
+    the presence of a class it need not declare.
+    """
+    return getattr(comp, "controls_out", None) is not None
+
+
+def computed_publications(comp):
+    """The value outputs of ``comp`` its own equation refreshes (R42, R45).
+
+    A value output declaring no ``emit`` is absent: nothing computes it, so a
+    reader of it depends on whatever a model or a failure mode wrote and not on
+    when this component's equation ran. Same rule, and the same reading of
+    ``controls_emit``, as :func:`republished_channels`.
+    """
+    emit = getattr(comp, "controls_emit", None)
+
+    if emit is None:
+        return []
+
+    return [name for name in published_measurements(comp) if emit.get(name) is not None]
+
+
+def controller_signal_links(system):
+    """The controllers of ``system``, and the signal links between them (R45).
+
+    Returns
+    -------
+    tuple
+        ``(controllers, links)`` -- the controllers keyed as ``system.comp``
+        keys them, in declaration order, and one
+        :class:`ObservationConnection` per wiring from a computed value output
+        to another controller's observation input. Both empty on a model
+        holding no controller, in which case the engine is not walked at all.
+    """
+    components = getattr(system, "comp", None) or {}
+
+    controllers = {key: comp for key, comp in components.items() if is_controller(comp)}
+
+    # The engine is asked nothing on a model that declares no controller, which
+    # is every model that predates this unit.
+    if not controllers:
+        return controllers, []
+
+    by_engine_name = engine_name_index(components)
+
+    links: typing.List[ObservationConnection] = []
+
+    for pub_key, pub_comp in controllers.items():
+        cnct_info = pub_comp.get_cnct_info()
+
+        for name in computed_publications(pub_comp):
+            box = publication_box(name)
+            info = cnct_info.get(box) or {}
+
+            for target in info.get("targets", []):
+                obs_key = by_engine_name.get(target.get("obj"), target.get("obj"))
+                obs_comp = controllers.get(obs_key)
+
+                # Not a controller: an ObjFlow instrument republishing this
+                # reading draws from the measurement band and is refreshed
+                # BEFORE this controller whatever is decided here, so it is not
+                # an edge of this graph. See the module docstring.
+                if obs_comp is None:
+                    continue
+
+                obs_box = target.get("cnct")
+                channel = channel_behind_box(obs_comp, obs_box)
+
+                if channel is None:
+                    continue
+
+                links.append(
+                    ObservationConnection(pub_key, obs_key, channel, box, obs_box)
+                )
+
+    return controllers, links
+
+
+def controller_cycle_error(err, links):
+    """Turn ``graphlib``'s cycle path into an error naming the closing links.
+
+    ``CycleError.args[1]`` is the offending path read along the sorter's
+    successor direction, which here is the direction the signal travels: the
+    sorter is built with the publisher as the predecessor of the reader.
+    """
+    cycle = list(err.args[1]) if len(err.args) > 1 else []
+
+    closing: typing.List[ObservationConnection] = []
+    for source, target in zip(cycle, cycle[1:]):
+        closing.extend(
+            link for link in links if link.source == source and link.target == target
+        )
+
+    return ControllerSignalCycleError(cycle, closing)
+
+
+def compute_controller_order(system):
+    """Controller names in the order their equations must run (R45).
+
+    A topological sort of :func:`controller_signal_links`, ties broken by
+    declaration order exactly as the flow graph breaks its own (KTD3): the
+    nodes are inserted first, and ``TopologicalSorter`` breaks ties by
+    insertion order, so the derived sequence is reproducible from run to run
+    and independent of hash randomisation.
+
+    Every controller is in the result, including one nothing reads and one that
+    reads nothing: an isolated controller is a node too.
+
+    Raises
+    ------
+    ControllerSignalCycleError
+        When a chain of republications closes on itself.
+    """
+    controllers, links = controller_signal_links(system)
+
+    if not controllers:
+        return []
+
+    sorter: "graphlib.TopologicalSorter[str]" = graphlib.TopologicalSorter()
+
+    for key in controllers:
+        sorter.add(key)
+
+    for link in links:
+        sorter.add(link.target, link.source)
+
+    try:
+        sorter.prepare()
+    except graphlib.CycleError as err:
+        raise controller_cycle_error(err, links) from err
+
+    order: typing.List[str] = []
+    while sorter.is_active():
+        group = sorter.get_ready()
+        order.extend(group)
+        sorter.done(*group)
+
+    return order
+
+
+# ----------------------------------------------------------------------
 # The derived order
 # ----------------------------------------------------------------------
 
@@ -1756,7 +2004,9 @@ class EquationOrder:
     than inferred from simulation output.
     """
 
-    def __init__(self, graph, demand_order, production_order, torn=()):
+    def __init__(
+        self, graph, demand_order, production_order, torn=(), controller_order=()
+    ):
         #: The graph the order was derived from.
         self.graph = graph
         #: Component names in reverse-topological order (demand sweep).
@@ -1767,6 +2017,10 @@ class EquationOrder:
         #: breaks (R-14). **Empty for every acyclic model**, which is what makes
         #: the derived order of a model that builds today byte-identical.
         self.torn = list(torn)
+        #: Controller names in signal-topological order (R45), publisher before
+        #: reader. Every controller of the model is here, including an isolated
+        #: one; only those carrying a republication register an equation.
+        self.controller_order = list(controller_order)
         #: What this order actually registered, in registration order.
         self.registrations = []
 
@@ -1833,6 +2087,10 @@ def compute_equation_order(system):
         (:class:`RateComparisonLoopError`), or when a threshold on an OBSERVED
         rate closes one the graph cannot even see
         (:class:`RateObservationLoopError`, R43).
+    ControllerSignalCycleError
+        When a chain of controller republications closes on itself (R45). A
+        subclass of the above, so one ``except`` still covers every first-run
+        refusal.
     """
     graph = build_continuous_flow_graph(system)
 
@@ -1880,14 +2138,33 @@ def compute_equation_order(system):
     if observations:
         raise observations[0]
 
-    return EquationOrder(graph, demand_order, production_order, torn=torn)
+    # Last of the three, so a model closing a loop BOTH walks can see keeps the
+    # diagnostic written for it: this one refuses the shape they terminate on
+    # rather than report -- a chain of controller republications closing on
+    # itself (R45).
+    controller_order = compute_controller_order(system)
+
+    return EquationOrder(
+        graph,
+        demand_order,
+        production_order,
+        torn=torn,
+        controller_order=controller_order,
+    )
 
 
 def register_equation_order(system):
-    """Derive the order and register the sweep equations on the PDMP manager.
+    """Derive the order and register every derived equation on the PDMP manager.
 
     Called once, from the system's pre-run step: every connection exists and no
     equation has run yet.
+
+    Two allocations, and they are gated differently on purpose. The three
+    sweeps take their integers only when the continuous-flow graph holds a
+    node, so a purely discrete system stays one; the controller band (R45) is
+    gated on the PDMP manager instead, so a model of controllers alone -- which
+    has a manager but no graph node, a controller carrying no flow -- still has
+    its equations ordered.
 
     A component takes part in a sweep only when it defines that sweep's
     equation method, so this stays correct while the sweeps themselves are
@@ -1896,47 +2173,108 @@ def register_equation_order(system):
     order = compute_equation_order(system)
 
     # A purely discrete system must stay byte-identical to what it was before
-    # the continuous layer existed -- in particular, no PDMP manager.
-    if not order.graph.nodes:
-        return order
+    # the continuous layer existed -- in particular, no PDMP manager. The
+    # controller band below is gated on the manager rather than on the graph,
+    # so a model of controllers alone -- which already has one, its
+    # republications being explicit variables -- still gets its order.
+    if order.graph.nodes:
+        # Before any equation: the capability channel is written from inside
+        # one, and PyCATSHOO refuses that on a variable its solver does not know
+        # about (R-20). Here rather than at declaration time, so a system that
+        # never runs still never gains a PDMP manager.
+        for comp_name in order.graph.nodes:
+            register_capability_variables(system, system.comp[comp_name])
 
-    # Before any equation: the capability channel is written from inside one,
-    # and PyCATSHOO refuses that on a variable its solver does not know about
-    # (R-20). Here rather than at declaration time, so a system that never runs
-    # still never gains a PDMP manager.
-    for comp_name in order.graph.nodes:
-        register_capability_variables(system, system.comp[comp_name])
+        allocate = _order_allocator(system)
 
-    allocate = _order_allocator(system)
+        for method, sequence in (
+            (CAPABILITY_EQUATION_METHOD, order.capability_order),
+            (DEMAND_EQUATION_METHOD, order.demand_order),
+            (PRODUCTION_EQUATION_METHOD, order.production_order),
+        ):
+            for comp_name in sequence:
+                comp = system.comp[comp_name]
+                if not callable(getattr(comp, method, None)):
+                    continue
 
-    for method, sequence in (
-        (CAPABILITY_EQUATION_METHOD, order.capability_order),
-        (DEMAND_EQUATION_METHOD, order.demand_order),
-        (PRODUCTION_EQUATION_METHOD, order.production_order),
-    ):
-        for comp_name in sequence:
-            comp = system.comp[comp_name]
-            if not callable(getattr(comp, method, None)):
-                continue
+                value = allocate()
+                system.pdmp_add_equation_method(method, comp, value)
+                order.registrations.append(
+                    EquationRegistration(comp=comp_name, method=method, order=value)
+                )
 
-            value = allocate()
-            system.pdmp_add_equation_method(method, comp, value)
-            order.registrations.append(
-                EquationRegistration(comp=comp_name, method=method, order=value)
-            )
+    register_controller_equations(system, order)
 
     return order
 
 
-def _order_allocator(system):
-    """Hand out distinct increasing integers below the capacity band.
+def register_controller_equations(system, order):
+    """Register every controller's equation in the control band (R45).
 
-    Integers already taken on the system -- a capacity equation, or an equation
-    a model registered by hand -- are skipped, so "distinct" holds across the
-    whole system and not only within this allocation.
+    Called once the sweeps have taken their integers, so the allocator sees
+    them: "distinct" holds across the whole system and not only within a band.
+
+    A controller carrying no republication registers nothing and takes no
+    integer -- it has no equation to order -- but it is still a node of the
+    signal graph, so it still constrains the controllers around it.
+
+    **Gated on the PDMP manager**, exactly as
+    :meth:`muscadet.System.register_controller_crossings` is, and for the same
+    reason: a purely discrete system must stay one, and creating a manager here
+    would drag it onto the continuous solver for no gain. A controller that
+    republishes has already created one at declaration, its published variables
+    being explicit variables of the solver.
+
+    Returns
+    -------
+    list
+        The controllers whose equation was registered, in registration order.
+    """
+    if not order.controller_order or getattr(system, "pdmp_manager", None) is None:
+        return []
+
+    allocate = _order_allocator(
+        system, start=CONTROL_ORDER_BASE, ceiling=None, band="controller band"
+    )
+
+    registered = []
+
+    for comp_name in order.controller_order:
+        comp = system.comp[comp_name]
+        needs = getattr(comp, "needs_control_equation", None)
+
+        if needs is None or not needs():
+            continue
+
+        value = allocate()
+        comp.register_control_equation(system, value)
+        order.registrations.append(
+            EquationRegistration(
+                comp=comp_name, method=CONTROL_EQUATION_METHOD, order=value
+            )
+        )
+        registered.append(comp_name)
+
+    return registered
+
+
+def _order_allocator(
+    system, start=0, ceiling=CAPACITY_ORDER_BASE, band="capacity band"
+):
+    """Hand out distinct increasing integers from ``start``, below ``ceiling``.
+
+    Integers already taken on the system -- a capacity equation, a published
+    measurement, or an equation a model registered by hand -- are skipped, so
+    "distinct" holds across the whole system and not only within this
+    allocation.
+
+    ``ceiling=None`` is the TOP band, which has no neighbour above it to run
+    into and therefore cannot exhaust: the controller band (R45) draws that way.
+    ``band`` names the ceiling in the refusal, so a model that fills a band is
+    told which one.
     """
     taken = {reg.order for reg in getattr(system, "equation_registrations", [])}
-    counter = iter(range(CAPACITY_ORDER_BASE))
+    counter = itertools.count(start) if ceiling is None else iter(range(start, ceiling))
 
     def allocate():
         for value in counter:
@@ -1944,8 +2282,8 @@ def _order_allocator(system):
                 taken.add(value)
                 return value
         raise RuntimeError(
-            "Ran out of equation order integers below the capacity band "
-            f"({CAPACITY_ORDER_BASE}): the model declares too many continuous "
+            f"Ran out of equation order integers below the {band} "
+            f"({ceiling}): the model declares too many continuous "
             "components for the banded allocation"
         )
 

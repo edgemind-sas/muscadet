@@ -26,6 +26,7 @@ from .transfer import (
 )
 from .ordering import (
     ContinuousFlowCycleError,
+    ControllerSignalCycleError,
     RateComparisonLoopError,
     RateObservationLoopError,
 )
