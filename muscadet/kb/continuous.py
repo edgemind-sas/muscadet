@@ -21,6 +21,12 @@ the sensor carries a **deadband**: the level at which it activates and the
 level at which it releases. A single threshold is the degenerate case where the
 two coincide.
 
+Since the controller landed (R18, R39), the sensor no longer spells that
+deadband itself: it renders its parameters as a controller declaration and
+lands it on the flow surface an existing model connects to. What a band means
+is :class:`muscadet.CtrlBand`'s, in one place for both. The surface is
+untouched, which is why the component was reimplemented rather than replaced.
+
 Every one of them is composition over the declaration API: no component here
 writes an equation, reads a level in Python or subclasses a flow.
 """
@@ -534,12 +540,34 @@ class SensorContinuous(ContinuousComponent):
     observes a capacity, its watched threshold fires AT the crossing, and the
     discrete output it drives is what a producing component's rule guard reads.
 
+    **This component IS a controller, spelled in its own vocabulary** (R18).
+    Everything it decides -- which way a level activates it, where the release
+    edge may sit, what a missing release edge means, which comparison each edge
+    of the band makes, what a republished reading is multiplied by -- is
+    :class:`muscadet.CtrlBand` and :class:`muscadet.CtrlRepublish`, read through
+    :func:`muscadet.build_ctrl_node`, the one door onto the closed output
+    grammar (R42). :meth:`controller_declaration` renders a sensor's parameters
+    as the ``controls_in`` / ``controls_out`` pair a controller is declared
+    with, and :meth:`compile_control_out` is the whole of what is specific
+    here: it lands that declaration on the ``ObjFlow`` surface -- discrete
+    outputs and a two-state memory -- instead of on the controller's own
+    variables and message boxes.
+
+    That surface is deliberately unchanged, and it is why the sensor is
+    reimplemented rather than replaced: an existing model connects a sensor's
+    control port with :meth:`muscadet.System.connect_flow`, reads it back
+    through ``flows_out``, and reads the whole component back as an ``ObjFlow``
+    spec. A peer of ``ObjFlow`` -- which is what :class:`muscadet.ObjCtrl` is --
+    carries none of the three. What the two now share is the semantics, not the
+    mechanism.
+
     **The deadband.** ``activate`` is the level at which the control output
     comes on, ``release`` the level at which it goes off. Between them the
     output holds whatever it already was, so a loop closed through the sensor
     settles at the band edges instead of chattering around a single value.
     Declaring no ``release`` makes the two coincide: the degenerate single
     threshold, where the band is empty and the output switches at ``activate``.
+    Both statements are :class:`muscadet.CtrlBand`'s, not this class's.
 
     ``direction`` says which way the level activates it: ``"above"`` for a
     high-level detector, in which case ``release`` must not exceed ``activate``;
@@ -585,9 +613,15 @@ class SensorContinuous(ContinuousComponent):
     combine : str, optional
         How several publishers' readings reduce to one (R37): ``"median"``,
         ``"mean"``, ``"sum"``, ``"min"``, ``"max"``. Declaring it is what lifts
-        the one-publisher cap.
+        the one-publisher cap. It is the controller's ``aggregate``, chosen from
+        the same closed list :data:`muscadet.CONTROL_AGGREGATIONS` names.
     combine_fun : callable, optional
-        ``f(values) -> float``, used in preference to ``combine``.
+        ``f(values) -> float``, used in preference to ``combine``. **The one
+        inherited exception** (R18): a controller input takes no aggregation
+        function, its list being closed precisely so that an output grammar can
+        reason about what an input computes. This key predates the controller
+        and is kept working on THIS surface; it is not forwarded to one, and
+        :meth:`muscadet.ObjCtrl.check_aggregation` refuses it by name.
     publish : str or bool, optional
         Republish the observed reading under this channel name, so this sensor
         can itself be voted on. ``True`` republishes under ``measurement``.
@@ -617,12 +651,54 @@ class SensorContinuous(ContinuousComponent):
         "gain",
     )
 
-    def add_flows(self, **kwargs):
-        super().add_flows(**kwargs)
+    #: What the observed channel is declared with, in the CONTROLLER's
+    #: vocabulary: the sensor's own key on the left, the controller input key on
+    #: the right. ``combine`` is renamed to ``aggregate`` exactly as
+    #: :meth:`muscadet.ObjCtrl.add_control_in` renames it back on the way to the
+    #: measurement channel, and ``combine_fun`` keeps its name because it has no
+    #: controller spelling at all -- it is the inherited exception (R18), and
+    #: the shape of this table is what makes that visible.
+    CONTROL_IN_FROM_SENSOR = (
+        ("level_default", "level_default"),
+        ("combine", "aggregate"),
+        ("combine_fun", "combine_fun"),
+    )
 
+    def controller_declaration(self, kwargs):
+        """This sensor, read back as the controller it is (R18).
+
+        Returns the two sections :class:`muscadet.ObjCtrl` is declared with --
+        one observation input, and the outputs it drives, each carrying its
+        value as a grammar node. Everything the declaration can refuse is
+        refused here, before a variable or a message box exists.
+
+        Pure, and called from both :meth:`add_flows` and :meth:`set_flows`
+        rather than cached between them: the band memory is declared in the
+        second, which only runs once the first has created the state variables
+        it reads, and a component rebuilt from a spec calls the two on the same
+        arguments.
+
+        Parameters
+        ----------
+        kwargs : dict
+            The declaration this component was given.
+
+        Returns
+        -------
+        dict
+            ``{"controls_in": [...], "controls_out": [...]}``, the outputs in
+            the order they are built: the republication first, so an instrument
+            that also thresholds keeps the channel order it has always had.
+
+        Raises
+        ------
+        ValueError
+            If the sensor neither thresholds nor publishes, if the direction is
+            not one the band carries, or if the deadband is declared the wrong
+            way round.
+        """
         measurement = kwargs.get("measurement", "capacity")
         control = kwargs.get("control", "control")
-        direction = kwargs.get("direction", "above")
 
         publish = kwargs.get("publish", None)
         if publish is True:
@@ -630,72 +706,169 @@ class SensorContinuous(ContinuousComponent):
         elif publish is False:
             publish = None
 
-        if "activate" not in kwargs and publish is None:
+        thresholds = "activate" in kwargs
+
+        if not thresholds and publish is None:
             raise ValueError(
                 "A sensor must declare the level it activates at, or a "
                 "'publish' channel to republish its reading on"
             )
 
-        if "activate" not in kwargs:
-            # A pure republisher: it reads and reports, and gates nothing.
-            self.add_measurement_in(
-                name=measurement, **self._measurement_params(kwargs)
-            )
-            self.add_measurement_out(
-                name=publish,
-                source=measurement,
-                gain_default=float(kwargs.get("gain", 1.0)),
-            )
-            return
+        controls_out = []
 
-        if "activate" not in kwargs:
-            raise ValueError("A sensor must declare the level it activates at")
+        if publish is not None:
+            controls_out.append(
+                dict(
+                    name=publish,
+                    kind=muscadet.CTRL_OUT_VALUE,
+                    emit=self.republication_node(measurement, kwargs),
+                )
+            )
+
+        if thresholds:
+            controls_out.append(
+                dict(
+                    name=control,
+                    kind=muscadet.CTRL_OUT_BOOL,
+                    emit=self.band_node(measurement, kwargs),
+                )
+            )
+
+        return dict(
+            controls_in=[dict(name=measurement, **self._control_in_params(kwargs))],
+            controls_out=controls_out,
+        )
+
+    def band_node(self, measurement, kwargs):
+        """The deadband, as the grammar's own band (R42, R15).
+
+        The whole of what a band means comes from :class:`muscadet.CtrlBand`:
+        the two directions it carries, the side the release edge must sit on,
+        the release edge coinciding with the activation one when none is
+        declared, and the comparison each edge makes. None of the four is
+        restated here.
+
+        What IS restated is the wording of the two refusals, because a message
+        a model has been reading since before the controller existed is part of
+        this component's surface. Re-worded, not re-decided.
+        """
+        direction = kwargs.get("direction", muscadet.CTRL_BAND_ABOVE)
+
+        # Coerced BEFORE the direction is judged, which is the order this
+        # component has always refused in: a sensor carrying both a
+        # non-numeric level and an unknown direction reports the level.
         activate = float(kwargs["activate"])
-        release = float(kwargs.get("release", activate))
+        release = float(kwargs["release"]) if "release" in kwargs else None
 
-        # The band edges. The release edge is deliberately STRICT, so the
-        # degenerate case -- the two thresholds coinciding -- leaves the two
-        # comparisons mutually exclusive and the output switches exactly at the
-        # single threshold, with no level at which both edges hold at once.
-        if direction == "above":
-            if release > activate:
-                raise ValueError(
-                    f"Sensor deadband declared the wrong way round: a sensor "
-                    f"activating above {activate} releases at or below it, "
-                    f"not at {release}"
-                )
-            activate_op, release_op = ">=", "<"
-        elif direction == "below":
-            if release < activate:
-                raise ValueError(
-                    f"Sensor deadband declared the wrong way round: a sensor "
-                    f"activating below {activate} releases at or above it, "
-                    f"not at {release}"
-                )
-            activate_op, release_op = "<=", ">"
-        else:
+        if direction not in muscadet.CTRL_BAND_DIRECTIONS:
             raise ValueError(
                 f"Unknown sensor direction '{direction}': use 'above' or 'below'"
             )
 
-        self.add_measurement_in(name=measurement, **self._measurement_params(kwargs))
+        try:
+            return muscadet.build_ctrl_node(
+                f"Sensor deadband on {measurement!r}",
+                dict(
+                    op=muscadet.CTRL_OP_BAND,
+                    input=measurement,
+                    direction=direction,
+                    activate=activate,
+                    release=release,
+                ),
+            )
+        except ValueError:
+            # The direction is checked just above and both levels are already
+            # floats, so the only refusal the band has left is its inversion
+            # rule. The rule is the band's; only the sentence is the sensor's.
+            side = "below" if direction == muscadet.CTRL_BAND_ABOVE else "above"
 
-        if publish is not None:
+            raise ValueError(
+                f"Sensor deadband declared the wrong way round: a sensor "
+                f"activating {direction} {activate} releases at or {side} it, "
+                f"not at {release}"
+            ) from None
+
+    def republication_node(self, measurement, kwargs):
+        """The republished reading, as the grammar's own republication (R42).
+
+        The gain's default and the fact that it IS the initial value of
+        ``{publish}_level_gain`` -- one number, one spelling, and the endpoint a
+        failure mode clamps -- are :class:`muscadet.CtrlRepublish`'s.
+        """
+        spec = dict(op=muscadet.CTRL_OP_REPUBLISH, input=measurement)
+
+        if "gain" in kwargs:
+            spec["gain"] = float(kwargs["gain"])
+
+        return muscadet.build_ctrl_node(
+            f"Sensor republication of {measurement!r}", spec
+        )
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+
+        declaration = self.controller_declaration(kwargs)
+
+        for entry in declaration["controls_in"]:
+            self.compile_control_in(entry)
+
+        for entry in declaration["controls_out"]:
+            self.compile_control_out(entry)
+
+    def compile_control_in(self, entry):
+        """Land one observation input on the measurement channel it is.
+
+        The rename is :meth:`muscadet.ObjCtrl.add_control_in`'s: the interface
+        says ``aggregate``, the wire underneath says ``combine``. Only the keys
+        actually declared are forwarded, so a sensor that says nothing about
+        combination keeps the single-publisher channel it has always had --
+        byte-identically, ``combine`` never even reaching the model.
+        """
+        params = dict(entry)
+        name = params.pop("name")
+
+        if "aggregate" in params:
+            params["combine"] = params.pop("aggregate")
+
+        self.add_measurement_in(name=name, **params)
+
+    def compile_control_out(self, entry):
+        """Land one controller output on this component's ``ObjFlow`` surface.
+
+        The one method that is specific to the sensor rather than shared with
+        the controller, and the reason the two can share everything else. A
+        controller compiles a band to a watched two-state automaton of its own
+        and a republication to a PDMP equation; a sensor compiles the same two
+        nodes to what its surface has always exposed -- three discrete outputs
+        whose production conditions carry the band edges, and a measurement
+        publication.
+        """
+        node = entry["emit"]
+        name = entry["name"]
+
+        if entry["kind"] == muscadet.CTRL_OUT_VALUE:
             self.add_measurement_out(
-                name=publish,
-                source=measurement,
-                gain_default=float(kwargs.get("gain", 1.0)),
+                name=name, source=node.input, gain_default=node.gain
             )
 
+            return
+
+        # The band edges, as ordinary comparison operands. The release edge is
+        # STRICT and the activation one is not, which is what leaves the
+        # degenerate band -- the two levels coinciding -- with two mutually
+        # exclusive edges and a switch exactly at that single level. Which
+        # operator goes on which edge is CtrlBand's answer, read off the node.
+        activate_op, release_op = node.edge_operators()
+
         for suffix, op, value in (
-            ("activate", activate_op, activate),
-            ("release", release_op, release),
+            ("activate", activate_op, node.activate),
+            ("release", release_op, node.release),
         ):
             self.add_flow(
                 dict(
                     cls="FlowDiscreteOut",
-                    name=f"{control}_{suffix}",
-                    var_prod_cond=[{"name": measurement, "op": op, "value": value}],
+                    name=f"{name}_{suffix}",
+                    var_prod_cond=[{"name": node.input, "op": op, "value": value}],
                 )
             )
 
@@ -705,43 +878,47 @@ class SensorContinuous(ContinuousComponent):
         self.add_flow(
             dict(
                 cls="FlowDiscreteOut",
-                name=control,
+                name=name,
                 var_prod_default=True,
                 var_fed_available_out_init=False,
             )
         )
 
-    @staticmethod
-    def _measurement_params(kwargs):
-        """The measurement-channel parameters this declaration carries (R37).
+    def _control_in_params(self, kwargs):
+        """The observation input's parameters, in controller vocabulary (R37).
 
-        Only the keys actually declared are forwarded, so a sensor that says
-        nothing about combination keeps the single-publisher channel it has
-        always had -- byte-identically, ``combine`` never even reaching the
-        model.
+        Driven by :attr:`CONTROL_IN_FROM_SENSOR` so that the one key with no
+        controller spelling -- the inherited aggregation function -- is visible
+        as such rather than buried in a forwarding loop.
         """
         params = {}
-        for source, target in (
-            ("level_default", "level_default"),
-            ("combine", "combine"),
-            ("combine_fun", "combine_fun"),
-        ):
+
+        for source, target in self.CONTROL_IN_FROM_SENSOR:
             if source in kwargs:
                 params[target] = kwargs[source]
+
         return params
 
     def set_flows(self, **kwargs):
-        # The band automaton reads the two edge outputs' state variables, so it
-        # is declared once those variables exist -- which is what set_flows
+        # The band memory reads the two edge outputs' state variables, so it is
+        # declared once those variables exist -- which is what set_flows
         # creates.
         super().set_flows(**kwargs)
 
-        # A pure republisher declares no control port, hence no band automaton.
-        if "activate" not in kwargs:
-            return
+        for entry in self.controller_declaration(kwargs)["controls_out"]:
+            if entry["kind"] == muscadet.CTRL_OUT_BOOL:
+                self.add_band_memory(entry["name"])
 
-        control = kwargs.get("control", "control")
+    def add_band_memory(self, control):
+        """The two-state memory that holds a control output inside its band.
 
+        This is where a sensor and a controller genuinely differ, and the
+        difference is the surface, not the semantics: a controller re-evaluates
+        a boolean output on the notification of the automaton its band compiled
+        to, while a sensor clamps the AVAILABILITY of a discrete output that
+        produces unconditionally. Both stop the integration at the crossing;
+        only the second is connectable with ``connect_flow``.
+        """
         # A mode effect resolves its target by an UNANCHORED regex over the
         # component's variable basenames, so the pattern is anchored here: the
         # band clamps the control port's own availability and must never reach
