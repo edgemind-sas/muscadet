@@ -1456,6 +1456,14 @@ class ObjFlow(cod3s.PycComponent):
         a producer takes no share of what it produces. Read it with
         ``get_rate()``; there is no fill and no constituent behind a rate.
 
+        ``kind="ratio"`` observes the SHARE one constituent is of what a volume
+        holds, over the level box, and its ``flows`` names that one constituent.
+        Read it with ``get_ratio()``. It exists so that a threshold can be put
+        on a composition without anything having to divide: the volume publishes
+        the quotient (:func:`muscadet.capacity.ratio_alias`), which is what lets
+        a controller band on a fraction although its output grammar carries no
+        arithmetic at all (R42).
+
         The channel observes exactly ONE publisher unless ``combine`` (or
         ``combine_fun``) says how several readings reduce to one (R37):
         ``combine="median"`` over three redundant instruments is a vote that a
@@ -1485,8 +1493,11 @@ class ObjFlow(cod3s.PycComponent):
             is formed from: a tank holding water and heat has a temperature of
             ``heat / water``, and the total is their weighted sum, which is
             neither term and cannot be divided back into them. Read one with
-            ``get_level(flow)`` / ``get_fill(flow)``. A constituent the
-            publisher does not hold is refused at ``connect``.
+            ``get_level(flow)`` / ``get_fill(flow)`` / ``get_ratio(flow)``, the
+            last being the share of the total raw quantity the volume itself
+            computes. A constituent the publisher does not hold is refused at
+            ``connect``. On a ``kind="ratio"`` channel the same key names the
+            one constituent the channel reads, and is required.
 
         Returns
         -------
@@ -1647,11 +1658,12 @@ class ObjFlow(cod3s.PycComponent):
             the three republishes that output's delivered rate (R38).
 
             ``flows`` republishes those constituents of the source beside its
-            total, so an instrument standing between a multi-constituent
-            volume and a voter carries what the volume publishes. An observer
-            cannot tell a capacity from a republisher, and this is what keeps
-            that true. One gain covers every reading: a mode that kills the
-            instrument kills all of them.
+            total -- their levels, their fills and their shares -- so an
+            instrument standing between a multi-constituent volume and a voter
+            carries what the volume publishes. An observer cannot tell a
+            capacity from a republisher, and this is what keeps that true. One
+            gain covers every reading, the shares included: a mode that kills
+            the instrument kills all of them.
 
         Returns
         -------

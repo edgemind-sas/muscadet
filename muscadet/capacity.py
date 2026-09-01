@@ -37,14 +37,23 @@ Variable                       Kind       Meaning
 ``c_qty``      (``t_double``)  ODE        total raw quantity held, all flows
 ``c_fill_f``   (``t_double``)  explicit   weighted fill of ``f``: ``qty * weight / volume``
 ``c_fill``     (``t_double``)  explicit   total weighted fill, the sum of the per-flow fills
+``c_ratio_f``  (``t_double``)  explicit   share of ``f`` in what is held: ``qty_f / qty``
 ``c_inflow_f`` (``t_double``)  input      rate at which ``f`` currently ENTERS the capacity
 ``c_outflow_f``(``t_double``)  input      rate at which ``f`` currently LEAVES the capacity
 =============================  =========  ==============================================
 
 Per KTD11 the capacity owns one ODE variable per held flow plus a total, and one
-empty/full automaton driven by the total *weighted* fill. Fills are real
-PyCATSHOO variables rather than Python properties (R28), so they reach the
+empty/full automaton driven by the total *weighted* fill. Fills and ratios are
+real PyCATSHOO variables rather than Python properties (R28), so they reach the
 simulation indicators.
+
+``c_ratio_f`` divides by the total RAW quantity held and not by the volume: it
+answers "how much of what is in there is ``f``", which is what a fraction in a
+mixture means, and it is the very share :meth:`Capacity.split_draw` composes a
+withdrawal at. The declared volume never enters it -- it bounds the content, it
+does not scale it -- so the ratio is a quotient of two moving quantities rather
+than a reading against a fixed scale, which is exactly what ``c_fill`` already
+is and why the two are different numbers.
 
 ``c_inflow_f`` / ``c_outflow_f`` are the capacity's two hooks onto the four hops
 of KTD13: the sweeps that compute demand and allocation (U8/U10) write them, and
@@ -55,13 +64,13 @@ Measurement link (R33)
 ----------------------
 A capacity publishes its level through a **read-only export**: the message box
 ``{c}_level_out`` carries the aliases ``{c}_level`` (total raw quantity) and
-``{c}_fill`` (total weighted fill), plus ``{c}_level_{f}`` and ``{c}_fill_{f}``
-for every held flow. An observing component declares the matching import with
-:meth:`muscadet.ObjFlow.add_measurement_in`, which creates the message box
-``{c}_level_in`` importing the totals, and the constituents its ``flows=`` list
-names, into *references*. A reference has no ``setValue``, so the importing
-component cannot write the level; the link carries no quantity and takes part
-in no allocation.
+``{c}_fill`` (total weighted fill), plus ``{c}_level_{f}``, ``{c}_fill_{f}`` and
+``{c}_ratio_{f}`` for every held flow. An observing component declares the
+matching import with :meth:`muscadet.ObjFlow.add_measurement_in`, which creates
+the message box ``{c}_level_in`` importing the totals, and the constituents its
+``flows=`` list names, into *references*. A reference has no ``setValue``, so
+the importing component cannot write the level; the link carries no quantity
+and takes part in no allocation.
 
 **Why per constituent.** The total is the one reading an INTENSIVE property
 cannot be recovered from: a volume holding water and heat is at a temperature
@@ -70,9 +79,21 @@ and is not a quantity of anything when the constituents differ in nature. An
 observer that wants the ratio needs both terms, so both are published, and an
 instrument republishing a reading (:class:`MeasurementOut`) carries them too --
 an observer cannot tell a capacity from a republisher, and that has to stay
-true. Aliases are built in :func:`level_alias` / :func:`fill_alias`, in one
-place, because a drift of one underscore between the two sides fails the whole
-``connect`` rather than only the constituent.
+true. Aliases are built in :func:`level_alias` / :func:`fill_alias` /
+:func:`ratio_alias`, in one place, because a drift of one underscore between the
+two sides fails the whole ``connect`` rather than only the constituent.
+
+**Why the ratio is published rather than divided by the observer.** Publishing
+both terms lets an observer form any intensive property, and a *component*
+reading them can indeed divide -- ``get_level("heat") / get_level("water")`` is
+one line of Python. What cannot divide is a controller (R42): its output grammar
+is closed at four operators, none of them arithmetic, and it is closed so that
+every form it carries compiles to a threshold the solver can root-find. A
+quotient is therefore materialised on the PRODUCING side, where it is a variable
+of the model like any other, and the observer is left with the comparison it
+already knows how to date. That is also the shape the reference installation
+this was ported from uses, and the reason a fraction of hydrogen in a room is
+expressible at all.
 
 Scope
 -----
@@ -115,8 +136,22 @@ MEASUREMENT_LEVEL = "level"
 #: ``{c}_level_in``, and there is no fill and no constituent behind it.
 MEASUREMENT_RATE = "rate"
 
+#: A measurement channel reads the RATIO one constituent is of what a volume
+#: holds: a dimensionless fraction, published per constituent by the volume
+#: itself. Same observer and same read-only construction as a level, and the
+#: same box -- ``{c}_level_out`` / ``{c}_level_in`` -- because a ratio is
+#: published by whoever publishes the level it is derived from. What differs is
+#: the single alias it imports, ``{c}_ratio_{f}``, and therefore that the
+#: channel names exactly ONE constituent: a whole has no fraction of itself.
+#:
+#: A channel of this nature exists so that a CONTROLLER can threshold a
+#: fraction. A component reading a level channel divides two constituents in
+#: Python and needs nothing here; a controller cannot, its output grammar being
+#: closed at four operators, none of them arithmetic (R42).
+MEASUREMENT_RATIO = "ratio"
+
 #: Every nature a measurement channel may be declared with.
-MEASUREMENT_KINDS = (MEASUREMENT_LEVEL, MEASUREMENT_RATE)
+MEASUREMENT_KINDS = (MEASUREMENT_LEVEL, MEASUREMENT_RATE, MEASUREMENT_RATIO)
 
 
 # ----------------------------------------------------------------------
@@ -185,6 +220,51 @@ def level_alias(channel, flow=None):
 def fill_alias(channel, flow=None):
     """The alias carrying a channel's weighted fill. See :func:`level_alias`."""
     return f"{channel}_fill" if flow is None else f"{channel}_fill_{flow}"
+
+
+def ratio_alias(channel: str, flow: str) -> str:
+    """The alias carrying one constituent's share of what a volume holds.
+
+    Built here, beside :func:`level_alias` and :func:`fill_alias`, for the
+    reason the first of the three states: the two sides are matched by string
+    equality inside PyCATSHOO, and an import naming an alias the box does not
+    export fails the WHOLE ``connect``, so a convention that drifted by one
+    underscore would take the totals down with the constituent.
+
+    ``flow`` has no default, and that is the whole shape of the family: there is
+    no ``{c}_ratio``. The share of a volume in itself is 1 wherever it holds
+    anything, so a total would publish a constant, and a constant is not a
+    reading -- an observer thresholding it would be thresholding the number one.
+    """
+    return f"{channel}_ratio_{flow}"
+
+
+def share_of(quantity: float, total: float) -> float:
+    """One constituent's share of what a volume holds, ``quantity / total``.
+
+    **A null total is zero, by convention, and not by defence.** It is the
+    definition retained rather than a guard bolted onto a division: a volume
+    that holds nothing holds no fraction of anything either, so zero is the
+    reading, and the same convention governs the reference installation this
+    was ported from. The alternatives are worse in the one place it matters --
+    a threshold: a NaN compares false to everything and would silently release
+    every band watching the composition, and refusing to publish leaves an
+    observer with no number at all.
+
+    The jump this creates when a volume empties is dated, not smeared: the
+    total reaching zero IS the crossing the empty/full automaton watches, and
+    that automaton is registered as WATCHED (R7), so the solver stops there
+    instead of walking through the discontinuity inside an integration step.
+    Every weight being strictly positive, "the weighted fill is at zero" and
+    "the raw total is at zero" are the same instant, which is what makes the two
+    coincide rather than merely stand close.
+
+    The single place the quotient is written, and read by all three of the
+    starting value, the refresh and the live recomputation: they must agree to
+    the last bit, or a republished reading would differ from the one it
+    republishes.
+    """
+    return 0.0 if total == 0 else quantity / total
 
 
 def combine_sum(values):
@@ -361,6 +441,13 @@ class Capacity(cod3s.ObjCOD3S):
         exclude=True,
         repr=False,
         description="Per-flow weighted fill explicit variables",
+    )
+
+    var_ratio: typing.Dict[str, typing.Any] = pydantic.Field(
+        default_factory=dict,
+        exclude=True,
+        repr=False,
+        description="Per-flow share of the total raw quantity, explicit variables",
     )
 
     var_inflow: typing.Dict[str, typing.Any] = pydantic.Field(
@@ -566,8 +653,19 @@ class Capacity(cod3s.ObjCOD3S):
     # ------------------------------------------------------------------
 
     def add_variables(self, comp):
-        """Declare the quantity, fill and transit variables on ``comp``."""
-        qty_total = 0.0
+        """Declare the quantity, fill, ratio and transit variables on ``comp``.
+
+        The ratios are given their **starting value here** and not at the first
+        integration step, exactly as the fills are: a model that reads a
+        composition before the clock has moved -- an initial state, an indicator
+        at t=0, a controller settling its outputs at the seed
+        (:meth:`muscadet.ObjCtrl.build_emit_automata`) -- would otherwise read
+        zero out of a volume that holds something, and read it once, which is
+        the kind of wrong number nothing raises.
+        """
+        qty_total = sum(
+            float(self.content_init.get(entry.name, 0.0)) for entry in self.flows
+        )
         fill_total = 0.0
 
         for entry in self.flows:
@@ -580,6 +678,11 @@ class Capacity(cod3s.ObjCOD3S):
             self.var_fill[entry.name] = comp.addVariable(
                 f"{self.name}_fill_{entry.name}", pyc.TVarType.t_double, fill_init
             )
+            self.var_ratio[entry.name] = comp.addVariable(
+                f"{self.name}_ratio_{entry.name}",
+                pyc.TVarType.t_double,
+                share_of(qty_init, qty_total),
+            )
             self.var_inflow[entry.name] = comp.addVariable(
                 f"{self.name}_inflow_{entry.name}", pyc.TVarType.t_double, 0.0
             )
@@ -587,7 +690,6 @@ class Capacity(cod3s.ObjCOD3S):
                 f"{self.name}_outflow_{entry.name}", pyc.TVarType.t_double, 0.0
             )
 
-            qty_total += qty_init
             fill_total += fill_init
 
         self.var_qty_total = comp.addVariable(
@@ -599,6 +701,9 @@ class Capacity(cod3s.ObjCOD3S):
 
     def add_mb(self, comp):
         """Publish the level as a read-only export (R33), total AND per flow.
+
+        Three families per held flow -- level, fill and ratio -- and one place
+        that names them, for the reason :func:`level_alias` gives.
 
         Only exports: the observing side imports into references, which carry
         no setter at all, so the link cannot be written from downstream.
@@ -635,6 +740,11 @@ class Capacity(cod3s.ObjCOD3S):
                 mb_name,
                 self.var_fill[entry.name],
                 fill_alias(self.name, entry.name),
+            )
+            comp.addMessageBoxExport(
+                mb_name,
+                self.var_ratio[entry.name],
+                ratio_alias(self.name, entry.name),
             )
 
     def published_flows(self):
@@ -736,6 +846,7 @@ class Capacity(cod3s.ObjCOD3S):
         for entry in self.flows:
             system.pdmp_add_ode_variable(self.var_qty[entry.name])
             system.pdmp_add_explicit_variable(self.var_fill[entry.name])
+            system.pdmp_add_explicit_variable(self.var_ratio[entry.name])
         system.pdmp_add_ode_variable(self.var_qty_total)
         system.pdmp_add_explicit_variable(self.var_fill_total)
 
@@ -746,14 +857,29 @@ class Capacity(cod3s.ObjCOD3S):
     # ------------------------------------------------------------------
 
     def compute(self):
-        """Integrate the levels and refresh the fills.
+        """Integrate the levels and refresh the fills and the ratios.
 
         One integration step's worth of work: every level integrates the
         imbalance between what enters and what leaves, and the reported fills
-        follow the quantities.
+        and ratios follow the quantities.
+
+        The ratios are refreshed HERE and nowhere else, on the one path that
+        already recomputes what is derived from the levels. A second refresh
+        path -- a sensitive method on the total, a start method of its own --
+        would be a second answer to "what is the composition now", and the two
+        would differ by exactly one integration step for as long as nobody
+        noticed.
+
+        They are computed from the per-flow quantities rather than from
+        ``var_qty_total``: that total is an ODE variable of its own (see
+        :meth:`resync_total`), so it can sit a residue away from the sum of the
+        constituents between a bound crossing and the reset map, and a
+        composition whose shares do not add up to one is a state no observer can
+        make sense of.
         """
         rate_total = 0.0
         fill_total = 0.0
+        qty_total = sum(self.var_qty[entry.name].value() for entry in self.flows)
 
         for entry in self.flows:
             rate = (
@@ -763,9 +889,13 @@ class Capacity(cod3s.ObjCOD3S):
             self.var_qty[entry.name].setDvdtODE(rate)
             rate_total += rate
 
-            fill = self.var_qty[entry.name].value() * entry.weight / self.capacity
+            quantity = self.var_qty[entry.name].value()
+
+            fill = quantity * entry.weight / self.capacity
             self.var_fill[entry.name].setValue(fill)
             fill_total += fill
+
+            self.var_ratio[entry.name].setValue(share_of(quantity, qty_total))
 
         self.var_qty_total.setDvdtODE(rate_total)
         self.var_fill_total.setValue(fill_total)
@@ -785,6 +915,14 @@ class Capacity(cod3s.ObjCOD3S):
         if flow_name is None:
             return self.var_fill_total.value()
         return self.var_fill[flow_name].value()
+
+    def get_ratio(self, flow_name: str) -> float:
+        """The share of what is held that ``flow_name`` is, as reported.
+
+        No total form, for the reason :func:`ratio_alias` gives: the share of a
+        volume in itself is not a reading.
+        """
+        return float(self.var_ratio[flow_name].value())
 
     def total_quantity(self) -> float:
         """The total raw quantity, recomputed from the per-flow levels."""
@@ -811,6 +949,18 @@ class Capacity(cod3s.ObjCOD3S):
         return (
             self.var_qty[flow_name].value() * self.weight_of(flow_name) / self.capacity
         )
+
+    def current_ratio(self, flow_name: str) -> float:
+        """The share of ``flow_name``, recomputed from the ODE levels.
+
+        The counterpart of :meth:`current_fill`, and needed for the same
+        reason: :attr:`var_ratio` is an EXPLICIT variable the capacity equation
+        writes, so reading it back from another equation of the same step lags
+        one integration step behind the levels. What a republisher hands an
+        observer comes from here, so that an instrument standing in front of a
+        volume reports the composition that volume has, not the one it had.
+        """
+        return share_of(self.get_quantity(flow_name), self.total_quantity())
 
     def total_fill(self) -> float:
         """The total weighted fill, recomputed from the per-flow levels."""
@@ -1108,6 +1258,7 @@ class Capacity(cod3s.ObjCOD3S):
                 f"  {fg('white')}{entry.name}{attr('reset')}: "
                 f"qty={self.get_quantity(entry.name):g} "
                 f"fill={self.get_fill(entry.name):g} "
+                f"ratio={self.get_ratio(entry.name):g} "
                 f"(weight {entry.weight:g})"
             )
         lines.append(
@@ -1135,17 +1286,25 @@ class MeasurementIn(cod3s.ObjCOD3S):
     is the point -- a silent sum over redundant sensors is a wrong model, not a
     default.
 
-    **One observer, two natures of channel** (R38). ``kind="level"`` -- the
+    **One observer, three natures of channel** (R38). ``kind="level"`` -- the
     default -- reads a capacity level or a republished reading, and is what this
     class has always been. ``kind="rate"`` reads what a continuous output
-    DELIVERS, over the ``{f}_rate_out`` box that output publishes. Everything
-    that makes an observer an observer is shared and stays shared: the endpoint
-    is a reference, so the reading cannot be written; the link carries no
-    quantity and no demand, so the observer takes no share of what it watches;
-    and the same ``setCnctMax(1)`` / ``combine`` rule governs how many
-    publishers one channel may read. Only the box name, the alias and the
-    absence of a fill differ, which is why this is one class with a nature and
-    not two.
+    DELIVERS, over the ``{f}_rate_out`` box that output publishes.
+    ``kind="ratio"`` reads the fraction ONE constituent is of what a volume
+    holds, over the very box the level comes on. Everything that makes an
+    observer an observer is shared and stays shared: the endpoint is a
+    reference, so the reading cannot be written; the link carries no quantity
+    and no demand, so the observer takes no share of what it watches; and the
+    same ``setCnctMax(1)`` / ``combine`` rule governs how many publishers one
+    channel may read. Only the box name, the alias and what stands beside the
+    reading differ, which is why this is one class with a nature and not three.
+
+    **What a nature settles is what ONE number this channel reads**, because
+    that is what a controller thresholds: :meth:`get_reading` answers a level, a
+    rate or a ratio, and the grammar of an output names an input and nothing
+    else (R42). A level channel still reads its constituents' levels, fills and
+    ratios beside its total -- naming a nature costs an observer nothing it
+    already had.
     """
 
     name: str = pydantic.Field(
@@ -1161,9 +1320,12 @@ class MeasurementIn(cod3s.ObjCOD3S):
         description=(
             "What this channel reads: 'level', a capacity level or a "
             "republished reading (the default, and what muscadet has always "
-            "carried), or 'rate', the quantity a continuous output delivers "
-            "(R38). A rate channel imports over '{f}_rate_in' instead of "
-            "'{c}_level_in', reads no fill and carries no constituent."
+            "carried), 'rate', the quantity a continuous output delivers "
+            "(R38), or 'ratio', the fraction one constituent is of what a "
+            "volume holds. A rate channel imports over '{f}_rate_in' instead "
+            "of '{c}_level_in', reads no fill and carries no constituent; a "
+            "ratio channel imports over '{c}_level_in' like a level, reads no "
+            "fill, and names in 'flows' the ONE constituent it reads."
         ),
     )
 
@@ -1174,7 +1336,8 @@ class MeasurementIn(cod3s.ObjCOD3S):
             "the total this channel has always carried. Empty -- the default "
             "-- imports the total alone and is byte-identical to 1.x. Naming "
             "a flow is what lets an observer form an intensive property, which "
-            "the total cannot be divided back into."
+            "the total cannot be divided back into. On a kind='ratio' channel "
+            "it names the ONE constituent whose share is read, and is required."
         ),
     )
 
@@ -1193,6 +1356,17 @@ class MeasurementIn(cod3s.ObjCOD3S):
             "from level_default rather than folded into it: the two are read "
             "on different channels and a model declaring both natures would "
             "otherwise have to give one number two meanings."
+        ),
+    )
+
+    ratio_default: float = pydantic.Field(
+        0.0,
+        description=(
+            "Share read while a link is not connected: on a kind='ratio' "
+            "channel, and for the constituents a level channel names. Its own "
+            "number for the reason rate_default is: a share lives in [0, 1] "
+            "and a level in the units of what is held, so one default could "
+            "not be a sane value for both."
         ),
     )
 
@@ -1241,6 +1415,13 @@ class MeasurementIn(cod3s.ObjCOD3S):
         description="Per-constituent fill references, keyed by flow name",
     )
 
+    var_ratio_flow: typing.Dict[str, typing.Any] = pydantic.Field(
+        default_factory=dict,
+        exclude=True,
+        repr=False,
+        description="Per-constituent ratio references, keyed by flow name",
+    )
+
     @pydantic.model_validator(mode="after")
     def check_kind(self):
         """Refuse an unknown channel nature at DECLARATION time (R38).
@@ -1282,6 +1463,19 @@ class MeasurementIn(cod3s.ObjCOD3S):
                 )
             seen.add(flow_name)
 
+        # A ratio channel reads ONE number, and that number is a fraction of
+        # something by something else: the constituent is half the reading, not
+        # a refinement of it. Refused here, where the mistake was made, because
+        # the alternatives are both silent -- no constituent leaves the channel
+        # importing nothing at all, and two leave it having to pick one.
+        if self.kind == MEASUREMENT_RATIO and len(self.flows) != 1:
+            declared = ", ".join(self.flows) if self.flows else "none"
+            raise ValueError(
+                f"Measurement channel {self.name}: a ratio channel reads the "
+                f"share of ONE constituent, so flows= names exactly one; it "
+                f"names {declared}"
+            )
+
         return self
 
     @pydantic.model_validator(mode="after")
@@ -1317,8 +1511,25 @@ class MeasurementIn(cod3s.ObjCOD3S):
         """True when this channel observes a delivered rate rather than a level."""
         return self.kind == MEASUREMENT_RATE
 
+    @property
+    def reads_a_ratio(self) -> bool:
+        """True when this channel observes one constituent's share of a volume."""
+        return self.kind == MEASUREMENT_RATIO
+
+    @property
+    def constituent(self) -> str:
+        """The one constituent a ratio channel reads. Settled by validation."""
+        return self.flows[0]
+
     def box_name(self) -> str:
-        """Name of the box this channel imports on, per its nature (R38)."""
+        """Name of the box this channel imports on, per its nature (R38).
+
+        A RATIO comes on the level box, and it has to: it is published by the
+        volume that publishes the level, on the one export
+        :meth:`Capacity.add_mb` builds. A box of its own would mean a second
+        export to wire, and an observer would then be able to read a
+        composition off a publisher that never agreed to publish one.
+        """
         if self.reads_a_rate:
             return rate_observation_box(self.name, "in")
 
@@ -1332,6 +1543,14 @@ class MeasurementIn(cod3s.ObjCOD3S):
             # everything downstream of it (the connection cap, ``reduce``,
             # ``is_connected``) stays one implementation.
             self.var_level = comp.addReference(self.box_name())
+        elif self.reads_a_ratio:
+            # One reference again, and in the same handle for the same reason.
+            # A ratio carries no fill either -- it IS a fraction, of what the
+            # volume holds rather than of the volume -- and its constituent is
+            # named by the declaration, not read beside it.
+            self.var_level = comp.addReference(
+                f"{ratio_alias(self.name, self.constituent)}_in"
+            )
         else:
             self.var_level = comp.addReference(f"{self.name}_level_in")
             self.var_fill = comp.addReference(f"{self.name}_fill_in")
@@ -1342,6 +1561,9 @@ class MeasurementIn(cod3s.ObjCOD3S):
                 )
                 self.var_fill_flow[flow_name] = comp.addReference(
                     f"{self.name}_fill_{flow_name}_in"
+                )
+                self.var_ratio_flow[flow_name] = comp.addReference(
+                    f"{ratio_alias(self.name, flow_name)}_in"
                 )
 
         if not self.combines_several:
@@ -1360,18 +1582,30 @@ class MeasurementIn(cod3s.ObjCOD3S):
         check its source without caring which of the two it resolved to -- the
         two ARE interchangeable as sources, which is what makes a chain of
         republishers possible at all.
+
+        **A channel that reads ONE number hands on no constituent**, whatever
+        its ``flows`` says. On a ratio channel that list names the constituent
+        the reading is ABOUT, not constituents standing beside it: an instrument
+        republishing such a channel republishes the share, one number, and has
+        nothing to decompose. Answering ``flows`` here would let
+        :meth:`MeasurementOut.check_source_carries` accept a republication whose
+        every per-constituent read would then be refused at the first step.
         """
+        if self.reads_a_rate or self.reads_a_ratio:
+            return []
+
         return list(self.flows)
 
     def every_reference(self):
         """Every reference this channel reads, totals and constituents."""
-        if self.reads_a_rate:
+        if self.reads_a_rate or self.reads_a_ratio:
             return [self.var_level]
 
         return (
             [self.var_level, self.var_fill]
             + list(self.var_level_flow.values())
             + list(self.var_fill_flow.values())
+            + list(self.var_ratio_flow.values())
         )
 
     def add_mb(self, comp):
@@ -1381,6 +1615,17 @@ class MeasurementIn(cod3s.ObjCOD3S):
 
         mb_name = self.box_name()
         comp.addMessageBox(mb_name)
+
+        if self.reads_a_ratio:
+            # The level box, and ONE alias off it. An import is a subset of what
+            # the box exports and never a request the publisher must widen, so
+            # reading only the share leaves every other alias to whoever wants
+            # it -- including a second observer on the same publisher.
+            comp.addMessageBoxImport(
+                mb_name, self.var_level, ratio_alias(self.name, self.constituent)
+            )
+            return
+
         comp.addMessageBoxImport(mb_name, self.var_level, level_alias(self.name))
         comp.addMessageBoxImport(mb_name, self.var_fill, fill_alias(self.name))
 
@@ -1394,6 +1639,11 @@ class MeasurementIn(cod3s.ObjCOD3S):
                 mb_name,
                 self.var_fill_flow[flow_name],
                 fill_alias(self.name, flow_name),
+            )
+            comp.addMessageBoxImport(
+                mb_name,
+                self.var_ratio_flow[flow_name],
+                ratio_alias(self.name, flow_name),
             )
 
     def add_rate_mb(self, comp: typing.Any) -> None:
@@ -1476,14 +1726,15 @@ class MeasurementIn(cod3s.ObjCOD3S):
         The single accessor everything that consumes a measurement goes
         through: a comparison operand of a rule guard or of a discrete
         production condition (R21, R22), a transfer potential, a republishing
-        instrument. It answers a level on a level channel and a rate on a rate
+        instrument, and the output grammar of a controller (R42). It answers a
+        level on a level channel, a rate on a rate one and a share on a ratio
         one, which is exactly what those consumers want -- a number to threshold
-        or to put in a law -- and it is why a rate channel needed no second
-        observer class.
+        or to put in a law -- and it is why neither of the two later natures
+        needed an observer class of its own.
 
-        :meth:`get_level` and :meth:`get_rate` are the named readings, and each
-        refuses the nature it is not: naming the quantity is worth a refusal in
-        a model, and worth nothing in the generic path above.
+        :meth:`get_level`, :meth:`get_rate` and :meth:`get_ratio` are the named
+        readings, and each refuses the nature it is not: naming the quantity is
+        worth a refusal in a model, and worth nothing in the generic path above.
         """
         if self.reads_a_rate:
             if flow is not None:
@@ -1494,6 +1745,17 @@ class MeasurementIn(cod3s.ObjCOD3S):
                 )
 
             return self.reduce(self.var_level, self.rate_default)
+
+        if self.reads_a_ratio:
+            if flow is not None and flow != self.constituent:
+                raise ValueError(
+                    f"Measurement channel {self.name}: it reads the share of "
+                    f"{self.constituent!r} and of nothing else, so {flow!r} "
+                    "cannot be read on it. Declare a second channel, on a "
+                    "publisher of that constituent"
+                )
+
+            return self.reduce(self.var_level, self.ratio_default)
 
         if flow is None:
             return self.reduce(self.var_level, self.level_default)
@@ -1509,7 +1771,7 @@ class MeasurementIn(cod3s.ObjCOD3S):
         that constituent's own level, which is what an intensive property is
         formed from.
         """
-        self.require_kind(MEASUREMENT_LEVEL, "get_level", "get_rate")
+        self.require_kind(MEASUREMENT_LEVEL, "get_level")
 
         return self.get_reading(flow)
 
@@ -1519,13 +1781,40 @@ class MeasurementIn(cod3s.ObjCOD3S):
         No ``flow`` argument, and not by omission: a rate is one number, so
         there is no constituent of it to name.
         """
-        self.require_kind(MEASUREMENT_RATE, "get_rate", "get_level")
+        self.require_kind(MEASUREMENT_RATE, "get_rate")
 
         return self.get_reading()
 
+    def get_ratio(self, flow: typing.Optional[str] = None) -> float:
+        """The share of a volume that one constituent is, as read here.
+
+        Answers on the two natures that carry one, and the argument is what
+        tells them apart, because the two are different questions with the same
+        answer type. On a RATIO channel the constituent is the declaration's,
+        so ``flow`` is omitted -- or names that same constituent, which asks the
+        same thing. On a LEVEL channel the shares stand beside the totals, one
+        per constituent the channel imports, so ``flow`` is required: there is
+        no share of a volume in itself (:func:`ratio_alias`).
+        """
+        if self.reads_a_ratio:
+            return self.get_reading(flow)
+
+        self.require_kind(MEASUREMENT_LEVEL, "get_ratio")
+
+        if flow is None:
+            raise ValueError(
+                f"Measurement channel {self.name}: a share is a constituent's "
+                "part of what the volume holds, so name the constituent; the "
+                "volume's share of itself is not a reading"
+            )
+
+        return self.reduce(
+            self.resolve(self.var_ratio_flow, flow, "ratio"), self.ratio_default
+        )
+
     def get_fill(self, flow=None) -> float:
         """The fill read on this channel. See :meth:`get_level` for ``flow``."""
-        self.require_kind(MEASUREMENT_LEVEL, "get_fill", "get_rate")
+        self.require_kind(MEASUREMENT_LEVEL, "get_fill")
 
         if flow is None:
             return self.reduce(self.var_fill, self.fill_default)
@@ -1534,18 +1823,33 @@ class MeasurementIn(cod3s.ObjCOD3S):
             self.resolve(self.var_fill_flow, flow, "fill"), self.fill_default
         )
 
-    def require_kind(self, kind: str, asked: str, instead: str) -> None:
+    #: The accessor that names each nature's own reading, for the message
+    #: :meth:`require_kind` writes. Derived from the channel's ACTUAL nature
+    #: rather than passed in by the caller: with three natures the alternative
+    #: is no longer "the other one", and a caller guessing it would name the
+    #: wrong accessor on a channel it did not expect.
+    READING_ACCESSORS: typing.ClassVar[typing.Dict[str, str]] = {
+        MEASUREMENT_LEVEL: "get_level",
+        MEASUREMENT_RATE: "get_rate",
+        MEASUREMENT_RATIO: "get_ratio",
+    }
+
+    def require_kind(self, kind: str, asked: str) -> None:
         """Refuse a reading this channel's nature does not carry (R38).
 
         Refused rather than answered approximately: a rate returned under
         ``get_level`` would read as an integrated state to everything that
         thresholds one, and the two behave differently the moment a loop is
         closed through them -- a level breaks an algebraic loop, a rate does
-        not. Naming the right accessor in the message keeps the correction one
-        edit long.
+        not. A share returned under ``get_level`` would be a number between 0
+        and 1 where a quantity was expected, which every threshold in the model
+        would compare against the wrong scale. Naming the right accessor in the
+        message keeps the correction one edit long.
         """
         if self.kind == kind:
             return
+
+        instead = self.READING_ACCESSORS[self.kind]
 
         raise ValueError(
             f"Measurement channel {self.name}: it reads a {self.kind}, so "
@@ -1591,7 +1895,11 @@ class MeasurementOut(cod3s.ObjCOD3S):
     Either nothing of its own -- ``{name}_level`` is then a plain writable
     component variable, driven by a model, a test or a failure mode -- or, with
     ``source`` declared, the level of a capacity or of a measurement channel of
-    the SAME component, refreshed at every integration step.
+    the SAME component, refreshed at every integration step. Naming
+    constituents in ``flows`` republishes their levels, fills AND shares: an
+    observer cannot tell a capacity from a republisher, so an instrument
+    standing in front of a volume has to carry every family that volume
+    publishes, the composition included.
 
     ``{name}_level_gain`` is the public endpoint a failure mode clamps, created
     at 1 and multiplying whatever is published, exactly as ``{flow}_out_rate``
@@ -1667,6 +1975,15 @@ class MeasurementOut(cod3s.ObjCOD3S):
         0.0, description="Fill published before anything has been written"
     )
 
+    ratio_default: float = pydantic.Field(
+        0.0,
+        description=(
+            "Share published, per constituent, before anything has been "
+            "written. Its own number for the reason MeasurementIn's is: a "
+            "share lives in [0, 1] and a level in the units of what is held."
+        ),
+    )
+
     gain_default: float = pydantic.Field(
         1.0,
         description=(
@@ -1699,6 +2016,13 @@ class MeasurementOut(cod3s.ObjCOD3S):
         exclude=True,
         repr=False,
         description="Per-constituent published fill variables, by flow name",
+    )
+
+    var_ratio_flow: typing.Dict[str, typing.Any] = pydantic.Field(
+        default_factory=dict,
+        exclude=True,
+        repr=False,
+        description="Per-constituent published ratio variables, by flow name",
     )
 
     @pydantic.model_validator(mode="after")
@@ -1740,6 +2064,11 @@ class MeasurementOut(cod3s.ObjCOD3S):
                 pyc.TVarType.t_double,
                 float(self.fill_default),
             )
+            self.var_ratio_flow[flow_name] = comp.addVariable(
+                f"{self.name}_ratio_{flow_name}",
+                pyc.TVarType.t_double,
+                float(self.ratio_default),
+            )
 
     def add_mb(self, comp):
         """Publish the reading as a read-only export, capacity-compatible."""
@@ -1759,6 +2088,11 @@ class MeasurementOut(cod3s.ObjCOD3S):
                 self.var_fill_flow[flow_name],
                 fill_alias(self.name, flow_name),
             )
+            comp.addMessageBoxExport(
+                mb_name,
+                self.var_ratio_flow[flow_name],
+                ratio_alias(self.name, flow_name),
+            )
 
     def published_flows(self):
         """Names of the constituents this channel publishes per flow."""
@@ -1775,13 +2109,14 @@ class MeasurementOut(cod3s.ObjCOD3S):
             [self.var_level, self.var_fill]
             + list(self.var_level_flow.values())
             + list(self.var_fill_flow.values())
+            + list(self.var_ratio_flow.values())
         )
 
     def get_gain(self) -> float:
         """The factor currently applied to everything this channel publishes."""
         return self.var_gain.value() if self.var_gain is not None else 1.0
 
-    def publish(self, level, fill=None, flow=None):
+    def publish(self, level, fill=None, ratio=None, flow=None):
         """Write one reading, gain applied. ``fill`` defaults to the level.
 
         The gain is the SAME for the total and for every constituent: one
@@ -1789,6 +2124,23 @@ class MeasurementOut(cod3s.ObjCOD3S):
         all of them. A per-constituent gain would model a probe that fails on
         the heat channel while staying honest on the water channel, which is
         two instruments, and two instruments are two components.
+
+        **And it applies to the share too**, which is the one place the rule
+        costs something and is still the right rule. A share is dimensionless,
+        so a gain applied to every level cancels in the quotient: an instrument
+        that scaled its levels and left its shares alone would be one whose
+        readings no longer agree with each other. It would also be one a
+        failure mode cannot reach -- clamping the gain of a concentration probe
+        to zero would leave the controller behind it reading the true
+        composition and acting on it, which is precisely the failure the
+        endpoint exists to express. So the share lies with everything else, and
+        a wild gain publishes a number outside [0, 1]: that is the instrument
+        being wrong, not the volume, and an observer has no way to tell the
+        difference -- which is the whole point of an instrument.
+
+        ``ratio`` has NO fallback to the level, where ``fill`` has one: a share
+        and a quantity are not the same kind of number, so saying nothing about
+        the share leaves it as it was rather than inventing one.
         """
         gain = self.get_gain()
         var_level = self.var_level if flow is None else self.var_level_flow[flow]
@@ -1796,6 +2148,9 @@ class MeasurementOut(cod3s.ObjCOD3S):
 
         var_level.setValue(float(level) * gain)
         var_fill.setValue(float(level if fill is None else fill) * gain)
+
+        if flow is not None and ratio is not None:
+            self.var_ratio_flow[flow].setValue(float(ratio) * gain)
 
     def resolve_source(self, comp):
         """The capacity, measurement channel or continuous output this reads.
@@ -1826,7 +2181,7 @@ class MeasurementOut(cod3s.ObjCOD3S):
         )
 
     def read_source(self, comp, flow=None):
-        """The ``(level, fill)`` pair the declared source currently holds.
+        """The ``(level, fill, ratio)`` triple the declared source holds.
 
         ``flow=None`` is the whole volume. The three source kinds answer the
         same question under different method names, which is the only reason
@@ -1837,39 +2192,55 @@ class MeasurementOut(cod3s.ObjCOD3S):
         ``None`` is returned rather than a zero, so :meth:`publish` falls back
         to the reading itself and an observer reads the same number on both
         aliases instead of a fill that would look like an empty tank.
+
+        The share is ``None`` on the whole volume, always and on every source:
+        there is no share of a volume in itself (:func:`ratio_alias`), so there
+        is no alias to write it to either.
         """
         source = self.resolve_source(comp)
 
         if isinstance(source, Capacity):
-            # current_fill, never get_fill: the latter reads back the variable
-            # the capacity equation writes, which lags a step behind the level
-            # this very call is republishing.
-            return source.get_quantity(flow), source.current_fill(flow)
+            # current_fill and current_ratio, never their get_ counterparts:
+            # those read back the variables the capacity equation writes, which
+            # lag a step behind the levels this very call is republishing.
+            return (
+                source.get_quantity(flow),
+                source.current_fill(flow),
+                None if flow is None else source.current_ratio(flow),
+            )
 
         if isinstance(source, FlowContinuousOut):
             # ``flow`` is always None here: published_flows() is empty on a
             # continuous output, so check_source_carries refused any
             # constituent at declaration.
-            return source.live_value(), None
+            return source.live_value(), None, None
 
-        if source.reads_a_rate:
+        if source.reads_a_rate or source.reads_a_ratio:
             # An instrument republishing what a FIRST instrument read off a
-            # rate: same answer, one hop further out.
-            return source.get_reading(), None
+            # rate or off a composition: same answer, one hop further out. Both
+            # are ONE number, so both come out as this channel's level -- an
+            # observer downstream reads a republished share the way it reads a
+            # republished rate, on the total alias and with no constituent
+            # behind it, ``published_flows`` having refused any.
+            return source.get_reading(), None, None
 
-        return source.get_reading(flow), source.get_fill(flow)
+        return (
+            source.get_reading(flow),
+            source.get_fill(flow),
+            None if flow is None else source.get_ratio(flow),
+        )
 
     def compute(self, comp):
         """Refresh the published readings from the source, if one is declared."""
         if self.source is None:
             return
 
-        level, fill = self.read_source(comp)
+        level, fill, _ = self.read_source(comp)
         self.publish(level, fill)
 
         for flow_name in self.flows:
-            level, fill = self.read_source(comp, flow_name)
-            self.publish(level, fill, flow=flow_name)
+            level, fill, ratio = self.read_source(comp, flow_name)
+            self.publish(level, fill, ratio, flow=flow_name)
 
     def read_published(self, mapping, var_total, flow, kind) -> float:
         """One published variable's current value, total or per constituent.
@@ -1902,6 +2273,24 @@ class MeasurementOut(cod3s.ObjCOD3S):
     def get_fill(self, flow=None) -> float:
         """The fill currently published, total or for one constituent."""
         return self.read_published(self.var_fill_flow, self.var_fill, flow, "fill")
+
+    def get_ratio(self, flow: typing.Optional[str]) -> float:
+        """The share currently published for one constituent.
+
+        No total form, and ``flow`` therefore has no default: the share of a
+        volume in itself is not a reading, so this channel exports no alias for
+        one. See :func:`ratio_alias`. Asking for one explicitly is refused for
+        the reason :meth:`read_published` gives about a constituent that is not
+        published -- a zero here reads exactly like a real measurement.
+        """
+        if flow is None:
+            raise ValueError(
+                f"Published measurement {self.name}: a share is a "
+                "constituent's part of what the volume holds, so name the "
+                "constituent; the volume's share of itself is not a reading"
+            )
+
+        return self.read_published(self.var_ratio_flow, None, flow, "ratio")
 
     def check_source_carries(self, comp):
         """Refuse a constituent the declared source does not hold.

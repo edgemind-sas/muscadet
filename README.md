@@ -1507,7 +1507,7 @@ To **vote on booleans** rather than on numbers, nothing new is needed: a discret
 
 A capacity publishes its **total** level, and that is the one reading an *intensive* property cannot be recovered from. A tank holding water and heat is at a temperature of `heat / water`; the total is their weighted sum, which is neither term, and is not a quantity of anything when the constituents differ in nature: 100 kg of water beside 8000 J of heat reports 8100 of nothing.
 
-So a capacity publishes one alias pair per held flow beside the totals, and an observer names the constituents it wants:
+So a capacity publishes one alias **triple** per held flow beside the totals — its level, its fill and its share, `{c}_level_{f}` / `{c}_fill_{f}` / `{c}_ratio_{f}` — and an observer names the constituents it wants:
 
 ```python
 class Probe(muscadet.ObjFlow):
@@ -1520,7 +1520,7 @@ class Probe(muscadet.ObjFlow):
         return channel.get_level("heat") / channel.get_level("water")
 ```
 
-`get_level(flow)` and `get_fill(flow)` take a constituent; `get_level()` with no argument is the total, unchanged. A constituent the channel did not declare is **refused by name**, never read as zero, because a zero there reads as a real measurement of an empty volume.
+`get_level(flow)`, `get_fill(flow)` and `get_ratio(flow)` take a constituent; `get_level()` with no argument is the total, unchanged. A constituent the channel did not declare is **refused by name**, never read as zero, because a zero there reads as a real measurement of an empty volume.
 
 Declaring nothing keeps the total-only channel of 1.x, byte-identically. The extra aliases cost an existing model nothing, and that was measured on the engine rather than assumed: PyCATSHOO matches an import to an export by alias and ignores an export nobody imports, so an observer importing only the total still connects to the wider box. The reverse fails, and fails *atomically*, taking the total down with the constituent, which is why MUSCADET intercepts it ahead of the engine:
 
@@ -1534,6 +1534,45 @@ system.connect("TANK", "tank_level_out", "PROBE", "tank_level_in")
 A **republisher** carries them too (`add_measurement_out(name=..., source=..., flows=[...])`), because an observer is not supposed to be able to tell a capacity from an instrument. One gain covers every reading it publishes: a mode that kills the instrument kills all of them, and a probe lying about the heat while honest about the water is two instruments, hence two components.
 
 This is what makes a **converting instrument** an ordinary component. A probe reading joules and kilograms and publishing kelvin needs no new mechanism: it reads two constituents, divides, and republishes the ratio on a channel of its own, which a rule guard can then threshold through a sensor like any other reading.
+
+#### The share one constituent is of a volume
+
+A component can divide. A **controller** cannot: its output grammar is closed at four operators and none of them is arithmetic, because a form it cannot read a threshold out of is a form the solver cannot date (see [What is refused, and why the solver decides it](#what-is-refused-and-why-the-solver-decides-it)). So a montage that acts on a **composition** — ventilate a room when the fraction of hydrogen in it passes 2 %, shed the electrolyser at 3 % — is written by having the volume publish the quotient, not by teaching the controller to compute one.
+
+That is `{c}_ratio_{f}`, the third alias family, and it is `qty_f / total raw quantity`:
+
+```python
+capacity = holder.capacities["room"]
+capacity.get_ratio("h2")            # the share, as published
+capacity.current_ratio("h2")        # ... recomputed from the levels, for a republisher
+```
+
+**It is not the fill.** The declared volume never enters it — that volume bounds the content, it does not scale it — so air holding the whole of a room's content while occupying a fifth of its volume reads `ratio = 1` and `fill = 0.2`. It is exactly the share `split_draw` composes a withdrawal at, so a mixture drawn on at the composition it holds keeps that composition, and its shares are constant while its levels fall.
+
+**A null total reads zero**, by convention rather than by defence: a volume that holds nothing holds no fraction of anything either. The alternatives are worse where it matters, at a threshold — a `NaN` compares false to everything and would release every band watching the composition without a trace.
+
+An observer reads it on an ordinary level channel, and a **controller** reads it on an input that declares `kind="ratio"` and names the one constituent:
+
+```python
+system.add_component(
+    name="VENT",
+    cls="ObjCtrl",
+    controls_in=[{"name": "room", "kind": "ratio", "flows": ["h2"]}],
+    controls_out=[{
+        "name": "vent",
+        "kind": "bool",
+        "emit": {"op": "band", "input": "room", "direction": "above",
+                 "activate": 0.02, "release": 0.01},
+    }],
+)
+system.connect("ROOM", "room_level_out", "VENT", "room_level_in")
+```
+
+The share comes on the **level box**, since it is published by whoever publishes the level it is derived from, so the wiring is the wiring of any observation. A ratio channel names exactly one constituent — a whole has no fraction of itself, and there is no `{c}_ratio` alias — and a constituent the volume does not hold is refused at `connect` with the list of what it does hold, exactly as a level constituent is.
+
+**The crossing of a threshold on a share is dated, not noticed at the next step.** That was worth measuring rather than assuming: every threshold MUSCADET dated before this one read an ODE variable or a boolean, and a share is algebraic, derived, and here non-linear in the state. On the room above, filling at one unit per unit of time into 100 of air, the band switches at `t = 2.0412675` against an analytic `2.0408163`, and the error falls to `1.0e-7` when `dtCond` is taken from `1e-3` to `1e-7`. The solver is bracketing the root; a crossing merely noticed at the following step would not move.
+
+An instrument republishes the shares under its gain, like everything else it publishes: a probe reading half its levels reports half the share, so a band behind it carries gain-adjusted edges. Leaving the shares honest would be worse than inconvenient — a failure mode clamping the instrument's gain to zero would leave the montage behind it acting on the true composition, which is the failure that endpoint exists to express.
 
 ### Transfer pairs: a quantity moved by a gradient
 
@@ -1848,7 +1887,7 @@ Three things to read off that trace:
 
 Two sections, `controls_in` and `controls_out`, and nothing else.
 
-An **observation input** is a measurement channel, the very one the sensor pattern already used. `kind="level"`, the default, reads a capacity level or an instrument's republication, on `{name}_level_in`; `kind="rate"` reads what a continuous output delivers, on `{name}_rate_in`. Either way the channel reads through a PyCATSHOO reference, which carries no setter: an observation cannot be written, takes no share of what it watches, and adds no edge to the graph the acyclicity check walks.
+An **observation input** is a measurement channel, the very one the sensor pattern already used. `kind="level"`, the default, reads a capacity level or an instrument's republication, on `{name}_level_in`; `kind="rate"` reads what a continuous output delivers, on `{name}_rate_in`; `kind="ratio"` reads [the share one constituent is of a volume](#the-share-one-constituent-is-of-a-volume), on the level box, and names that constituent in `flows`. Whichever it is, the channel reads through a PyCATSHOO reference, which carries no setter: an observation cannot be written, takes no share of what it watches, and adds no edge to the graph the acyclicity check walks.
 
 An input observes **one** publisher unless it declares an `aggregate`, which is what lifts the cap and what says how the readings reduce: `"sum"`, `"mean"`, `"median"`, `"min"` or `"max"`, with the meaning [measurement channels](#redundant-instruments-combining-several-readings-on-one-channel) already give them, the even-count median included. There is no way to reach many-to-one without stating the policy.
 
@@ -2111,7 +2150,7 @@ a playback and points at reset.
 
 ## Modelling pitfalls
 
-Six things measured on real models, none of them visible from the API, each of which cost a debugging cycle.
+Seven things measured on real models, none of them visible from the API, each of which cost a debugging cycle.
 
 ### An instrument publishes its default until the first integration step
 
@@ -2168,6 +2207,23 @@ comp.add_delay_failure_mode(name="wear", failure_time=8.0, repair_cond=False)
 infinite-end-time transition described under
 [Interactive simulation](#a-step-that-would-run-the-clock-to-infinity-is-refused),
 so the session stops advancing on its own and warns at every step.
+
+### A composition is one evaluation behind at a bound crossing
+
+A capacity's shares and fills are **explicit** variables: the capacity equation
+recomputes them from the levels at every evaluation. The reset map that puts a
+level back on a bound it has just crossed does not touch them, and never has.
+
+On a fill the residue is numerical and invisible. On a share it is not. Measured
+on a mixture of 40 water and 20 syrup drawn down at the composition it holds:
+the empty bound is crossed at `t = 10.0025` against an analytic `10.0`, and at
+that stop the levels read 0 while the shares still read two thirds and one
+third. They are zero at the following stop.
+
+The window is one evaluation, and it is only visible to something reading **at**
+the crossing instant — an observation grid never lands there. What must not lag
+reads `Capacity.current_ratio(flow)`, which recomputes from the levels, and it
+is the path a republished reading already takes.
 
 ### A quantity carries about seven significant digits
 

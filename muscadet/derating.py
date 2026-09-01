@@ -208,6 +208,7 @@ def solver_owned_endpoints(comp):
         variables = (
             list(capacity.var_qty.values())
             + list(capacity.var_fill.values())
+            + list(capacity.var_ratio.values())
             + list(capacity.var_inflow.values())
             + list(capacity.var_outflow.values())
             + [capacity.var_qty_total, capacity.var_fill_total]
@@ -226,7 +227,11 @@ def solver_owned_endpoints(comp):
             f"every integration step: clamp {measurement.name}_level_gain, the "
             "public gain everything this channel publishes is multiplied by"
         )
-        for var in (measurement.var_level, measurement.var_fill):
+        # Every variable the equation writes, which is what ``every_variable``
+        # is: the totals AND the per-constituent levels, fills and shares. Two
+        # of them named by hand left the constituents clampable, and a clamp
+        # there is overwritten at the next integration step without a word.
+        for var in measurement.every_variable():
             if var is not None:
                 endpoints[var.basename()] = advice
 

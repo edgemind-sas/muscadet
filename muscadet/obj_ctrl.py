@@ -24,12 +24,22 @@ Two sections, and the order between them is the one
 
 * ``controls_in`` -- **observation inputs**. An input is a measurement channel,
   the very :class:`muscadet.MeasurementIn` a sensor already used, so a
-  controller reads a capacity LEVEL (``kind="level"``) or the RATE a continuous
-  output delivers (``kind="rate"``, R38) through one concept and one wire
-  shape. It reads through PyCATSHOO references, which carry no setter: an
-  observation cannot be written, takes no share of what it watches, and adds no
-  edge to the graph the acyclicity check walks. An input declaring an
-  ``aggregate`` takes SEVERAL sources and reduces them to one value (R40).
+  controller reads a capacity LEVEL (``kind="level"``), the RATE a continuous
+  output delivers (``kind="rate"``, R38) or the SHARE one constituent is of what
+  a volume holds (``kind="ratio"``) through one concept and one wire shape. It
+  reads through PyCATSHOO references, which carry no setter: an observation
+  cannot be written, takes no share of what it watches, and adds no edge to the
+  graph the acyclicity check walks. An input declaring an ``aggregate`` takes
+  SEVERAL sources and reduces them to one value (R40).
+
+  **A ratio input is what a closed grammar costs, and where that cost is paid.**
+  There is no division among the four operators below and there will not be
+  one: a quotient carries no threshold anything could root-find, so admitting it
+  would break the property the whole grammar exists for. A fraction is therefore
+  materialised by the volume that holds the constituents -- it publishes
+  ``{c}_ratio_{f}`` beside its levels -- and reaches the controller as an
+  ordinary reading, which a ``band`` then thresholds like any other. Nothing in
+  this module knows about it, and that is the point.
 
 * ``controls_out`` -- **outputs**, of two natures (R3). A ``"bool"`` output is
   one boolean variable exported on ``{name}_out``, exactly what a shipped
@@ -890,6 +900,7 @@ CONTROL_IN_KEYS = (
     "level_default",
     "fill_default",
     "rate_default",
+    "ratio_default",
     "aggregate",
 )
 
@@ -907,6 +918,7 @@ CONTROL_OUT_VALUE_KEYS = (
     "flows",
     "level_default",
     "fill_default",
+    "ratio_default",
     "gain_default",
     "emit",
 )
@@ -1486,10 +1498,19 @@ class ObjCtrl(cod3s.PycComponent):
 
         The input is a measurement channel: ``kind="level"`` reads a capacity
         level or a republished reading, ``kind="rate"`` reads what a continuous
-        output delivers (R38). Wire it with the raw connection, against the box
-        the channel names::
+        output delivers (R38), ``kind="ratio"`` reads the share of the ONE
+        constituent its ``flows`` names. Wire it with the raw connection,
+        against the box the channel names::
 
             system.connect(holder, "tank_level_out", ctrl, "tank_level_in")
+
+        A ratio input imports on that same ``_level_in`` box -- a share is
+        published by whoever publishes the level it comes from::
+
+            controls_in=[{"name": "room", "kind": "ratio", "flows": ["H2"]}]
+            controls_out=[{"name": "vent", "kind": "bool", "emit": {
+                "op": "band", "input": "room", "direction": "above",
+                "activate": 0.02, "release": 0.01}}]
 
         **Several sources, and how they reduce.** Declaring ``aggregate`` is
         what lets more than one publisher wire onto the input, and what says

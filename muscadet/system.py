@@ -1,6 +1,6 @@
 import cod3s
 
-from .capacity import MEASUREMENT_LEVEL, MEASUREMENT_RATE
+from .capacity import MEASUREMENT_LEVEL, MEASUREMENT_RATE, MEASUREMENT_RATIO
 from .obj_logic import LogicOr, LogicAnd
 from .flow_continuous import (
     FlowContinuous,
@@ -849,11 +849,19 @@ class System(cod3s.PycSystem):
         """The measurement import behind a ``{name}_level_in`` / ``_rate_in`` box.
 
         The channel's declared nature has to AGREE with the suffix the box was
-        named for: one class serves both natures (R38), so a channel named ``q``
-        and declared ``kind="rate"`` imports on ``q_rate_in`` and on nothing
-        else. Resolving ``q_level_in`` onto it would hand
+        named for: one class serves the three natures (R38), so a channel named
+        ``q`` and declared ``kind="rate"`` imports on ``q_rate_in`` and on
+        nothing else. Resolving ``q_level_in`` onto it would hand
         :meth:`check_measurement_constituents` an observer that is not on the
         wire being checked.
+
+        **Two natures share the level box**, and that is not a laxity: a RATIO
+        is published by whoever publishes the level it is derived from, on that
+        same export, so a ratio channel imports on ``{c}_level_in`` exactly as a
+        level channel does. Both must resolve here, or the constituent a ratio
+        channel names would reach the engine unchecked and fail there on a
+        missing alias rather than being told which constituents the volume
+        actually holds.
 
         A :class:`muscadet.ObjCtrl` answers here too, and deliberately: its
         observation inputs ARE measurement channels, and it exposes them under
@@ -864,9 +872,9 @@ class System(cod3s.PycSystem):
         if comp is None:
             return None
 
-        for suffix, kind in (
-            (LEVEL_IN_SUFFIX, MEASUREMENT_LEVEL),
-            (RATE_OBSERVATION_IN_SUFFIX, MEASUREMENT_RATE),
+        for suffix, kinds in (
+            (LEVEL_IN_SUFFIX, (MEASUREMENT_LEVEL, MEASUREMENT_RATIO)),
+            (RATE_OBSERVATION_IN_SUFFIX, (MEASUREMENT_RATE,)),
         ):
             if not interface.endswith(suffix):
                 continue
@@ -874,7 +882,7 @@ class System(cod3s.PycSystem):
             observed = getattr(comp, "measurements_in", None) or {}
             channel = observed.get(interface[: -len(suffix)])
 
-            return channel if channel is not None and channel.kind == kind else None
+            return channel if channel is not None and channel.kind in kinds else None
 
         return None
 
@@ -922,8 +930,9 @@ class System(cod3s.PycSystem):
             f"constituent{plural} {', '.join(repr(n) for n in missing)}, which "
             f"{component_source} does not publish; it publishes {available}. "
             "A constituent is published by the flows a capacity HOLDS, or by "
-            "the flows= list of a republished measurement; a continuous "
-            "output's rate is one number and publishes none"
+            "the flows= list of a republished measurement, and every one of "
+            "them carries a level, a fill and a share; a continuous output's "
+            "rate is one number and publishes none"
         )
 
     def auto_connect(
