@@ -387,8 +387,16 @@ CONTROL_IN_LEVEL = "level"
 #: An observation input reads the RATE a continuous output delivers (R38).
 CONTROL_IN_RATE = "rate"
 
+#: An observation input reads the SHARE one constituent is of what a volume
+#: holds. Its ``flows`` names that one constituent, and it imports on the level
+#: box like a level does: a share is published by whoever publishes the level it
+#: comes from.
+CONTROL_IN_RATIO = "ratio"
+
 #: Every nature an observation input may be declared with.
-_VALID_CONTROL_IN_KINDS = frozenset({CONTROL_IN_LEVEL, CONTROL_IN_RATE})
+_VALID_CONTROL_IN_KINDS = frozenset(
+    {CONTROL_IN_LEVEL, CONTROL_IN_RATE, CONTROL_IN_RATIO}
+)
 
 #: A boolean output: one signal exported on ``{name}_out``, which a discrete
 #: input flow of the same name imports with no adapter.
@@ -419,6 +427,7 @@ _CONTROL_IN_KEYS = frozenset(
         "level_default",
         "fill_default",
         "rate_default",
+        "ratio_default",
     }
 )
 
@@ -435,6 +444,7 @@ _CONTROL_OUT_VALUE_KEYS = frozenset(
         "flows",
         "level_default",
         "fill_default",
+        "ratio_default",
         "gain_default",
         "emit",
     }
@@ -446,9 +456,10 @@ class ControlInSpec:
     """One observation input declared on a controller class template."""
 
     name: str
-    # ``level`` or ``rate``. It decides the box the input imports on --
-    # ``{name}_level_in`` or ``{name}_rate_in`` -- and therefore what a
-    # publisher must export on the other end.
+    # ``level``, ``rate`` or ``ratio``. It decides the box the input imports on
+    # -- ``{name}_level_in`` for the first and the last, ``{name}_rate_in`` for
+    # the middle one -- and therefore what a publisher must export on the other
+    # end.
     kind: str = CONTROL_IN_LEVEL
     # ``None`` is the single-publisher input, capped at one connection by
     # muscadet. Any policy lifts the cap and says how the readings reduce.
@@ -456,10 +467,13 @@ class ControlInSpec:
     # Constituents of the observed volume to read individually, beside the
     # total. Passed through verbatim: muscadet deliberately judges a
     # constituent at CONNECT time, against what the publisher actually holds.
+    # On a ``ratio`` input it names the ONE constituent whose share is read,
+    # and muscadet refuses any other count at declaration.
     flows: Tuple[str, ...] = ()
     level_default: Optional[float] = None
     fill_default: Optional[float] = None
     rate_default: Optional[float] = None
+    ratio_default: Optional[float] = None
 
 
 @dataclass(frozen=True)
@@ -481,6 +495,7 @@ class ControlOutSpec:
     flows: Tuple[str, ...] = ()
     level_default: Optional[float] = None
     fill_default: Optional[float] = None
+    ratio_default: Optional[float] = None
     gain_default: Optional[float] = None
 
 
@@ -2024,6 +2039,7 @@ def _parse_control_in(entry: Dict[str, Any], *, class_name: str) -> ControlInSpe
         level_default=_parse_control_number(entry, "level_default", where, name),
         fill_default=_parse_control_number(entry, "fill_default", where, name),
         rate_default=_parse_control_number(entry, "rate_default", where, name),
+        ratio_default=_parse_control_number(entry, "ratio_default", where, name),
     )
 
 
@@ -2100,6 +2116,7 @@ def _parse_control_out(entry: Dict[str, Any], *, class_name: str) -> ControlOutS
         flows=_parse_control_flows(entry.get("flows"), where=f"{where} {name!r}"),
         level_default=_parse_control_number(entry, "level_default", where, name),
         fill_default=_parse_control_number(entry, "fill_default", where, name),
+        ratio_default=_parse_control_number(entry, "ratio_default", where, name),
         gain_default=_parse_control_number(entry, "gain_default", where, name),
     )
 
@@ -2888,7 +2905,12 @@ def _parse_components(
 
 
 def _control_in_box(entry: ControlInSpec) -> str:
-    """The box an observation input imports on, per its nature (R38)."""
+    """The box an observation input imports on, per its nature (R38).
+
+    A RATIO lands on the level box with a level, and deliberately: a share is
+    published by whoever publishes the level it is derived from, on that one
+    export.
+    """
     if entry.kind == CONTROL_IN_RATE:
         return f"{entry.name}_rate_in"
     return f"{entry.name}_level_in"
@@ -2985,12 +3007,14 @@ def _observed_publisher_box(
 
     holders = {capacity.name for capacity in src.capacities}
     if src_iface not in holders:
+        reading = "a share" if observed.kind == CONTROL_IN_RATIO else "a level"
         raise Cod3sPlatformImportError(
             f"Connection {conn_id!r}: observation input {observed.name!r} "
-            f"reads a level, and {src_iface!r} is not a capacity of "
-            f"{src.name!r} (capacities: {sorted(holders)}). A level is "
-            "published on '{name}_level_out' by a capacity, or by another "
-            "controller's value output."
+            f"reads {reading}, and {src_iface!r} is not a capacity of "
+            f"{src.name!r} (capacities: {sorted(holders)}). A level and the "
+            "shares of the constituents beside it are published on "
+            "'{name}_level_out' by a capacity, or by another controller's "
+            "value output."
         )
     return f"{src_iface}_level_out"
 
@@ -3571,7 +3595,7 @@ def _control_in_kwargs(entry: ControlInSpec) -> Dict[str, Any]:
         kwargs["aggregate"] = entry.aggregate
     if entry.flows:
         kwargs["flows"] = list(entry.flows)
-    for key in ("level_default", "fill_default", "rate_default"):
+    for key in ("level_default", "fill_default", "rate_default", "ratio_default"):
         value = getattr(entry, key)
         if value is not None:
             kwargs[key] = value
@@ -3593,7 +3617,7 @@ def _control_out_kwargs(entry: ControlOutSpec) -> Dict[str, Any]:
 
     if entry.flows:
         kwargs["flows"] = list(entry.flows)
-    for key in ("level_default", "fill_default", "gain_default"):
+    for key in ("level_default", "fill_default", "ratio_default", "gain_default"):
         value = getattr(entry, key)
         if value is not None:
             kwargs[key] = value
