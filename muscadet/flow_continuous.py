@@ -1092,6 +1092,17 @@ class FlowContinuousOut(FlowContinuous):
                     f"Write [[...]] rather than [...], or declare the condition "
                     f"on the component, which resolves it."
                 )
+            # An empty group is a valve with no diagnostic: under the 'or'
+            # inner mode it is always false, so the output never produces at
+            # all, and under 'and' it is always true, so the condition is not
+            # one. Both come from a malformed export rather than from an
+            # intent, and both run to completion without a word.
+            if not group:
+                raise ValueError(
+                    f"{where} carries an EMPTY group. Under inner mode 'or' the "
+                    f"output would never produce, under 'and' the condition "
+                    f"would never bind: neither is a declaration."
+                )
 
         return self
 

@@ -653,6 +653,15 @@ class ObjFlow(cod3s.PycComponent):
                         # a level carries no state to read.
                         fcond = self.measurements_in.get(name)
                 if fcond is not None:
+                    # A BOOLEAN operand naming a CONTINUOUS flow is accepted
+                    # here, and it is worth saying why rather than leaving the
+                    # silence: its reader is ``source.var_fed.value()``, so on a
+                    # rate the condition means "differs from zero" and not the
+                    # threshold a modeller almost certainly wanted. Refusing it
+                    # would break the parity R-5 pins -- a rule guard and a
+                    # production condition accept exactly the same operand
+                    # shapes, from one implementation -- so the two vocabularies
+                    # have to change together or not at all.
                     return fcond, negate, compare
                 raise ValueError(
                     f"Object {self.name()}: Flow {name} does not exist as {kind} flow (you must create it before using it in a FlowOut condition)"
