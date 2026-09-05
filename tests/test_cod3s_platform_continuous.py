@@ -367,6 +367,15 @@ class TestContinuousRefusesDiscreteKeys:
         assert "prod_cond" in message
         assert "continuous" in message
 
+        # And it must NOT send the modeller down the one road that breaks the
+        # model. muscadet accepts a production condition on a continuous output
+        # since R44, so the generic "declare the port as flow_family='discrete'"
+        # became advice that turns a rate into a boolean. The refusal stands,
+        # the way out it names does not.
+        assert "Do NOT declare the port as flow_family='discrete'" in message
+        assert "muscadet accepts" in message
+        assert "transformation rule" in message
+
     @pytest.mark.parametrize(
         "key, value",
         [

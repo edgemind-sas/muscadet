@@ -829,17 +829,13 @@ _ALLOCATION_PROPORTIONAL = "proportional"
 _VALID_ALLOCATIONS = frozenset({_ALLOCATION_PROPORTIONAL})
 
 # Interface keys that belong to the DISCRETE family alone. Refused on a
-# continuous interface, by name, at parse time. The three that matter most --
-# ``prod_cond``, ``negate``, ``logic_inner_mode`` -- are also refused by
+# continuous interface, by name, at parse time. Several are also refused by
 # ``FlowContinuous.check_declaration_keys`` downstream, but that refusal names a
 # muscadet field on a muscadet class: it tells a platform user nothing about the
 # port they declared. Refusing here names the PLATFORM key, and refusing at
 # parse time keeps the diagnostic reachable without a runtime.
 _DISCRETE_ONLY_INTERFACE_KEYS: Tuple[str, ...] = (
     "input_logic",
-    "prod_cond",
-    "logic_inner_mode",
-    "negate",
     "flow_type",
     "occ_enable",
     "occ_disable",
@@ -847,6 +843,23 @@ _DISCRETE_ONLY_INTERFACE_KEYS: Tuple[str, ...] = (
     "trigger_time_up",
     "trigger_time_down",
     "trigger_logic",
+)
+
+# Keys the ENGINE accepts on a continuous output and this bridge does not carry
+# yet. Split out of the tuple above, where they no longer belong: muscadet gave
+# a continuous output a production condition (R44), so telling a modeller to
+# "declare the port as flow_family='discrete'" is now advice that turns a rate
+# into a boolean. Refused all the same, because a key parsed by nobody would be
+# dropped in silence, but refused with the truth about where the limit sits.
+#
+# Carrying them across is a bridge of its own: the parse layer must read them,
+# ``_continuous_out_kwargs`` must pass them, and this refusal must become
+# DIRECTION-aware, since a continuous INPUT still has no production condition
+# and never will.
+_NOT_CARRIED_ON_A_CONTINUOUS_INTERFACE: Tuple[str, ...] = (
+    "prod_cond",
+    "logic_inner_mode",
+    "negate",
 )
 
 # The mirror: keys that belong to the CONTINUOUS family alone, refused on a
@@ -967,6 +980,33 @@ def _check_family_keys(
         f"{other_family} declaration key{plural} {keys}. Either drop "
         f"{'them' if len(declared) > 1 else 'it'} or declare the port as "
         f"flow_family={other_family!r}."
+    )
+
+
+def _check_not_carried_keys(interface: Dict[str, Any], *, name: str) -> None:
+    """Refuse a key the engine accepts and this bridge does not carry yet.
+
+    Distinct from :func:`_check_family_keys` because the way OUT is different,
+    and that is the whole point of separating them: a key of the other family
+    is dropped or the port is redeclared, whereas one of these has no way out
+    at all today. Saying "declare it discrete" would be worse than saying
+    nothing, since it turns a rate into a boolean.
+    """
+    declared = _declared_interface_keys(
+        interface, _NOT_CARRIED_ON_A_CONTINUOUS_INTERFACE
+    )
+    if not declared:
+        return
+
+    plural = "s" if len(declared) > 1 else ""
+    keys = ", ".join(repr(key) for key in declared)
+    raise Cod3sPlatformImportError(
+        f"Interface {name!r}: declaration key{plural} {keys} on a "
+        f"flow_family='continuous' port. muscadet accepts a production "
+        f"condition on a continuous OUTPUT, this importer does not carry it "
+        f"across yet. Do NOT declare the port as flow_family='discrete' to get "
+        f"around it: that turns a rate into a boolean. Gate the rate with a "
+        f"transformation rule until the bridge lands."
     )
 
 
@@ -1119,6 +1159,7 @@ def _parse_continuous_interface(
         forbidden=_DISCRETE_ONLY_INTERFACE_KEYS,
         other_family=DISCRETE_FAMILY,
     )
+    _check_not_carried_keys(interface, name=name)
 
     if port_type == "input":
         rate, _ = _parse_profile(
