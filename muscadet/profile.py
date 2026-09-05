@@ -14,6 +14,7 @@ Production is the PRODUCT of three independent terms::
     produced = what the rule (or the declared rate) produces
                x  profile(t)
                x  min(out_rate, per-mode deratings)
+               x  production gate (R44: 1, or 0 when the condition fails)
 
 The profile is a **separate channel** from the derating rate on purpose, and
 folding it into ``{flow}_out_rate`` would be silently wrong. Deratings compose

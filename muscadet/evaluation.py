@@ -832,9 +832,9 @@ def evaluation_time(comp):
 def output_production_factor(comp, flow_name):
     """What one continuous output's production is multiplied by, right now.
 
-    The two independent terms of R18/R20, composed by **product**::
+    The three independent terms of R18/R20/R44, composed by **product**::
 
-        profile(t)  x  min(out_rate, per-mode deratings)
+        profile(t)  x  min(out_rate, per-mode deratings)  x  production gate
 
     - the **time profile** of the output, if it declares one: a continuous
       function of simulation time saying how large the output is at this
@@ -844,13 +844,23 @@ def output_production_factor(comp, flow_name):
       output leave of it, the minimum over their derating variables and the
       shared ``{flow}_out_rate`` (R20). A rate of 0 is a total loss of
       production -- a continuous output carries no separate boolean
-      availability gate (R19, KD10).
+      availability gate (R19, KD10);
+    - the **production gate** (R44): 1 or 0, from the production condition the
+      output declares, and :data:`~muscadet.profile.NOMINAL_FACTOR` when it
+      declares none. This is what lets a control port command a continuous
+      actuator with the vocabulary that already commands a discrete one.
 
-    The two must not be collapsed into one another. Deratings compose by
+    R19 is not weakened by the third term but expressed through it: a condition
+    that does not hold gives a rate of ZERO, which is exactly what R19 says a
+    total loss of production looks like. The gate is a factor, never a parallel
+    boolean availability channel, and nothing downstream reads it.
+
+    None of the three may be collapsed into another. Deratings compose by
     MINIMUM among themselves, because that is what makes them
     order-independent and safe on repair; a profile MULTIPLIES whatever the
     deratings left, because it is the size of the thing being degraded and not
-    a competing degradation. A panel at 0.3 of its curve that is also derated
+    a competing degradation; the gate multiplies both, because it says whether
+    the thing runs at all. A panel at 0.3 of its curve that is also derated
     to 0.5 produces 0.15, where a minimum would give 0.3.
 
     :data:`~muscadet.profile.NOMINAL_FACTOR` for anything that is not a
@@ -868,7 +878,7 @@ def output_production_factor(comp, flow_name):
         factor = flow.get_profile_factor(comp.evaluation_time())
         flow.publish_profile_factor(factor)
 
-    return factor * flow.get_effective_rate()
+    return factor * flow.get_effective_rate() * flow.production_gate()
 
 
 def get_production_factor(comp, flow_name):
@@ -1745,6 +1755,7 @@ def apply_production(comp, production):
         produced = what the rule (or the declared rate) produces
                    x  profile(t)
                    x  min(out_rate, per-mode deratings)
+                   x  production gate (R44: 1, or 0 when the condition fails)
 
     - the **time profile** of the output, if it declares one: a continuous
       function of simulation time saying how large the output is at this

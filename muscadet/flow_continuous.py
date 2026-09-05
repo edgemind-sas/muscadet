@@ -158,6 +158,7 @@ compose as a **product**::
     produced = what the rule (or the declared rate) produces
                x  profile(t)
                x  min(out_rate, per-mode deratings)
+               x  production gate (R44: 1, or 0 when the condition fails)
 
 The profile is a channel of its own and is never folded into
 ``{flow}_out_rate``, because the two must compose differently: deratings fold by
@@ -185,7 +186,16 @@ import Pycatshoo as pyc
 import pydantic
 from colored import fg, attr
 
-from .flow import FlowModel
+from .flow import (
+    PROD_COND_COMPARE_DESCRIPTION,
+    PROD_COND_DESCRIPTION,
+    PROD_COND_INNER_MODE_DESCRIPTION,
+    PROD_COND_NEGATE_DESCRIPTION,
+    FlowModel,
+    add_prod_cond_threshold_automata,
+    prod_cond_holds,
+    prod_cond_readers,
+)
 from .profile import NOMINAL_FACTOR, PROFILE_VAR_FMT, build_profile
 
 #: "Nothing bounds this quantity". Read on a demand: an output no consumer is
@@ -497,10 +507,14 @@ class FlowContinuous(FlowModel):
         for a numeric one, from a legitimate zero. The two spellings that make
         it worth closing generally:
 
-        * ``FlowContinuousOut(var_prod_cond=["ctrl"], var_prod_default=True)``
-          -- the DISCRETE production gate, written on a continuous output. The
-          source is believed to be gated by a control port and produces
-          unconditionally for the whole run;
+        * ``FlowContinuousOut(var_prod_default=True)`` -- the DISCRETE
+          production DEFAULT, written on a continuous output. It names a
+          boolean production variable a continuous output has none of, so the
+          source is believed to be gated and produces unconditionally for the
+          whole run. Its neighbour ``var_prod_cond`` used to be refused here
+          too and is now a declared field (R44): the condition means the same
+          thing on both families, the boolean variable it drives on one of them
+          does not;
         * ``FlowContinuousIn(demand=5.0)`` -- ``demand`` is the KB's own
           spelling (``ConsumerContinuous(demand=...)``), and the flow-level
           field is ``var_demand_default``. The consumer publishes a demand of
@@ -990,6 +1004,96 @@ class FlowContinuousOut(FlowContinuous):
             "never so it can be driven. Writing it has no effect."
         ),
     )
+
+    # -- the production condition (R44) --------------------------------
+    #
+    # Same vocabulary as a discrete output's, and deliberately so: an actuator
+    # is commanded the same way whatever the nature of the flow it carries. The
+    # descriptions come from ``muscadet.flow`` so the two families cannot drift
+    # apart in what they claim to accept.
+    #
+    # What the two families do with the verdict differs, and only that: a
+    # discrete output writes ``var_prod_available``, a continuous one
+    # multiplies its production factor by 1 or 0. R19 therefore survives
+    # untouched -- a continuous output still states its total loss as a rate of
+    # ZERO and still carries no separate boolean availability gate. The
+    # condition is a third FACTOR beside the profile and the effective rate,
+    # not a fourth channel.
+    #
+    # ``var_prod_default`` is NOT declared here, and its absence is the load
+    # bearing half of this: it names a boolean production variable a continuous
+    # output has none of, so it stays refused by name.
+
+    var_prod_cond: list = pydantic.Field([], description=PROD_COND_DESCRIPTION)
+
+    var_prod_cond_negate: list = pydantic.Field(
+        default_factory=list, description=PROD_COND_NEGATE_DESCRIPTION
+    )
+
+    var_prod_cond_compare: list = pydantic.Field(
+        default_factory=list, description=PROD_COND_COMPARE_DESCRIPTION
+    )
+
+    var_prod_cond_inner_mode: str = pydantic.Field(
+        "or", description=PROD_COND_INNER_MODE_DESCRIPTION
+    )
+
+    #: The operand readers of this output's production condition, built once on
+    #: first use. Cached because the gate is read at EVERY integration step:
+    #: resolving a comparator on every evaluation would put a dictionary lookup
+    #: inside the solver's inner loop for a value that cannot change.
+    #:
+    #: A PRIVATE attribute and not a field, deliberately. A cache is not a
+    #: declaration: as a field it would enter ``model_fields``, hence the
+    #: accepted set of ``check_declaration_keys`` -- so a modeller could declare
+    #: it -- and it would be walked by ``muscadet.declare.component_spec``,
+    #: where a list of closures is exactly what "something no mapping can carry"
+    #: means. Private, it cannot be declared and cannot be dumped.
+    _prod_cond_readers: typing.Any = pydantic.PrivateAttr(default=None)
+
+    @pydantic.model_validator(mode="after")
+    def check_prod_cond_shape(self):
+        """Refuse a production condition that is not in its STORED form.
+
+        This field holds the condition after :meth:`ObjFlow.apply_prod_cond`
+        has resolved it: a list of GROUPS, each a list of operand objects. The
+        declaration vocabulary -- a bare name, a flat list, a mapping -- belongs
+        at the door, never here.
+
+        Written down because the flat form fails in the worst possible way: a
+        string is iterable, so ``var_prod_cond=["ctrl"]`` builds four operand
+        readers over the characters of the word and the gate reads whatever
+        they happen to answer. Refusing at declaration is the shape the rest of
+        this family already takes, and it costs an engine-free message instead
+        of a first-integration-step ``AttributeError``.
+
+        Scoped to the continuous family, deliberately: the discrete classes are
+        1.x surface with the same laxity, and tightening them belongs to its own
+        change.
+        """
+        if not self.var_prod_cond:
+            return self
+
+        where = f"Flow {self.name!r}: var_prod_cond"
+
+        if isinstance(self.var_prod_cond, (str, dict)):
+            raise ValueError(
+                f"{where} must be a list of groups, got {type(self.var_prod_cond).__name__}. "
+                f"Declare the condition on the component (add_flow / "
+                f"add_flow_continuous_out), which resolves it."
+            )
+
+        for group in self.var_prod_cond:
+            if isinstance(group, (str, dict)) or not isinstance(
+                group, (list, tuple, set)
+            ):
+                raise ValueError(
+                    f"{where} is a list of GROUPS, and {group!r} is an operand. "
+                    f"Write [[...]] rather than [...], or declare the condition "
+                    f"on the component, which resolves it."
+                )
+
+        return self
 
     @pydantic.model_validator(mode="after")
     def check_profile(self):
@@ -1518,6 +1622,68 @@ class FlowContinuousOut(FlowContinuous):
             rates.append(float(self.var_out_rate.value()))
 
         return min(rates) if rates else NOMINAL_RATE
+
+    # -- whether it is allowed to produce at all -----------------------
+
+    def production_gate(self):
+        """1 when this output's production condition holds, 0 when it does not.
+
+        A third factor beside the time profile and the effective rate, composed
+        with them by PRODUCT (R44). An output declaring no condition is
+        unconditioned and answers :data:`~muscadet.profile.NOMINAL_FACTOR`, so
+        the gate costs nothing to a model that never asks for it.
+
+        Read here rather than mirrored into a variable refreshed between steps,
+        for the reason a rule guard is (R12): the operands include comparisons
+        against continuous quantities, and a mirror would lag one step behind
+        the value being watched. The boolean operands cost a variable read; the
+        comparison ones are what the watched automaton of
+        :func:`~muscadet.flow.add_prod_cond_threshold_automata` makes the solver
+        stop on.
+
+        Three limits, measured, none of them new to this gate and all of them
+        newly easy to meet through it.
+
+        **It closes the production, not the delivery.** A gate at 0 stops what
+        this output PRODUCES; an output backed by a capacity keeps serving its
+        content, since "a reservoir whose declared production is zero can still
+        serve its whole content" (cf. ``capability.py``). Shared with a derating
+        at 0, and reached far more often here: nobody writes a derating to mean
+        "close the valve", which is exactly what a control port on a continuous
+        output means. To stop the delivery too, gate what DRAWS from the
+        capacity, not only what fills it.
+
+        **The capability and demand sweeps ignore it**, as they already ignore
+        the deratings and the profile: they answer what this output could
+        deliver if asked without bound, and the shortfall is settled downstream
+        by ``release_unused_supply``.
+
+        **An operand naming another output of the same component reads that
+        output's last written value**, so which evaluation it comes from
+        follows the declaration order. An operand naming the output being
+        declared is refused, but by the resolution not finding it yet, with a
+        message that invites the impossible. Gate on an input, on a
+        measurement, or on a signal from another component.
+        """
+        if not self.var_prod_cond:
+            return NOMINAL_FACTOR
+
+        if self._prod_cond_readers is None:
+            self._prod_cond_readers = prod_cond_readers(self)
+
+        holds = prod_cond_holds(self._prod_cond_readers, self.var_prod_cond_inner_mode)
+
+        return NOMINAL_FACTOR if holds else 0.0
+
+    def add_automata(self, comp, **kwargs):
+        """Watch the thresholds a comparison operand declares (R22, R44).
+
+        The continuous family declares no automaton of its own otherwise, so
+        this override exists for the production condition alone.
+        """
+        super().add_automata(comp)
+
+        return add_prod_cond_threshold_automata(self, comp)
 
     # -- how much of it the time profile calls for ---------------------
 

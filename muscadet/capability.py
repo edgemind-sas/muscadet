@@ -82,11 +82,14 @@ reckoning would be an independent estimate of the same physics, free to drift
 from it -- and a demand bounded by a capability the production sweep does not
 honour would starve a component that could have run.
 
-Deratings and time profiles are **not** applied, and the reason is the same one
-that keeps them out of the demand sweep (R-13): both sweeps that size a claim
-work on the rule's declared coefficients, an existing scope boundary. Applying
-them would sharpen the estimate for a derated producer -- and it is recorded as
-a separate decision, not taken here, precisely because it moves that boundary.
+Deratings, time profiles and production gates are **not** applied, and the
+reason is the same one that keeps them out of the demand sweep (R-13): both
+sweeps that size a claim work on the rule's declared coefficients, an existing
+scope boundary. Applying them would sharpen the estimate for a derated or a
+closed producer -- and it is recorded as a separate decision, not taken here,
+precisely because it moves that boundary. The gate (R44) joined the list last
+and is the one most likely to be noticed: a control port shut for the whole run
+still advertises the capability of the output it commands.
 
 Torn cycles
 -----------

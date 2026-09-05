@@ -695,12 +695,14 @@ class TestProfileDecomposition:
 
 
 # ---------------------------------------------------------------------------
-# Runtime layer — a continuous flow never receives a production condition
+# Runtime layer — the discrete kwargs never leak into a continuous flow
 # ---------------------------------------------------------------------------
 
 
 class TestContinuousKwargsAreSeparate:
-    def test_continuous_flow_carries_no_discrete_declaration_key(self, cleanup_system):
+    def test_the_discrete_kwargs_do_not_leak_into_a_continuous_flow(
+        self, cleanup_system
+    ):
         system = system_from_export(
             _one(
                 {
@@ -714,7 +716,26 @@ class TestContinuousKwargsAreSeparate:
         )
         cleanup_system.append(system)
         flow = system.comp["C1"].flows_out["power"]
-        for key in ("var_prod_cond", "var_prod_cond_inner_mode", "negate"):
+
+        # ``var_prod_cond`` and its inner mode became fields of a continuous
+        # output with R44 -- a production condition means the same thing on
+        # both families -- so their ABSENCE no longer expresses what this test
+        # guards. What it guards is unchanged: the two kwargs builders must not
+        # be shared. So the flow must carry muscadet's own DEFAULTS and not a
+        # value the discrete builder put there, which is the stronger check of
+        # the two: the platform's own default inner mode is 'and' (matching the
+        # KB Editor UI) where muscadet's is 'or', so a leak shows up as a value
+        # and not merely as a present attribute.
+        assert flow.var_prod_cond == []
+        assert flow.var_prod_cond_negate == []
+        assert flow.var_prod_cond_compare == []
+        assert flow.var_prod_cond_inner_mode == "or"
+
+        # These two never became continuous fields, and must still not exist:
+        # ``var_prod_default`` names the boolean production variable only a
+        # discrete output has, and ``negate`` is a FlowSpec-level key of the
+        # importer that is no flow field on either family.
+        for key in ("var_prod_default", "negate"):
             assert not hasattr(
                 flow, key
             ), f"{key} reached a continuous flow; the kwargs dicts are shared"
