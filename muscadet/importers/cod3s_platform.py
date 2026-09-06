@@ -829,17 +829,13 @@ _ALLOCATION_PROPORTIONAL = "proportional"
 _VALID_ALLOCATIONS = frozenset({_ALLOCATION_PROPORTIONAL})
 
 # Interface keys that belong to the DISCRETE family alone. Refused on a
-# continuous interface, by name, at parse time. The three that matter most --
-# ``prod_cond``, ``negate``, ``logic_inner_mode`` -- are also refused by
+# continuous interface, by name, at parse time. Several are also refused by
 # ``FlowContinuous.check_declaration_keys`` downstream, but that refusal names a
 # muscadet field on a muscadet class: it tells a platform user nothing about the
 # port they declared. Refusing here names the PLATFORM key, and refusing at
 # parse time keeps the diagnostic reachable without a runtime.
 _DISCRETE_ONLY_INTERFACE_KEYS: Tuple[str, ...] = (
     "input_logic",
-    "prod_cond",
-    "logic_inner_mode",
-    "negate",
     "flow_type",
     "occ_enable",
     "occ_disable",
@@ -848,6 +844,37 @@ _DISCRETE_ONLY_INTERFACE_KEYS: Tuple[str, ...] = (
     "trigger_time_down",
     "trigger_logic",
 )
+
+# Keys a continuous port reads on its OUTPUT direction alone. A production
+# condition conditions a PRODUCTION: an input produces nothing, so the same key
+# that is a valve on one side is a declaration with no referent on the other,
+# and the family discriminator cannot tell them apart because both sides are
+# the same family.
+#
+# ``negate`` is deliberately NOT here but in the discrete tuple above: it
+# negates the boolean STATE a port publishes, and a rate has none. Not to be
+# confused with the per-operand ``negate`` INSIDE a condition, which crosses
+# with the rest of the operand vocabulary: that one negates what an operand
+# READS, this one what the port produces.
+#
+# The mirror gap, a ``prod_cond`` written on a DISCRETE input, is untouched and
+# still dropped in silence. Closing it is a change to the discrete path, which
+# is 1.x surface: it belongs to its own change, not to this bridge.
+_OUTPUT_ONLY_CONTINUOUS_KEYS: Tuple[str, ...] = (
+    "prod_cond",
+    "logic_inner_mode",
+)
+
+# ``negate`` is refused on a continuous port of either direction, and it gets a
+# message of its own rather than the generic family one. The generic message
+# ends on "or declare the port as flow_family='discrete'", which is sound
+# advice for a tempo class or an input aggregation -- someone writing those
+# does want a boolean port -- and a trap for this one: someone writing
+# ``negate`` on a rate wants an inverted GATE, and following the advice would
+# turn their rate into a boolean. That is the very trap the refusal on
+# ``prod_cond`` was rewritten to avoid; moving this key into the family tuple
+# would have reopened it under another name.
+_NEGATION_ON_A_CONTINUOUS_PORT: Tuple[str, ...] = ("negate",)
 
 # The mirror: keys that belong to the CONTINUOUS family alone, refused on a
 # discrete interface. A profile written on a boolean port is a declaration that
@@ -967,6 +994,50 @@ def _check_family_keys(
         f"{other_family} declaration key{plural} {keys}. Either drop "
         f"{'them' if len(declared) > 1 else 'it'} or declare the port as "
         f"flow_family={other_family!r}."
+    )
+
+
+def _check_negation(interface: Dict[str, Any], *, name: str) -> None:
+    """Refuse a whole-port negation on a continuous port, without misdirecting.
+
+    ``negate`` inverts the boolean STATE a port publishes, and a rate has none.
+    Not to be confused with the per-operand ``negate`` INSIDE a production
+    condition, which crosses with the rest of the operand vocabulary: that one
+    inverts what an operand READS.
+    """
+    if not _declared_interface_keys(interface, _NEGATION_ON_A_CONTINUOUS_PORT):
+        return
+
+    raise Cod3sPlatformImportError(
+        f"Interface {name!r}: 'negate' on a flow_family='continuous' port. It "
+        f"inverts the boolean state a port publishes, and a rate has none. Do "
+        f"NOT declare the port as flow_family='discrete' to get around it: "
+        f"that turns a rate into a boolean. To invert a GATE, negate the "
+        f"operand inside 'prod_cond' instead: "
+        f"[[{{'name': ..., 'negate': true}}]]."
+    )
+
+
+def _check_output_only_keys(interface: Dict[str, Any], *, name: str) -> None:
+    """Refuse an OUTPUT-only key written on a continuous input.
+
+    Distinct from :func:`_check_family_keys` in what it discriminates on, and
+    that is the whole point of separating them: the family guard asks which
+    schema the port is read under, this one asks whether the port has anything
+    to condition. Both sides here are the same family, so the family guard
+    cannot see this mistake, and the way out is different too -- there is no
+    other family to move the port to, the key simply has no referent.
+    """
+    declared = _declared_interface_keys(interface, _OUTPUT_ONLY_CONTINUOUS_KEYS)
+    if not declared:
+        return
+
+    plural = "s" if len(declared) > 1 else ""
+    keys = ", ".join(repr(key) for key in declared)
+    raise Cod3sPlatformImportError(
+        f"Interface {name!r}: declaration key{plural} {keys} on an INPUT port. "
+        f"A production condition conditions what a port PRODUCES, and an input "
+        f"produces nothing. Declare it on the output whose rate it gates."
     )
 
 
@@ -1107,10 +1178,12 @@ def _parse_continuous_interface(
 ) -> FlowSpec:
     """Translate one CONTINUOUS KB interface into a :class:`FlowSpec`.
 
-    ``logic`` is set to an empty list on both directions: the continuous family
-    reads no boolean production condition and no input aggregation logic, and
-    the empty list is what keeps the intra-component output ordering (which
-    walks ``logic``) a no-op rather than a special case.
+    ``logic`` carries the production condition of an OUTPUT (R44), in the very
+    field the discrete family uses for it, and stays an empty list on an input.
+    Reusing that field is what puts a continuous output under
+    :func:`_order_outputs_by_deps` for free: the sort walks ``logic``, and the
+    empty list it used to be unconditionally is why the sort was a no-op here
+    rather than a special case.
     """
     _check_family_keys(
         interface,
@@ -1119,8 +1192,10 @@ def _parse_continuous_interface(
         forbidden=_DISCRETE_ONLY_INTERFACE_KEYS,
         other_family=DISCRETE_FAMILY,
     )
+    _check_negation(interface, name=name)
 
     if port_type == "input":
+        _check_output_only_keys(interface, name=name)
         rate, _ = _parse_profile(
             interface.get("demand_profile"),
             flow_name=name,
@@ -1146,10 +1221,22 @@ def _parse_continuous_interface(
         key="production_profile",
         allow_modulated=True,
     )
+
+    prod_cond = interface.get("prod_cond") or []
+    if not prod_cond and _declared_interface_keys(interface, ("logic_inner_mode",)):
+        raise Cod3sPlatformImportError(
+            f"Interface {name!r}: 'logic_inner_mode' with no 'prod_cond' to "
+            f"qualify. The mode says how the groups of a condition combine, so "
+            f"alone it decides nothing and would be dropped in silence."
+        )
     return FlowSpec(
         name=name,
         direction="output",
-        logic=[],
+        logic=prod_cond,
+        # Same default as the discrete direction, and it has to be: a condition
+        # written on the platform means one thing, whichever family carries it.
+        # See FlowSpec.logic_inner_mode for why the default is 'and'.
+        logic_inner_mode=interface.get("logic_inner_mode", "and"),
         flow_family=CONTINUOUS_FAMILY,
         nominal_rate=rate,
         profile_spec=profile_spec,
@@ -1176,8 +1263,12 @@ def _parse_interface(interface: Dict[str, Any]) -> FlowSpec:
     A ``flow_family`` discriminator selects the muscadet flow FAMILY before any
     of the above is read: ``'discrete'`` (the default, and the whole of the
     schema described here) or ``'continuous'``, which is parsed by
-    :func:`_parse_continuous_interface` and shares none of the discrete keys.
-    An unknown family is refused rather than read as discrete.
+    :func:`_parse_continuous_interface`. The two families share ``prod_cond``
+    and ``logic_inner_mode`` on an OUTPUT since R44, and nothing else: a
+    condition means the same thing whatever the port carries, while everything
+    around it -- the input aggregation, the tempo classes, the whole-output
+    negation -- is discrete by nature. An unknown family is refused rather than
+    read as discrete.
     """
     name = interface.get("name")
     if not name:
@@ -3716,6 +3807,32 @@ def parse_platform_export(payload: Dict[str, Any]) -> ImporterContext:
 # ---------------------------------------------------------------------------
 
 
+def _condition_operands(logic: Any) -> List[Any]:
+    """Every operand of a production condition, whatever shape it was written in.
+
+    ``prod_cond`` accepts a bare operand as much as a list of groups -- muscadet
+    normalises ``"main"`` into ``[["main"]]`` when it resolves it -- so a sort
+    that only walked the nested form saw NO dependency at all on the bare one,
+    and whether the model built came down to the order of the interface
+    mapping. Normalising here rather than at the parse layer keeps the two
+    readings from drifting: this is the only place the ordering looks.
+    """
+    if logic is None:
+        return []
+    if isinstance(logic, (str, dict)):
+        return [logic]
+    if not isinstance(logic, (list, tuple, set)):
+        return []
+
+    operands: List[Any] = []
+    for group in logic:
+        if isinstance(group, (str, dict)):
+            operands.append(group)
+        elif isinstance(group, (list, tuple, set)):
+            operands.extend(group)
+    return operands
+
+
 def _order_outputs_by_deps(
     output_flows: List[FlowSpec],
     input_names: set,
@@ -3764,11 +3881,7 @@ def _order_outputs_by_deps(
         ready = [
             f
             for f in remaining.values()
-            if all(
-                _satisfied(ref)
-                for disj in (f.logic if isinstance(f.logic, list) else [])
-                for ref in (disj if isinstance(disj, list) else [disj])
-            )
+            if all(_satisfied(ref) for ref in _condition_operands(f.logic))
         ]
         if not ready:
             raise Cod3sPlatformImportError(
@@ -4066,6 +4179,15 @@ def _continuous_out_kwargs(flow: FlowSpec) -> Dict[str, Any]:
         kwargs["var_fed_default"] = flow.nominal_rate
     if flow.profile_spec is not None:
         kwargs["profile"] = dict(flow.profile_spec)
+    # The inner mode travels WITH the condition and never alone. The two sides
+    # read a bare CNF differently -- the platform 'and'-first, muscadet
+    # 'or'-first -- so a condition that crossed without its mode would mean
+    # something else on arrival; and a port carrying no condition must keep
+    # muscadet's own default rather than a value nobody declared, which is what
+    # the kwargs-leak guard in the tests watches for.
+    if flow.logic:
+        kwargs["var_prod_cond"] = flow.logic
+        kwargs["var_prod_cond_inner_mode"] = flow.logic_inner_mode
 
     return kwargs
 

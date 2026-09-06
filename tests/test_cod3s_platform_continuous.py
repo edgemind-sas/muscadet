@@ -351,27 +351,22 @@ class TestParseContinuousInterface:
 
 
 class TestContinuousRefusesDiscreteKeys:
-    def test_production_condition_refused_by_the_importer(self):
-        # NOT by FlowContinuous.check_declaration_keys: the refusal must name
-        # the platform key, at parse time, before any runtime is touched.
-        with pytest.raises(Cod3sPlatformImportError) as excinfo:
-            _parse_interface(
-                {
-                    "name": "power",
-                    "port_type": {"general": "output"},
-                    "flow_family": "continuous",
-                    "prod_cond": [["ctrl"]],
-                }
-            )
-        message = str(excinfo.value)
-        assert "prod_cond" in message
-        assert "continuous" in message
+    # ``prod_cond`` was refused here until R44 carried it across, and what
+    # replaced that refusal is not a weaker one but a differently indexed one:
+    # the key is refused on an INPUT, by direction rather than by family, in
+    # TestContinuousProductionCondition above. The refusal that mattered was
+    # never "this family does not read it" but "this port has nothing to
+    # condition", and only one of the two was ever true of an output.
 
     @pytest.mark.parametrize(
         "key, value",
         [
+            # ``negate`` stays: it negates the boolean STATE a port publishes,
+            # and a rate has none. ``logic_inner_mode`` left this list with the
+            # condition it qualifies -- alone it would say nothing, and beside a
+            # condition it is what keeps a CNF meaning the same thing on both
+            # sides.
             ("negate", True),
-            ("logic_inner_mode", "or"),
             ("flow_type", "tempo"),
             ("occ_enable", {"cls": "delay", "time": 3}),
             ("init_enable", True),
@@ -695,12 +690,14 @@ class TestProfileDecomposition:
 
 
 # ---------------------------------------------------------------------------
-# Runtime layer — a continuous flow never receives a production condition
+# Runtime layer — the discrete kwargs never leak into a continuous flow
 # ---------------------------------------------------------------------------
 
 
 class TestContinuousKwargsAreSeparate:
-    def test_continuous_flow_carries_no_discrete_declaration_key(self, cleanup_system):
+    def test_the_discrete_kwargs_do_not_leak_into_a_continuous_flow(
+        self, cleanup_system
+    ):
         system = system_from_export(
             _one(
                 {
@@ -714,10 +711,381 @@ class TestContinuousKwargsAreSeparate:
         )
         cleanup_system.append(system)
         flow = system.comp["C1"].flows_out["power"]
-        for key in ("var_prod_cond", "var_prod_cond_inner_mode", "negate"):
+
+        # ``var_prod_cond`` and its inner mode became fields of a continuous
+        # output with R44 -- a production condition means the same thing on
+        # both families -- so their ABSENCE no longer expresses what this test
+        # guards. What it guards is unchanged: the two kwargs builders must not
+        # be shared. So the flow must carry muscadet's own DEFAULTS and not a
+        # value the discrete builder put there, which is the stronger check of
+        # the two: the platform's own default inner mode is 'and' (matching the
+        # KB Editor UI) where muscadet's is 'or', so a leak shows up as a value
+        # and not merely as a present attribute.
+        assert flow.var_prod_cond == []
+        assert flow.var_prod_cond_negate == []
+        assert flow.var_prod_cond_compare == []
+        assert flow.var_prod_cond_inner_mode == "or"
+
+        # These two never became continuous fields, and must still not exist:
+        # ``var_prod_default`` names the boolean production variable only a
+        # discrete output has, and ``negate`` is a FlowSpec-level key of the
+        # importer that is no flow field on either family.
+        for key in ("var_prod_default", "negate"):
             assert not hasattr(
                 flow, key
             ), f"{key} reached a continuous flow; the kwargs dicts are shared"
+
+
+# ---------------------------------------------------------------------------
+# Production condition on a continuous output — the bridge (R44)
+# ---------------------------------------------------------------------------
+
+
+CTRL_IN = {"name": "ctrl", "port_type": {"general": "input"}}
+
+LEVEL_IN = {
+    "name": "level",
+    "port_type": {"general": "input"},
+    "flow_family": "continuous",
+}
+
+
+def _gated_output(prod_cond, **extra):
+    """A continuous output port carrying a production condition."""
+    return {
+        "name": "power",
+        "port_type": {"general": "output"},
+        "flow_family": "continuous",
+        "production_profile": {"cls": "constant", "value": 2.0},
+        "prod_cond": prod_cond,
+        **extra,
+    }
+
+
+class TestContinuousProductionCondition:
+    def test_a_continuous_output_carries_its_production_condition(self, cleanup_system):
+        """The whole point: a valve declared on the platform is a valve.
+
+        The operand must arrive RESOLVED -- the flow object itself, not the
+        name it was written as -- because that is what the gate reads.
+        """
+        system = system_from_export(
+            _payload(
+                {"ctrl": CTRL_IN, "power": _gated_output([["ctrl"]])},
+                sys_name="Mcont_gate",
+            )
+        )
+        cleanup_system.append(system)
+        comp = system.comp["C1"]
+        flow = comp.flows_out["power"]
+
+        assert flow.var_prod_cond == [[comp.flows_in["ctrl"]]]
+
+    def test_a_negated_operand_crosses_the_bridge(self, cleanup_system):
+        """The per-operand negation, which is part of the operand vocabulary."""
+        system = system_from_export(
+            _payload(
+                {
+                    "ctrl": CTRL_IN,
+                    "power": _gated_output([[{"name": "ctrl", "negate": True}]]),
+                },
+                sys_name="Mcont_gate_neg",
+            )
+        )
+        cleanup_system.append(system)
+        flow = system.comp["C1"].flows_out["power"]
+
+        assert flow.var_prod_cond_negate == [[True]]
+
+    def test_a_comparison_operand_crosses_the_bridge(self, cleanup_system):
+        """A rate gated on an observed quantity: the regulation shape."""
+        system = system_from_export(
+            _payload(
+                {
+                    "level": LEVEL_IN,
+                    "power": _gated_output(
+                        [[{"name": "level", "op": ">=", "value": 3.0}]]
+                    ),
+                },
+                sys_name="Mcont_gate_cmp",
+            )
+        )
+        cleanup_system.append(system)
+        flow = system.comp["C1"].flows_out["power"]
+
+        assert flow.var_prod_cond_compare == [[{"op": ">=", "value": 3.0}]]
+
+    # The two inner-mode tests below look alike and catch different faults,
+    # because the two sides disagree on the default: the platform reads a bare
+    # CNF 'and'-first, muscadet 'or'-first. The first test therefore dies if
+    # the mode never crosses at all; the second dies if it crosses as a
+    # hardcoded default instead of what was declared. Either one alone leaves
+    # half the bridge unwatched.
+
+    def test_the_inner_mode_crosses_only_beside_a_condition(self, cleanup_system):
+        """The platform reads a condition 'and'-first, muscadet 'or'-first.
+
+        So the mode must cross whenever a condition does, or the same CNF would
+        mean two different things on the two sides. And it must NOT cross on a
+        port carrying no condition, where passing the platform default would be
+        a value nobody declared -- which is exactly what the kwargs-leak guard
+        further down watches for.
+        """
+        system = system_from_export(
+            _payload(
+                {"ctrl": CTRL_IN, "power": _gated_output([["ctrl"]])},
+                sys_name="Mcont_gate_mode",
+            )
+        )
+        cleanup_system.append(system)
+
+        assert system.comp["C1"].flows_out["power"].var_prod_cond_inner_mode == "and"
+
+    def test_the_declared_inner_mode_is_honoured(self, cleanup_system):
+        """Declared 'or' must arrive as 'or', which the platform default is not."""
+        system = system_from_export(
+            _payload(
+                {
+                    "ctrl": CTRL_IN,
+                    "power": _gated_output([["ctrl"]], logic_inner_mode="or"),
+                },
+                sys_name="Mcont_gate_mode_or",
+            )
+        )
+        cleanup_system.append(system)
+
+        assert system.comp["C1"].flows_out["power"].var_prod_cond_inner_mode == "or"
+
+    def test_a_condition_on_a_continuous_input_is_refused_by_direction(self):
+        """The guard had to stop being about the FAMILY and start being about
+        the DIRECTION, or lifting it would let a condition through on a port
+        that has no production to condition."""
+        with pytest.raises(Cod3sPlatformImportError) as excinfo:
+            _parse_interface(
+                {
+                    "name": "water",
+                    "port_type": {"general": "input"},
+                    "flow_family": "continuous",
+                    "prod_cond": [["ctrl"]],
+                }
+            )
+        message = str(excinfo.value)
+
+        assert "prod_cond" in message
+        assert "input" in message
+        assert "output" in message
+
+    def test_a_whole_output_negation_stays_refused_without_misdirecting(self):
+        """``negate`` negates a boolean STATE, and a rate has none.
+
+        Distinct from the per-operand ``negate`` inside a condition, which does
+        cross: that one negates what an operand READS, this one would negate
+        what the port produces.
+
+        The refusal needs a message of its own, and that is the whole reason
+        this key is not simply in the discrete-family tuple: the generic family
+        message ends on "declare the port as flow_family='discrete'", which is
+        sound for a tempo class and a trap here, since someone writing
+        ``negate`` on a rate wants an inverted gate and would get a boolean.
+        """
+        with pytest.raises(Cod3sPlatformImportError) as excinfo:
+            _parse_interface(
+                {
+                    "name": "power",
+                    "port_type": {"general": "output"},
+                    "flow_family": "continuous",
+                    "negate": True,
+                }
+            )
+        message = str(excinfo.value)
+
+        assert "negate" in message
+        assert "Do NOT declare the port as flow_family='discrete'" in message
+        assert "prod_cond" in message
+
+    def test_an_inner_mode_with_no_condition_to_qualify_is_refused(self):
+        """A mode says how the GROUPS of a condition combine.
+
+        Alone it decides nothing, and the bridge carries it only beside a
+        condition, so accepting it would be accepting a declaration that is
+        dropped on the way.
+        """
+        with pytest.raises(Cod3sPlatformImportError, match="logic_inner_mode"):
+            _parse_interface(
+                {
+                    "name": "power",
+                    "port_type": {"general": "output"},
+                    "flow_family": "continuous",
+                    "production_profile": {"cls": "constant", "value": 2.0},
+                    "logic_inner_mode": "or",
+                }
+            )
+
+    def test_a_bare_operand_is_ordered_like_a_nested_one(self, cleanup_system):
+        """Declaration order must not decide whether a model builds, part two.
+
+        ``prod_cond: "main"`` is a legal bare operand that muscadet normalises
+        when it resolves it. The dependency sort walked the nested form only,
+        so on the bare one it saw no dependency at all and the build came down
+        to the order of the interface mapping. The dependent output is declared
+        FIRST here, so nothing but the sort can save it.
+        """
+        system = system_from_export(
+            _payload(
+                {
+                    "backup": {
+                        "name": "backup",
+                        "port_type": {"general": "output"},
+                        "flow_family": "continuous",
+                        "production_profile": {"cls": "constant", "value": 1.0},
+                        "prod_cond": "main",
+                    },
+                    "main": {
+                        "name": "main",
+                        "port_type": {"general": "output"},
+                        "flow_family": "continuous",
+                        "production_profile": {"cls": "constant", "value": 5.0},
+                    },
+                },
+                sys_name="Mcont_gate_bare",
+            )
+        )
+        cleanup_system.append(system)
+        comp = system.comp["C1"]
+
+        assert comp.flows_out["backup"].var_prod_cond == [[comp.flows_out["main"]]]
+
+    def test_an_empty_group_is_refused(self, cleanup_system):
+        """A valve with no diagnostic, either always open or always shut.
+
+        Under inner mode 'or' an empty group is always false, so the output
+        never produces; under 'and' it is always true, so the condition does
+        not bind. A malformed export gives a mute output either way.
+        """
+        with pytest.raises(Cod3sPlatformImportError, match="EMPTY group"):
+            system_from_export(
+                _payload(
+                    {"power": _gated_output([[]])},
+                    sys_name="Mcont_gate_empty",
+                )
+            )
+
+    def test_the_gate_actually_closes_the_rate(self, cleanup_system):
+        """The bridge declares, and the engine must obey what it declared.
+
+        Every other test here reads a field. This one runs the model, because a
+        bridge that carried the condition to a flow the sweep then ignored
+        would satisfy all of them: the defect is in the call, not the function.
+
+        ``ctrl`` is left unconnected, so it is unfed: the plain condition is
+        false and the negated one true, on the same payload and the same step.
+        """
+        rates = {}
+        for label, cond in (
+            ("plain", [["ctrl"]]),
+            ("negated", [[{"name": "ctrl", "negate": True}]]),
+        ):
+            system = system_from_export(
+                _payload(
+                    {"ctrl": CTRL_IN, "power": _gated_output(cond)},
+                    sys_name=f"Mcont_gate_run_{label}",
+                )
+            )
+            comp = system.comp["C1"]
+            comp.add_atm2states(
+                name="clock",
+                st1="s0",
+                st2="s1",
+                occ_law_12={"cls": "delay", "time": 1.0},
+                cond_occ_21=False,
+            )
+            system.isimu_start()
+            system.isimu_step_forward()
+            rates[label] = comp.flows_out["power"].var_fed.value()
+            system.isimu_stop()
+            system.deleteSys()
+
+        import cod3s
+
+        cod3s.terminate_session()
+
+        assert rates["plain"] == pytest.approx(0.0)
+        assert rates["negated"] == pytest.approx(2.0)
+
+    def test_a_condition_naming_another_output_is_created_after_it(
+        self, cleanup_system
+    ):
+        """Declaration order must not decide whether a model builds.
+
+        ``_order_outputs_by_deps`` sorts the outputs by the names their
+        conditions reference, and it reads ``FlowSpec.logic`` -- which the
+        continuous parser left empty precisely so the sort would be a no-op.
+        Filling it is what puts a continuous output under that sort, and this
+        payload declares the dependent output FIRST so nothing but the sort can
+        save it.
+        """
+        system = system_from_export(
+            _payload(
+                {
+                    "backup": {
+                        "name": "backup",
+                        "port_type": {"general": "output"},
+                        "flow_family": "continuous",
+                        "production_profile": {"cls": "constant", "value": 1.0},
+                        "prod_cond": [
+                            [{"name": "main", "port": "out", "op": ">", "value": 0.0}]
+                        ],
+                    },
+                    "main": {
+                        "name": "main",
+                        "port_type": {"general": "output"},
+                        "flow_family": "continuous",
+                        "production_profile": {"cls": "constant", "value": 5.0},
+                    },
+                },
+                sys_name="Mcont_gate_order",
+            )
+        )
+        cleanup_system.append(system)
+        comp = system.comp["C1"]
+
+        assert comp.flows_out["backup"].var_prod_cond == [[comp.flows_out["main"]]]
+
+    def test_the_condition_survives_a_declaration_round_trip(self, cleanup_system):
+        """What the importer built must be re-declarable.
+
+        The condition is stored RESOLVED, so ``muscadet.declare`` rebuilds the
+        declaration form rather than dumping it; a continuous output reaching
+        that code for the first time is what needs saying so.
+        """
+        from muscadet import declare
+
+        system = system_from_export(
+            _payload(
+                {"ctrl": CTRL_IN, "power": _gated_output([["ctrl"]])},
+                sys_name="Mcont_gate_rt",
+            )
+        )
+        cleanup_system.append(system)
+
+        spec = declare.component_spec(system.comp["C1"])
+        flow = next(f for f in spec["flows"] if f["name"] == "power")
+
+        assert flow["cls"] == "FlowContinuousOut"
+        assert flow["var_prod_cond"] == [[{"name": "ctrl", "port": "in"}]]
+        # The inner mode is the one thing that could diverge without a trace,
+        # the two sides defaulting differently: it must be IN the spec, or a
+        # re-declared component would silently read the same CNF the other way.
+        assert flow["var_prod_cond_inner_mode"] == "and"
+
+        # And the spec must rebuild. Stopping at the dump would leave the name
+        # of this test a claim rather than a check: what is asserted below is
+        # that the operands resolve again, onto the flows of the NEW component.
+        rebuilt = declare.build_component(system, dict(spec, name="C1_RT"))
+        rebuilt_flow = rebuilt.flows_out["power"]
+
+        assert rebuilt_flow.var_prod_cond == [[rebuilt.flows_in["ctrl"]]]
+        assert rebuilt_flow.var_prod_cond_inner_mode == "and"
 
 
 # ---------------------------------------------------------------------------

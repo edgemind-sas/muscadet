@@ -50,7 +50,11 @@ from muscadet.kb.continuous import ConsumerContinuous
 #: gate on a continuous output, and the KB's own name for a declared demand.
 DK_UNKNOWN_FLOW_DECLARATIONS = {
     "FlowContinuousIn": dict(demand=5.0),
-    "FlowContinuousOut": dict(var_prod_cond=["ctrl"], var_prod_default=True),
+    # ``var_prod_cond`` was here until R44 made it a declared field of a
+    # continuous output: the condition means the same thing on both families.
+    # ``var_prod_default`` did NOT follow it, and that is the point -- it names
+    # the boolean production variable only a discrete output has.
+    "FlowContinuousOut": dict(var_prod_default=True),
 }
 
 #: R-15, the other way round: every field a continuous flow declares, with a
@@ -101,6 +105,12 @@ DK_FULL_FLOW_DECLARATIONS = {
         derating={},
         profile=muscadet.SinusoidalProfile(period=24.0, offset=1.0),
         var_profile=None,
+        # R44: the production condition, in the very shape
+        # ``postprocess_flow_specs`` normalises a declaration into.
+        var_prod_cond=[["ctrl"]],
+        var_prod_cond_negate=[[False]],
+        var_prod_cond_compare=[[None]],
+        var_prod_cond_inner_mode="or",
     ),
 }
 

@@ -956,6 +956,11 @@ def compared_continuous_inputs(comp):
     algebraic in the same way: a rule guard (R21) and a discrete production
     condition (R22) share one operand shape and one meaning.
 
+    A CONTINUOUS output is read like a discrete one since R44: it carries the
+    same production condition, so a comparison written on it thresholds the
+    same quantity and closes the same loop. Skipping it was correct exactly as
+    long as it could declare no condition at all.
+
     A comparison reading a MEASUREMENT link is deliberately absent, and what
     that absence means has narrowed (R43). It was written when a measurement
     could only carry a capacity level -- integrated state, which breaks a loop,
@@ -980,9 +985,6 @@ def compared_continuous_inputs(comp):
                     compared.setdefault(operand.name, operand.to_expression())
 
     for flow in (getattr(comp, "flows_out", None) or {}).values():
-        if isinstance(flow, FlowContinuous):
-            continue
-
         for source, compare in prod_cond_operands(flow):
             name = getattr(source, "name", None)
 
@@ -1004,7 +1006,8 @@ def signal_driven_outputs(comp, seeds):
     the propagation is a fixpoint over the two ways one variable reaches
     another INSIDE a component:
 
-    * a discrete output whose production condition reads a tainted flow;
+    * an output of EITHER family whose production condition reads a tainted
+      flow;
     * a mode automaton whose transition watches a tainted variable, which
       taints everything that mode clamps.
 
@@ -1012,10 +1015,28 @@ def signal_driven_outputs(comp, seeds):
     two edge outputs and clamping the AVAILABILITY of the port actually wired
     out, so following production conditions alone would stop at the edges and
     miss the very signal that leaves the component.
+
+    The taint PROPAGATES through both families since R44, and only the
+    DISCRETE outputs are returned. A continuous output carries a production
+    condition too, so a comparison can reach it and travel on to a discrete
+    output thresholding it -- a hop that used to break the chain, since the
+    continuous output was invisible to the fixpoint. What LEAVES a component as
+    a followable signal stays discrete: this walk is indexed on discrete
+    channels, the ones the continuous graph drops. A verdict leaving purely as
+    a rate is the continuous graph's business, and its one uncovered case is
+    recorded under "Known gap" below.
+
+    Known gap: a rate gated by a comparison on an OBSERVED quantity, whose
+    verdict leaves as that same rate and is observed back onto itself, closes a
+    loop no graph edge exists for (a measurement link is never an edge, KD19)
+    and no discrete signal carries. Widening the return to both families
+    catches it and also changes what a rule guard drives, which is a contract
+    of its own; it is left to that change.
     """
+    all_flows_out = getattr(comp, "flows_out", None) or {}
     flows_out = {
         name: flow
-        for name, flow in (getattr(comp, "flows_out", None) or {}).items()
+        for name, flow in all_flows_out.items()
         if not isinstance(flow, FlowContinuous)
     }
 
@@ -1035,7 +1056,7 @@ def signal_driven_outputs(comp, seeds):
                     tainted.add(basename)
                     changed = True
 
-        for name, flow in flows_out.items():
+        for name, flow in all_flows_out.items():
             state = state_var_name(flow) or f"{name}_fed_out"
 
             if state in tainted:
@@ -1110,19 +1131,21 @@ def rule_guard_comparison_seeds(comp, flow_in):
 
 
 def comparison_driven_outputs(comp, flow_name):
-    """Discrete outputs of ``comp`` carrying the comparison on ``flow_name``.
+    """Outputs of ``comp`` carrying the comparison on ``flow_name``.
 
-    Both ways a component can compare a continuous input against a threshold
-    seed the walk: a discrete output's production condition (R22) and a rule
-    set's guard (R21, :func:`rule_guard_comparison_seeds`).
+    Three ways a component can compare a continuous input against a threshold
+    seed the walk: a production condition on a discrete output (R22) or on a
+    continuous one (R44), and a rule set's guard (R21,
+    :func:`rule_guard_comparison_seeds`).
+
+    A continuous output seeds on the very variable a discrete one does, its own
+    ``{flow}_fed_out``: the two families spell that variable alike, and what the
+    walk follows is the connection carrying it, not its type.
     """
     flow_in = (getattr(comp, "flows_in", None) or {}).get(flow_name)
     seeds = set()
 
     for name, flow in (getattr(comp, "flows_out", None) or {}).items():
-        if isinstance(flow, FlowContinuous):
-            continue
-
         if any(
             compare is not None and source is flow_in
             for source, compare in prod_cond_operands(flow)
@@ -1145,14 +1168,26 @@ def inbound_driven_outputs(comp, flow_name):
 def gates_production_on(comp, flow_name):
     """True when ``comp``'s own production can depend on that discrete input.
 
-    A rule guard naming it -- the declared way a boolean signal selects a
-    continuous regime (R21) -- or a mode automaton watching it, since a mode is
-    what a derating hangs on and a derating scales what an output produces.
+    Three ways, and a loop closed through any of them is the same loop:
 
-    Requiring it is what keeps a legitimate model building: a discrete signal
-    that merely happens to travel between two components which also exchange a
-    continuous flow closes no loop, and refusing one would be worse than
-    missing one.
+    * a **rule guard** naming it -- the declared way a boolean signal selects a
+      continuous regime (R21);
+    * a **production condition on a continuous output** naming it (R44) -- the
+      declared way a boolean signal commands a continuous actuator. The gate is
+      a factor of the production, so a signal derived from that very production
+      closes the loop as surely as a guard does;
+    * a **mode automaton** watching it, since a mode is what a derating hangs
+      on and a derating scales what an output produces.
+
+    The second was added with the condition itself, and its absence would have
+    been silent in the worst way: the walk reaches the component, asks whether
+    its production depends on the signal, is told no, and the model builds and
+    chatters at a period set by the integration step instead of being refused.
+
+    Requiring one of the three is what keeps a legitimate model building: a
+    discrete signal that merely happens to travel between two components which
+    also exchange a continuous flow closes no loop, and refusing one would be
+    worse than missing one.
     """
     flow_in = (getattr(comp, "flows_in", None) or {}).get(flow_name)
 
@@ -1163,6 +1198,13 @@ def gates_production_on(comp, flow_name):
         for rule in rule_set.rules:
             if any(operand.flow is flow_in for operand in rule.cond):
                 return True
+
+    for flow in (getattr(comp, "flows_out", None) or {}).values():
+        if not isinstance(flow, FlowContinuous):
+            continue
+
+        if any(source is flow_in for source, _ in prod_cond_operands(flow)):
+            return True
 
     state = state_var_name(flow_in)
 
@@ -1452,14 +1494,15 @@ def republished_channels(comp, channel_name):
 
 
 def measurement_thresholds(comp, channel_name):
-    """How a DISCRETE production condition of ``comp`` thresholds a reading.
+    """How a production condition of ``comp`` thresholds a reading.
 
     The measurement half of :func:`compared_continuous_inputs`, which reads the
     same operand shape over continuous inputs. A rule guard is deliberately
     absent and cannot be added: ``ObjFlow._resolve_rule_flow`` refuses a
-    measurement name in a guard outright (R29), so the discrete production
-    condition (R22) is the only vocabulary an ``ObjFlow`` can threshold a
-    reading in.
+    measurement name in a guard outright (R29), so a production condition is
+    the only vocabulary an ``ObjFlow`` can threshold a reading in -- on either
+    family of output since R44, and this is the reading a continuous graph can
+    never carry an edge for, so nothing else would catch the loop.
 
     Returns
     -------
@@ -1475,9 +1518,6 @@ def measurement_thresholds(comp, channel_name):
     found = []
 
     for flow in (getattr(comp, "flows_out", None) or {}).values():
-        if isinstance(flow, FlowContinuous):
-            continue
-
         for source, compare in prod_cond_operands(flow):
             if compare is not None and source is channel:
                 found.append(f"{channel_name} {compare['op']} {compare['value']:g}")
@@ -1572,18 +1612,16 @@ def reading_driven_signals(comp, channel_name):
 
 
 def measurement_driven_outputs(comp, channel_name):
-    """Discrete outputs of ``comp`` carrying a threshold on that reading.
+    """Outputs of ``comp`` carrying a threshold on that reading.
 
     The measurement counterpart of :func:`comparison_driven_outputs`, seeded
-    the same way and followed by the same fixpoint.
+    the same way, over both families since R44, and followed by the same
+    fixpoint.
     """
     channel = measurement_channels(comp).get(channel_name)
     seeds = set()
 
     for name, flow in (getattr(comp, "flows_out", None) or {}).items():
-        if isinstance(flow, FlowContinuous):
-            continue
-
         if any(
             compare is not None and source is channel
             for source, compare in prod_cond_operands(flow)

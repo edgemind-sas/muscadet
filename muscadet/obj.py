@@ -552,66 +552,24 @@ class ObjFlow(cod3s.PycComponent):
     #     else:
     #         raise ValueError(f"Input flow {flow_name} already exists")
 
-    def postprocess_flow_specs(self, flow_specs):
+    def apply_prod_cond(self, flow_specs):
+        """Resolve a declared production condition into the form a flow stores.
+
+        Split out of :meth:`postprocess_flow_specs` because the KWARGS door of
+        a continuous output needs THIS and nothing else. Routing that door
+        through the whole of ``postprocess_flow_specs`` looked equivalent and
+        is not: it opens with a ``copy.deepcopy`` of the declaration, and a
+        deep copy of a BOUND METHOD copies its ``__self__``, so a legitimate
+        ``profile=muscadet.Profile(self.a_curve, continuous=True)`` or
+        ``allocation_fun=self.my_split`` stopped building with a pickling error
+        naming neither the parameter nor the flow, and a shared Profile object
+        lost its identity in silence.
+
+        Mutates ``flow_specs`` in place and returns it: the callers own the
+        mapping they pass (``postprocess_flow_specs`` has just copied it, the
+        kwargs door passes a shallow copy of its own kwargs), and rebinding
+        three keys needs no copy of its own.
         """
-        Processes and prepares flow specifications, particularly handling production conditions.
-
-        This method is crucial for converting user-friendly flow condition specifications into
-        the internal format required by the simulation engine. It performs several key transformations:
-
-        1. Converts string-based flow references to actual flow objects
-        2. Normalizes condition structures into conjunctive normal form (CNF)
-        3. Validates that referenced flows exist in the component
-        4. Processes occurrence distribution specifications
-
-        The production condition format follows this logic:
-        - Single string: Simple condition on one flow
-        - List of strings: Disjunctive (OR) condition
-        - List of lists: Conjunctive normal form [(A OR B) AND (C OR D)]
-
-        Parameters
-        ----------
-        flow_specs : dict
-            Flow specifications dictionary containing parameters for the flow.
-            Key parameters processed:
-            - var_prod_cond: Production condition specification
-            - occ_enable_flow: Occurrence distribution for flow enabling
-
-        Returns
-        -------
-        dict
-            A deep copy of the input flow_specs with processed parameters.
-            The var_prod_cond is converted into a normalized format where:
-            - Outer list represents AND conditions (conjunctive)
-            - Inner lists represent OR conditions (disjunctive)
-            - Each condition references the actual flow object instead of its name
-
-        Raises
-        ------
-        ValueError
-            If referenced flows don't exist or if condition format is invalid
-
-        Examples
-        --------
-        >>> # Single condition
-        >>> specs = {"var_prod_cond": "flow1"}
-        >>> # Becomes: [["flow1_object"]]
-
-        >>> # OR condition
-        >>> specs = {"var_prod_cond": ["flow1", "flow2"]}
-        >>> # Becomes: [["flow1_object", "flow2_object"]]
-
-        >>> # AND of ORs condition
-        >>> specs = {"var_prod_cond": [["flow1", "flow2"], ["flow3"]]}
-        >>> # Becomes: [["flow1_object", "flow2_object"], ["flow3_object"]]
-
-        >>> # A comparison against a continuous quantity (R22)
-        >>> specs = {"var_prod_cond": [{"name": "level", "op": ">=", "value": 10}]}
-        >>> # Becomes: [["level_object"]] plus the aligned comparison matrix
-        """
-        flow_specs = copy.deepcopy(flow_specs)
-
-        # Postprocess : var_prod_cond
         if var_prod_cond := flow_specs.get("var_prod_cond"):
 
             def _resolve_operand(op):
@@ -695,6 +653,15 @@ class ObjFlow(cod3s.PycComponent):
                         # a level carries no state to read.
                         fcond = self.measurements_in.get(name)
                 if fcond is not None:
+                    # A BOOLEAN operand naming a CONTINUOUS flow is accepted
+                    # here, and it is worth saying why rather than leaving the
+                    # silence: its reader is ``source.var_fed.value()``, so on a
+                    # rate the condition means "differs from zero" and not the
+                    # threshold a modeller almost certainly wanted. Refusing it
+                    # would break the parity R-5 pins -- a rule guard and a
+                    # production condition accept exactly the same operand
+                    # shapes, from one implementation -- so the two vocabularies
+                    # have to change together or not at all.
                     return fcond, negate, compare
                 raise ValueError(
                     f"Object {self.name()}: Flow {name} does not exist as {kind} flow (you must create it before using it in a FlowOut condition)"
@@ -748,6 +715,69 @@ class ObjFlow(cod3s.PycComponent):
             # boolean one it has always been.
             if any(entry is not None for row in var_prod_cond_compare for entry in row):
                 flow_specs["var_prod_cond_compare"] = var_prod_cond_compare
+
+        return flow_specs
+
+    def postprocess_flow_specs(self, flow_specs):
+        """
+        Processes and prepares flow specifications, particularly handling production conditions.
+
+        This method is crucial for converting user-friendly flow condition specifications into
+        the internal format required by the simulation engine. It performs several key transformations:
+
+        1. Converts string-based flow references to actual flow objects
+        2. Normalizes condition structures into conjunctive normal form (CNF)
+        3. Validates that referenced flows exist in the component
+        4. Processes occurrence distribution specifications
+
+        The production condition format follows this logic:
+        - Single string: Simple condition on one flow
+        - List of strings: Disjunctive (OR) condition
+        - List of lists: Conjunctive normal form [(A OR B) AND (C OR D)]
+
+        Parameters
+        ----------
+        flow_specs : dict
+            Flow specifications dictionary containing parameters for the flow.
+            Key parameters processed:
+            - var_prod_cond: Production condition specification
+            - occ_enable_flow: Occurrence distribution for flow enabling
+
+        Returns
+        -------
+        dict
+            A deep copy of the input flow_specs with processed parameters.
+            The var_prod_cond is converted into a normalized format where:
+            - Outer list represents AND conditions (conjunctive)
+            - Inner lists represent OR conditions (disjunctive)
+            - Each condition references the actual flow object instead of its name
+
+        Raises
+        ------
+        ValueError
+            If referenced flows don't exist or if condition format is invalid
+
+        Examples
+        --------
+        >>> # Single condition
+        >>> specs = {"var_prod_cond": "flow1"}
+        >>> # Becomes: [["flow1_object"]]
+
+        >>> # OR condition
+        >>> specs = {"var_prod_cond": ["flow1", "flow2"]}
+        >>> # Becomes: [["flow1_object", "flow2_object"]]
+
+        >>> # AND of ORs condition
+        >>> specs = {"var_prod_cond": [["flow1", "flow2"], ["flow3"]]}
+        >>> # Becomes: [["flow1_object", "flow2_object"], ["flow3_object"]]
+
+        >>> # A comparison against a continuous quantity (R22)
+        >>> specs = {"var_prod_cond": [{"name": "level", "op": ">=", "value": 10}]}
+        >>> # Becomes: [["level_object"]] plus the aligned comparison matrix
+        """
+        flow_specs = copy.deepcopy(flow_specs)
+
+        flow_specs = self.apply_prod_cond(flow_specs)
 
         # Normalise tempo occurrence-law SHORT forms to the long class names so
         # ``ObjCOD3S.from_dict`` (called next in ``add_flow``) can resolve them
@@ -1029,9 +1059,15 @@ class ObjFlow(cod3s.PycComponent):
         """
         Adds a continuous (real-valued) output flow to the component.
 
-        Note that ``prepare_flow_out_params`` is deliberately NOT applied: the
-        ``var_prod_cond`` boolean production condition it normalises belongs to
-        the discrete family only.
+        A declared ``var_prod_cond`` is normalised HERE, through the same
+        :meth:`apply_prod_cond` the dict door ``add_flow`` goes through (R44).
+        Without it this door left an operand the string it was written as, and
+        the gate read nothing -- the defect being in the call and not in the
+        function, which is why the two doors are tested together rather than
+        separately. That method and NOT the whole of
+        ``postprocess_flow_specs``: the latter deep-copies the declaration,
+        which a bound method passed as a profile or an allocation function does
+        not survive.
 
         One variable is exported to every connection, so it carries the TOTAL
         delivered and the split among the consumers is held on the flow. How
@@ -1079,9 +1115,18 @@ class ObjFlow(cod3s.PycComponent):
             does not derive.
 
             It composes with the derating rate by **product**, never by
-            minimum: ``produced = rule x profile(t) x min(out_rate,
-            deratings)``. An output at 0.3 of its profile that is also derated
-            to 0.5 produces 0.15.
+            minimum: ``produced = rule x profile(t) x min(out_rate, deratings)
+            x gate``. An output at 0.3 of its profile that is also derated to
+            0.5 produces 0.15, and nothing at all while its production
+            condition fails.
+        var_prod_cond : list, optional
+            A production condition (R44), in the very vocabulary a discrete
+            output accepts: an operand is a flow name, or a mapping ``{name,
+            port, negate, op, value}`` comparing a quantity against a
+            threshold. It gates the output as a THIRD factor, so a condition
+            that fails gives a rate of zero rather than a boolean channel of
+            its own. Normalised here, which the deprecated
+            ``prepare_flow_out_params`` never did.
         component_authorized : list of dict, optional
             Connection authorization patterns, as on a discrete flow.
         **params : dict
@@ -1096,6 +1141,7 @@ class ObjFlow(cod3s.PycComponent):
             share map that does not sum to 1 -- or if the declared profile is
             not a :class:`muscadet.Profile` attested continuous.
         """
+        params = self.apply_prod_cond(dict(params))
         flow_name = params.get("name")
         if not (flow_name in self.flows_out):
             self.flows_out[flow_name] = FlowContinuousOut(**params)

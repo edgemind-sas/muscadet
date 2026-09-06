@@ -74,6 +74,232 @@ def _prod_cond_threshold_condition(read, comparator, threshold, above):
     return condition
 
 
+# ----------------------------------------------------------------------
+# A production condition, shared by BOTH flow families (R22, R44)
+# ----------------------------------------------------------------------
+#
+# The condition is declared identically on a discrete and on a continuous
+# output -- same operand vocabulary, same CNF shape, same matrices -- and what
+# differs is only what the two families DO with the verdict: a discrete output
+# writes a boolean production variable, a continuous one multiplies its
+# production factor by 1 or 0 (R19 survives: total loss is a rate of zero).
+#
+# So the declaration prose and the evaluation live here, once, as functions
+# over a flow -- the shape ``evaluation.py``, ``capability.py`` and
+# ``derating.py`` already use for everything shared between families. A mixin
+# was the alternative and was not taken: ``FlowDiscreteOut`` is 1.x surface
+# whose MRO feeds the ``cls`` discriminator of ``cod3s.ObjCOD3S``, and moving
+# it to buy four field declarations is a poor trade.
+
+PROD_COND_DESCRIPTION = (
+    "Flow production condition [(C11 <BoolOpeA> C12 <BoolOpeA> ... <BoolOpeA> "
+    "C1_k1) <BoolOpeB> (C21 <BoolOpeA> ... <BoolOpeA> C2_k2) <BoolOpeB> ... "
+    "<BoolOpeB> (Cn1 <BoolOpeA> ... <BoolOpeA> Cn_kn)] where both <BoolOpeA> "
+    "and <BoolOpeB> are boolean operators set by attribute "
+    "'var_prod_cond_inner_mode'"
+)
+
+PROD_COND_NEGATE_DESCRIPTION = (
+    "Per-operand negation matrix aligned index-for-index with 'var_prod_cond' "
+    "(list[list[bool]]): when var_prod_cond_negate[i][j] is True the j-th "
+    "operand of the i-th group is evaluated as NOT(flow.var_fed) instead of "
+    "flow.var_fed. An EMPTY matrix (the default) means no operand is negated "
+    "-> the evaluation is byte-identical to the historical behaviour. Built "
+    "index-aligned by ObjFlow.postprocess_flow_specs from the '{name, negate}' "
+    "operand form; the plain string operand form yields no negation."
+)
+
+PROD_COND_COMPARE_DESCRIPTION = (
+    "Per-operand comparison matrix aligned index-for-index with "
+    "'var_prod_cond' (list[list[dict|None]]): when var_prod_cond_compare[i][j] "
+    "is {'op': str, 'value': float} the j-th operand of the i-th group "
+    "compares the LIVE quantity that operand reads against the threshold, "
+    "instead of reading a boolean state (R22) -- which is how a continuous "
+    "quantity conditions an output. An EMPTY matrix (the default) means no "
+    "operand compares -> the evaluation is byte-identical to the historical "
+    "behaviour. Built index-aligned by ObjFlow.postprocess_flow_specs from the "
+    "'{name, op, value}' operand form, the very vocabulary a rule guard "
+    "operand uses."
+)
+
+PROD_COND_INNER_MODE_DESCRIPTION = (
+    "Flow production condition expression mode: 'or' means the condition is "
+    "evaluated like [(C11 or C12 or ... or C1_k1) and (C21 or ... C2_k2) and "
+    "... and (Cn1 or ... or Cn_kn)], 'and' means evaluation like [(C11 and C12 "
+    "and ... and C1_k1) or (C21 and ... and C2_k2) or ... or (Cn1 and ... and "
+    "Cn_kn)]"
+)
+
+
+def prod_cond_readers(flow):
+    """One zero-arg reader per ``var_prod_cond`` operand, in CNF shape.
+
+    Resolving what each operand reads ONCE, here, is what keeps the extended
+    evaluation a plain ``all(any(...))`` over callables: the comparator of a
+    comparison operand is looked up at wiring time, not on every evaluation.
+
+    The readers close over the resolved operand objects and read their
+    variables lazily, so a flow whose variables are declared after this runs is
+    still read correctly.
+    """
+    # Local import, and NOT a cycle break: ``rules`` imports nothing from
+    # muscadet, so a module-level import would work. It is deferred because
+    # this module is the flow layer and only this one function needs the rules
+    # unit -- for its comparison vocabulary, so a guard (R21) and a production
+    # condition (R22) compare a quantity the same way.
+    from .rules import comparator as get_comparator
+
+    negate_matrix = getattr(flow, "var_prod_cond_negate", None) or []
+    compare_matrix = getattr(flow, "var_prod_cond_compare", None) or []
+
+    readers = []
+    for i, flow_outer in enumerate(getattr(flow, "var_prod_cond", None) or []):
+        row = []
+        for j, source in enumerate(flow_outer):
+            compare = _prod_cond_matrix_entry(compare_matrix, i, j)
+            if compare is not None:
+                row.append(
+                    _prod_cond_compare_reader(
+                        source,
+                        get_comparator(compare["op"]),
+                        float(compare["value"]),
+                    )
+                )
+            elif _prod_cond_matrix_entry(negate_matrix, i, j, False):
+                row.append(_prod_cond_negated_reader(source))
+            else:
+                row.append(_prod_cond_state_reader(source))
+        readers.append(row)
+
+    return readers
+
+
+def prod_cond_holds(readers, inner_mode="or"):
+    """Evaluate a condition's readers under its inner mode.
+
+    ``"or"`` -- the default and the historical meaning -- reads the outer list
+    as a conjunction of disjunctions; ``"and"`` reads it the other way round.
+    An EMPTY condition holds: a flow declaring none is unconditioned, and that
+    is what makes the gate a no-op rather than a refusal.
+    """
+    if inner_mode == "or":
+        return all(any(read() for read in row) for row in readers)
+
+    return any(all(read() for read in row) for row in readers)
+
+
+def add_prod_cond_threshold_automata(flow, comp):
+    """Watch every continuous threshold a production condition carries (R22).
+
+    A comparison operand reading a CONTINUOUS quantity gets a two-state
+    automaton -- below the threshold, above it -- whose two instantaneous
+    transitions are registered as WATCHED. The solver then stops the
+    integration AT the crossing instead of noticing it at the following step,
+    which is exactly what a rule guard's mode automaton buys on the other
+    direction of the interoperation (R12).
+
+    The automaton is NOT what the condition reads: the closures built by
+    :func:`prod_cond_readers` read the quantity live, so the two can never
+    disagree on the value. What the automaton contributes is the stop at the
+    right date, and the notification that re-runs the condition there -- a
+    continuous quantity moving inside an integration step announces no change
+    of its own, so nothing else would.
+
+    A comparison on a DISCRETE flow needs none of this: that flow announces its
+    own change through ``var_fed``, and watching it would drag a purely
+    discrete model onto the PDMP solver.
+
+    Shared by both families, and needed by both for the same reason: whether
+    the verdict drives a boolean production variable or multiplies a rate, a
+    threshold nothing watches is crossed late.
+
+    Returns
+    -------
+    list
+        The automata built, empty when the condition carries no comparison.
+    """
+    compare_matrix = getattr(flow, "var_prod_cond_compare", None) or []
+
+    if not compare_matrix:
+        return []
+
+    from .rules import comparator as get_comparator
+
+    system = comp.system()
+    automata = []
+
+    for i, flow_outer in enumerate(getattr(flow, "var_prod_cond", None) or []):
+        for j, source in enumerate(flow_outer):
+            compare = _prod_cond_matrix_entry(compare_matrix, i, j)
+            if compare is None:
+                continue
+            # Anything that is not a flow -- a measurement link -- carries a
+            # continuous quantity too, hence the True default.
+            if not getattr(source, "is_continuous", True):
+                continue
+
+            read = _prod_cond_quantity_reader(source)
+            compare_fun = get_comparator(compare["op"])
+            threshold = float(compare["value"])
+
+            base = f"{flow.name}_cond_{i}_{j}"
+            st_below = f"{base}_below"
+            st_above = f"{base}_above"
+            trans_up = f"{base}_cross_up"
+            trans_down = f"{base}_cross_down"
+
+            aut = cod3s.PycAutomaton(
+                name=f"{comp.name()}_{base}_threshold",
+                states=[st_below, st_above],
+                # The state the comparison designates cannot be known here:
+                # the instantaneous transitions settle the automaton at t=0,
+                # which is why they must be watched rather than merely
+                # conditioned.
+                init_state=st_below,
+                transitions=[
+                    {
+                        "name": trans_up,
+                        "source": st_below,
+                        "target": st_above,
+                        "is_interruptible": True,
+                        # A fresh mapping per transition: cod3s rewrites the
+                        # 'cls' entry in place while sanitizing it.
+                        "occ_law": fresh_instant_occ_law(),
+                    },
+                    {
+                        "name": trans_down,
+                        "source": st_above,
+                        "target": st_below,
+                        "is_interruptible": True,
+                        "occ_law": fresh_instant_occ_law(),
+                    },
+                ],
+            )
+            aut.update_bkd(comp)
+
+            aut.get_transition_by_name(trans_up)._bkd.setCondition(
+                _prod_cond_threshold_condition(read, compare_fun, threshold, True)
+            )
+            aut.get_transition_by_name(trans_down)._bkd.setCondition(
+                _prod_cond_threshold_condition(read, compare_fun, threshold, False)
+            )
+
+            # A discrete output re-runs its production condition through this
+            # sensitive method; a continuous one declares none and reads its
+            # gate inside the production sweep, so the hook is optional by
+            # construction rather than by family test.
+            sm_fun = getattr(flow, "sm_prod_available_fun", None)
+            if sm_fun is not None:
+                aut._bkd.addSensitiveMethod(flow.sm_prod_available_name, sm_fun)
+
+            system.pdmp_add_watched_automaton(aut)
+
+            comp.automata_d[aut.name] = aut
+            automata.append(aut)
+
+    return automata
+
+
 class FlowModel(cod3s.ObjCOD3S):
 
     name: str = pydantic.Field(..., description="Flow name")
@@ -568,17 +794,12 @@ class FlowDiscreteOut(FlowDiscrete):
     var_prod_available: typing.Any = pydantic.Field(
         None, description="Indicates if the flow production condition are met"
     )
-    var_prod_cond: list = pydantic.Field(
-        [],
-        description="Flow production condition [(C11 <BoolOpeA> C12 <BoolOpeA> ... <BoolOpeA> C1_k1) <BoolOpeB> (C21 <BoolOpeA> ... <BoolOpeA> C2_k2) <BoolOpeB> ... <BoolOpeB> (Cn1 <BoolOpeA> ... <BoolOpeA> Cn_kn)] where both <BoolOpeA> and <BoolOpeB> are boolean operators set by attribute 'var_prod_cond_inner_mode'",
-    )
+    var_prod_cond: list = pydantic.Field([], description=PROD_COND_DESCRIPTION)
     var_prod_cond_negate: list = pydantic.Field(
-        default_factory=list,
-        description="Per-operand negation matrix aligned index-for-index with 'var_prod_cond' (list[list[bool]]): when var_prod_cond_negate[i][j] is True the j-th operand of the i-th group is evaluated as NOT(flow.var_fed) instead of flow.var_fed. An EMPTY matrix (the default) means no operand is negated -> the evaluation is byte-identical to the historical behaviour. Built index-aligned by ObjFlow.postprocess_flow_specs from the '{name, negate}' operand form; the plain string operand form yields no negation.",
+        default_factory=list, description=PROD_COND_NEGATE_DESCRIPTION
     )
     var_prod_cond_compare: list = pydantic.Field(
-        default_factory=list,
-        description="Per-operand comparison matrix aligned index-for-index with 'var_prod_cond' (list[list[dict|None]]): when var_prod_cond_compare[i][j] is {'op': str, 'value': float} the j-th operand of the i-th group compares the LIVE quantity that operand reads against the threshold, instead of reading a boolean state (R22) -- which is how a continuous quantity conditions a discrete output. An EMPTY matrix (the default) means no operand compares -> the evaluation is byte-identical to the historical behaviour. Built index-aligned by ObjFlow.postprocess_flow_specs from the '{name, op, value}' operand form, the very vocabulary a rule guard operand uses.",
+        default_factory=list, description=PROD_COND_COMPARE_DESCRIPTION
     )
     sm_prod_available_fun: typing.Any = pydantic.Field(
         None, description="Production condition sensitive method"
@@ -587,8 +808,7 @@ class FlowDiscreteOut(FlowDiscrete):
         None, description="Production condition sensitive method name"
     )
     var_prod_cond_inner_mode: str = pydantic.Field(
-        "or",
-        description="Flow production condition expression mode: 'or' means var_prod is evaluated like [(C11 or C12 or ... or C1_k1) and (C21 or ... C2_k2) and ... and (Cn1 or ... or Cn_kn)], 'and' means evaluation like [(C11 and C12 and ... and C1_k1) or (C21 and ... and C2_k2) or ... or (Cn1 and ... and Cn_kn)]",
+        "or", description=PROD_COND_INNER_MODE_DESCRIPTION
     )
     # var_fed_control: typing.Any = pydantic.Field(
     #     None,
@@ -823,42 +1043,11 @@ class FlowDiscreteOut(FlowDiscrete):
     def build_prod_cond_readers(self):
         """One zero-arg reader per ``var_prod_cond`` operand, in CNF shape.
 
-        Resolving what each operand reads ONCE, here, is what keeps the
-        extended evaluation a plain ``all(any(...))`` over callables: the
-        comparator of a comparison operand is looked up at wiring time, not on
-        every evaluation.
-
-        The readers close over the resolved operand objects and read their
-        variables lazily, so a flow whose variables are declared after this
-        runs is still read correctly.
+        Kept as a method because it is 1.x surface the tests and the KB call;
+        the implementation is :func:`prod_cond_readers`, shared with the
+        continuous family so one condition vocabulary has one evaluation.
         """
-        # Local import, and NOT a cycle break: ``rules`` imports nothing from
-        # muscadet, so a module-level import would work. It is deferred because
-        # this module is the discrete-flow layer and only this one method needs
-        # the rules unit -- for its comparison vocabulary, so a guard (R21) and
-        # a discrete production condition (R22) compare a quantity the same way.
-        from .rules import comparator as get_comparator
-
-        readers = []
-        for i, flow_outer in enumerate(self.var_prod_cond):
-            row = []
-            for j, source in enumerate(flow_outer):
-                compare = _prod_cond_matrix_entry(self.var_prod_cond_compare, i, j)
-                if compare is not None:
-                    row.append(
-                        _prod_cond_compare_reader(
-                            source,
-                            get_comparator(compare["op"]),
-                            float(compare["value"]),
-                        )
-                    )
-                elif _prod_cond_matrix_entry(self.var_prod_cond_negate, i, j, False):
-                    row.append(_prod_cond_negated_reader(source))
-                else:
-                    row.append(_prod_cond_state_reader(source))
-            readers.append(row)
-
-        return readers
+        return prod_cond_readers(self)
 
     def create_sensitive_set_flow_prod_available(self):
 
@@ -1024,111 +1213,14 @@ class FlowDiscreteOut(FlowDiscrete):
         self.add_threshold_automata(comp)
 
     def add_threshold_automata(self, comp):
-        """Watch every continuous threshold this production condition carries (R22).
+        """Watch every continuous threshold this production condition carries.
 
-        A comparison operand reading a CONTINUOUS quantity gets a two-state
-        automaton -- below the threshold, above it -- whose two instantaneous
-        transitions are registered as WATCHED. The solver then stops the
-        integration AT the crossing instead of noticing it at the following
-        step, which is exactly what a rule guard's mode automaton buys on the
-        other direction of the interoperation (R12).
-
-        The automaton is NOT what the condition reads: the closures built by
-        :meth:`build_prod_cond_readers` read the quantity live, so the two can
-        never disagree on the value. What the automaton contributes is the stop
-        at the right date, and the notification that re-runs the condition
-        there -- a continuous quantity moving inside an integration step
-        announces no change of its own, so nothing else would.
-
-        A comparison on a DISCRETE flow needs none of this: that flow announces
-        its own change through ``var_fed``, and watching it would drag a purely
-        discrete model onto the PDMP solver.
-
-        Returns
-        -------
-        list
-            The automata built, empty when the condition carries no comparison.
+        Kept as a method for the same reason as
+        :meth:`build_prod_cond_readers`; the implementation is
+        :func:`add_prod_cond_threshold_automata`, shared with the continuous
+        family (R22, R44).
         """
-        if not self.var_prod_cond_compare:
-            return []
-
-        # Local import, and NOT a cycle break: ``rules`` imports nothing from
-        # muscadet, so a module-level import would work. It is deferred because
-        # this module is the discrete-flow layer and only this one method needs
-        # the rules unit -- for its comparison vocabulary, so a guard (R21) and
-        # a discrete production condition (R22) compare a quantity the same way.
-        from .rules import comparator as get_comparator
-
-        system = comp.system()
-        automata = []
-
-        for i, flow_outer in enumerate(self.var_prod_cond):
-            for j, source in enumerate(flow_outer):
-                compare = _prod_cond_matrix_entry(self.var_prod_cond_compare, i, j)
-                if compare is None:
-                    continue
-                # Anything that is not a flow -- a measurement link -- carries a
-                # continuous quantity too, hence the True default.
-                if not getattr(source, "is_continuous", True):
-                    continue
-
-                read = _prod_cond_quantity_reader(source)
-                compare_fun = get_comparator(compare["op"])
-                threshold = float(compare["value"])
-
-                base = f"{self.name}_cond_{i}_{j}"
-                st_below = f"{base}_below"
-                st_above = f"{base}_above"
-                trans_up = f"{base}_cross_up"
-                trans_down = f"{base}_cross_down"
-
-                aut = cod3s.PycAutomaton(
-                    name=f"{comp.name()}_{base}_threshold",
-                    states=[st_below, st_above],
-                    # The state the comparison designates cannot be known here:
-                    # the instantaneous transitions settle the automaton at t=0,
-                    # which is why they must be watched rather than merely
-                    # conditioned.
-                    init_state=st_below,
-                    transitions=[
-                        {
-                            "name": trans_up,
-                            "source": st_below,
-                            "target": st_above,
-                            "is_interruptible": True,
-                            # A fresh mapping per transition: cod3s rewrites the
-                            # 'cls' entry in place while sanitizing it.
-                            "occ_law": fresh_instant_occ_law(),
-                        },
-                        {
-                            "name": trans_down,
-                            "source": st_above,
-                            "target": st_below,
-                            "is_interruptible": True,
-                            "occ_law": fresh_instant_occ_law(),
-                        },
-                    ],
-                )
-                aut.update_bkd(comp)
-
-                aut.get_transition_by_name(trans_up)._bkd.setCondition(
-                    _prod_cond_threshold_condition(read, compare_fun, threshold, True)
-                )
-                aut.get_transition_by_name(trans_down)._bkd.setCondition(
-                    _prod_cond_threshold_condition(read, compare_fun, threshold, False)
-                )
-
-                if self.sm_prod_available_fun is not None:
-                    aut._bkd.addSensitiveMethod(
-                        self.sm_prod_available_name, self.sm_prod_available_fun
-                    )
-
-                system.pdmp_add_watched_automaton(aut)
-
-                comp.automata_d[aut.name] = aut
-                automata.append(aut)
-
-        return automata
+        return add_prod_cond_threshold_automata(self, comp)
 
 
 class FlowOut(FlowDiscreteOut):
