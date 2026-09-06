@@ -2214,6 +2214,7 @@ def register_equation_order(system):
                 )
 
     register_controller_equations(system, order)
+    register_controller_seeds(system, order)
 
     return order
 
@@ -2264,6 +2265,43 @@ def register_controller_equations(system, order):
             )
         )
         registered.append(comp_name)
+
+    return registered
+
+
+def register_controller_seeds(system, order):
+    """Seed every controller output at instant 0, in the derived order (R45).
+
+    The instant-0 counterpart of :func:`register_controller_equations`, walking
+    the same sequence for the same reason: a controller output may read another
+    controller's output, so what a chain publishes at instant 0 has to be
+    written from the top down. PyCATSHOO calls start methods in registration
+    order, so registering them here IS ordering them.
+    :meth:`muscadet.ObjCtrl.seed_emitted_outputs` says what a seed answers and
+    why each nature of output owes one.
+
+    **Deliberately not gated on the PDMP manager**, where the equations are.
+    Seeding is a signal-graph concern and not a solver one: a boolean output
+    compiles to automata and to no equation at all, so a model of controllers
+    over a purely discrete system takes no manager and still owes its outputs
+    the value their conditions already hold at t = 0.
+
+    Returns
+    -------
+    list
+        ``(controller name, output name)`` per seed registered, in registration
+        order. Empty on a model holding no controller.
+    """
+    registered: typing.List[typing.Tuple[str, str]] = []
+
+    for comp_name in order.controller_order:
+        comp = system.comp[comp_name]
+        seed = getattr(comp, "seed_emitted_outputs", None)
+
+        if seed is None:
+            continue
+
+        registered.extend((comp_name, out_name) for out_name in seed())
 
     return registered
 

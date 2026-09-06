@@ -15,20 +15,45 @@ value branch, three lines above, had nothing. The precedent for the fix is
 profile at instant 0 for the very same reason -- a solar source announcing its
 peak rate at midnight.
 
-Three scenarios, each built, driven and deleted before the next one starts:
+The same fault, written twice
+----------------------------
+A republication is written twice in this library. A controller's ``"value"``
+output publishes through a PDMP equation of its own; an ``ObjFlow`` publishing a
+sourced ``MeasurementOut`` -- which is what the shipped ``SensorContinuous``
+compiles its ``publish`` channel to -- publishes through
+``compute_measurements``. Neither equation runs at instant 0, so both carried
+the fault and both are seeded. The **shipped sensor** scenario is the one that
+matters to a model: it is the instrument a model actually declares.
+
+And the ORDER the seeds run in
+------------------------------
+PyCATSHOO calls start methods in the order they were REGISTERED, one global list
+with component boundaries ignored. Registered where each output is declared, the
+seeds would therefore run in declaration order, while controllers *evaluate* in
+the order derived from the signal graph. The two agree on a montage declared in
+signal order and diverge otherwise, so the **chain order** scenario declares one
+downstream first: a controller thresholding an instrument, then the instrument
+relaying, then the instrument observing. Every seed is registered at the pre-run
+step instead, in the derived order, which is what makes that montage settle
+whole at instant 0 rather than one hop at a time.
+
+Five scenarios, each built, driven and deleted before the next one starts:
 PyCATSHOO forbids more than one live system per process.
 
 * **interactive** -- the reading and the threshold, read at t = 0 BEFORE any
   step, then re-read after the session has moved so the seed is shown to be a
   starting point and not a stuck value. The refusal of a republication declared
-  after the pre-run step is recorded on the same live system: the seed is
-  registered in the very method that raises it.
+  after the pre-run step is recorded on the same live system.
 * **monte carlo** -- the mean of the published variable at instant 0 over
   several sequences. Seeded once, that mean would be the value divided by the
   sequence count; seeded at every sequence start, it is the value.
 * **forcing** -- an output a mode holds publishes the forced number at t = 0
   too, gain included: the seed goes through the ordinary publication path or it
   starts a sequence on a number the next step contradicts.
+* **chain order** -- two republications and a threshold, declared against the
+  direction the signal travels.
+* **shipped sensor** -- the ``ObjFlow`` republication, declared the way a model
+  declares one.
 """
 
 import cod3s
@@ -39,6 +64,7 @@ import pytest
 from muscadet.kb.continuous import (  # noqa: F401
     CapacityContinuous,
     ConsumerContinuous,
+    SensorContinuous,
     SourceContinuous,
 )
 
@@ -65,6 +91,18 @@ SEED_THRESHOLD = 60.0
 
 #: The number a mode forces the second instrument's publication to.
 SEED_FORCED = 7.0
+
+#: The gain of the second hop of the chain scenario. Chosen so the relayed
+#: number is neither the tank's own reading nor the instrument's, and a hop
+#: settled from a default is therefore visible rather than plausible.
+SEED_RELAY_GAIN = 0.5
+
+#: What the relay publishes at t = 0, if the instrument before it published.
+SEED_RELAYED = SEED_PUBLISHED * SEED_RELAY_GAIN
+
+#: The chain's threshold, standing below the relayed reading and above the
+#: default a stale hop would carry.
+SEED_CHAIN_THRESHOLD = 30.0
 
 #: Sequences of the Monte Carlo scenario. A seed applied to the first one alone
 #: would divide the mean at instant 0 by this.
@@ -271,6 +309,117 @@ def run_forced_scenario(obs):
     system.deleteSys()
 
 
+def run_chain_order_scenario(obs):
+    """Two republications and a threshold, declared DOWNSTREAM FIRST.
+
+    Declaration order is then the reverse of the order the signal travels in,
+    so nothing but a seed ordered by the wiring settles the montage at instant
+    0. Seeded in declaration order, the relay would take the instrument's
+    default and the threshold the relay's.
+    """
+    system = muscadet.System(name="CtrlSeedChainOrder")
+
+    add_tank(system, "CAP")
+    system.add_component(
+        name="SINK", cls="ConsumerContinuous", flow="q", demand=SEED_DEMAND
+    )
+    system.connect_flow(source="CAP", target="SINK", flow_name="q")
+
+    system.add_component(
+        name="REG",
+        cls="ObjCtrl",
+        controls_in=[{"name": "relayed"}],
+        controls_out=[
+            {
+                "name": "run",
+                "kind": "bool",
+                "emit": {
+                    "op": "compare",
+                    "input": "relayed",
+                    "operator": ">=",
+                    "threshold": SEED_CHAIN_THRESHOLD,
+                },
+            }
+        ],
+    )
+    system.add_component(
+        name="RELAY",
+        cls="ObjCtrl",
+        controls_in=[{"name": "reading"}],
+        controls_out=[
+            {
+                "name": "relayed",
+                "kind": "value",
+                "emit": {
+                    "op": "republish",
+                    "input": "reading",
+                    "gain": SEED_RELAY_GAIN,
+                },
+            }
+        ],
+    )
+    add_instrument(system, "INSTR")
+
+    system.connect("CAP", "tank_level_out", "INSTR", "tank_level_in")
+    system.connect("INSTR", "reading_level_out", "RELAY", "reading_level_in")
+    system.connect("RELAY", "relayed_level_out", "REG", "relayed_level_in")
+
+    system.isimu_start()
+
+    obs["chain_at_zero"] = {
+        "time": system.currentTime(),
+        "published": system.comp["INSTR"].controls_out["reading"].var_level.value(),
+        "relayed": system.comp["RELAY"].controls_out["relayed"].var_level.value(),
+        "regulation_runs": system.comp["REG"].controls_out["run"].get_signal(),
+    }
+
+    system.isimu_stop()
+
+    obs["chain_controller_order"] = system.equation_order.controller_order
+
+    system.deleteSys()
+
+
+def run_shipped_sensor_scenario(obs):
+    """The OTHER republication: a sourced ``MeasurementOut`` on an ``ObjFlow``.
+
+    Declared through ``SensorContinuous``, which is what a model writes, and
+    whose ``publish`` channel compiles to exactly that. Its band is declared
+    beside the publication, so the montage is the shipped component as it is
+    really used rather than a republication-only corner of it.
+    """
+    system = muscadet.System(name="CtrlSeedShippedSensor")
+
+    add_tank(system, "CAP")
+    system.add_component(
+        name="SINK", cls="ConsumerContinuous", flow="q", demand=SEED_DEMAND
+    )
+    system.connect_flow(source="CAP", target="SINK", flow_name="q")
+
+    system.add_component(
+        name="SENSOR",
+        cls="SensorContinuous",
+        measurement="tank",
+        control="fill",
+        direction="below",
+        activate=SEED_CHAIN_THRESHOLD,
+        publish="reported",
+        gain=SEED_GAIN,
+    )
+    system.connect("CAP", "tank_level_out", "SENSOR", "tank_level_in")
+
+    system.isimu_start()
+
+    obs["sensor_at_zero"] = {
+        "time": system.currentTime(),
+        "observed": system.comp["SENSOR"].measurements_in["tank"].get_reading(),
+        "reported": system.comp["SENSOR"].measurements_out["reported"].get_level(),
+    }
+
+    system.isimu_stop()
+    system.deleteSys()
+
+
 @pytest.fixture(scope="module")
 def the_run():
     """Drive every scenario in turn, snapshotting what each produced."""
@@ -279,6 +428,8 @@ def the_run():
     run_interactive_scenario(obs)
     run_monte_carlo_scenario(obs)
     run_forced_scenario(obs)
+    run_chain_order_scenario(obs)
+    run_shipped_sensor_scenario(obs)
 
     return obs
 
@@ -339,12 +490,20 @@ def test_a_montage_already_past_its_threshold_triggers_at_instant_zero(the_run):
 
 
 def test_every_monte_carlo_sequence_starts_from_an_observed_value(the_run):
-    """Seeded once, this mean would be the value divided by the run count."""
+    """A start method, not a one-off write, and this is what tells them apart.
+
+    The engine restores every declared init before EVERY sequence, the first
+    one included, so a value written once at declaration is already gone by the
+    time the first sequence starts: measured with the seed neutralised, this
+    mean is the declared default over the whole campaign, not a fraction of the
+    published value. That is why the discriminator is the mean over several
+    sequences rather than the reading of one.
+    """
     means = the_run["mc_means"]
 
     assert means[0.0] == pytest.approx(SEED_PUBLISHED), (
         "the mean at instant 0 is the seeded publication only if every "
-        f"sequence was seeded; seeded once it would be {SEED_PUBLISHED / SEED_RUNS}"
+        "sequence was seeded; unseeded it is the declared default, 0.0"
     )
 
 
@@ -369,8 +528,66 @@ def test_a_forced_output_publishes_its_forced_value_at_instant_zero(the_run):
     assert forced["published"] == pytest.approx(SEED_FORCED * SEED_GAIN)
 
 
+# ----------------------------------------------------------------------
+# A chain settles whole, whatever order it was declared in
+# ----------------------------------------------------------------------
+
+
+def test_a_chain_of_republications_settles_whole_at_instant_zero(the_run):
+    """Both hops, on a montage declared against the direction its signal takes.
+
+    Start methods run in registration order, so a seed registered where its
+    output is declared would settle the relay from the instrument's default.
+    """
+    at_zero = the_run["chain_at_zero"]
+
+    assert at_zero["time"] == pytest.approx(0.0)
+    assert at_zero["published"] == pytest.approx(SEED_PUBLISHED)
+    assert at_zero["relayed"] == pytest.approx(SEED_RELAYED)
+
+
+def test_a_threshold_on_the_far_end_of_the_chain_fires_at_instant_zero(the_run):
+    """A boolean output is seeded in the derived order too, not before it.
+
+    Its seed reads a republication, so ordering the value seeds and leaving the
+    boolean ones in declaration order would settle this one first, on a reading
+    that has not been written yet.
+    """
+    assert SEED_RELAYED >= SEED_CHAIN_THRESHOLD, "the montage must start past it"
+    assert the_run["chain_at_zero"]["regulation_runs"] is True
+
+
+def test_the_seed_order_is_the_order_the_equations_take(the_run):
+    """The mechanism behind the two assertions above, read from the order itself."""
+    assert the_run["chain_controller_order"] == ["INSTR", "RELAY", "REG"]
+
+
+# ----------------------------------------------------------------------
+# The other republication: an ObjFlow instrument, which is what a model writes
+# ----------------------------------------------------------------------
+
+
+def test_the_shipped_sensor_reports_what_it_observes_at_instant_zero(the_run):
+    """``SensorContinuous`` publishes through ``compute_measurements``.
+
+    A different equation from the controller's, and one the engine does not run
+    at instant 0 either. A capacity has never had this fault, its levels being
+    given their starting values at declaration; an observer is not supposed to
+    be able to tell a capacity from a republisher.
+    """
+    at_zero = the_run["sensor_at_zero"]
+
+    assert at_zero["time"] == pytest.approx(0.0)
+    assert at_zero["observed"] == pytest.approx(SEED_LEVEL)
+    assert at_zero["reported"] == pytest.approx(SEED_PUBLISHED)
+
+
 def test_a_republication_declared_after_the_pre_run_step_is_still_refused(the_run):
-    """The seed is registered in the method that raises this: it must stand."""
+    """The seed is registered at that step too, so the refusal matters twice.
+
+    A late output would now miss its seed as well as its equation, and would
+    publish its declared default for the whole run with nothing raised.
+    """
     error = the_run["late_error"]
 
     assert error is not None, "a late republication must be refused"

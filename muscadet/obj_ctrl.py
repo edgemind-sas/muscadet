@@ -1354,6 +1354,19 @@ class ObjCtrl(cod3s.PycComponent):
         #: equation a controller registers.
         self.emit_republications: typing.Dict[str, typing.Callable] = {}
 
+        #: What each output carrying a grammar PUBLISHES, keyed by interface
+        #: name and whatever its nature: writing the signal for a boolean one,
+        #: publishing the reading for a value one. The one thing the instant-0
+        #: seed needs (:meth:`seed_emitted_outputs`), and the reason that seed
+        #: is one mechanism for both natures.
+        self.emit_publishers: typing.Dict[str, typing.Callable] = {}
+
+        #: The outputs whose instant-0 seed is registered, so the pre-run step
+        #: of a second engine system does not register it twice. The
+        #: counterpart of :attr:`emit_equation_registered`, per output because
+        #: the seeds are per output.
+        self.emit_seeded: typing.Set[str] = set()
+
         #: Every number the grammar turned into a variable of the model (R44),
         #: keyed by the variable's basename: the thresholds of the comparisons
         #: and the two edges of the bands, in declaration order. What a model
@@ -1671,6 +1684,18 @@ class ObjCtrl(cod3s.PycComponent):
 
         self.compile_emit(name)
 
+        # An output declared AFTER the pre-run step will never be reached by
+        # :func:`muscadet.ordering.register_controller_seeds`, that step being
+        # one-shot, so it seeds itself here or not at all. A BOOLEAN output may
+        # legitimately arrive then -- a purely discrete system keeps growing
+        # between runs, exactly as it did in 1.x -- and it lands at the end of
+        # the registration list, which is where a node nothing else reads
+        # belongs anyway. A VALUE output never reaches this line:
+        # :meth:`register_republication` refuses it, its equation being
+        # registered at that same one-shot step.
+        if getattr(self.system(), "prerun_done", False):
+            self.seed_emitted_outputs()
+
         return interface
 
     # ------------------------------------------------------------------
@@ -1767,13 +1792,15 @@ class ObjCtrl(cod3s.PycComponent):
         """Compile one output's grammar to engine mechanisms (R42).
 
         A boolean output becomes a closure over its subtree, re-run on the
-        notification of every automaton that subtree declared -- and on a start
-        method, so the signal is seeded at t = 0 of every Monte Carlo sequence,
-        which a non-reinitialised variable needs. A value output becomes a PDMP
-        equation, **and a start method of its own** for the very same reason:
-        the engine samples instant 0 before it evaluates a single equation, so
-        an unseeded republication reports its declared default until the first
-        integration step. See :meth:`seed_republication`.
+        notification of every automaton that subtree declared. A value output
+        becomes a PDMP equation.
+
+        **Both natures also owe a value at instant 0**, for reasons that are
+        mirror images of one another, and both take it from a start method
+        registered at the PRE-RUN step rather than here: see
+        :meth:`seed_emitted_outputs`, which explains why that step and not this
+        one. What either nature publishes then is the closure recorded in
+        :attr:`emit_publishers` below.
 
         **Not one sensitive method on a reading.** Every registration below is
         on an automaton, which is discrete and announces its state; the reading
@@ -1809,6 +1836,7 @@ class ObjCtrl(cod3s.PycComponent):
 
         if not node.IS_BOOLEAN:
             self.register_republication(name, read)
+            self.emit_publishers[name] = lambda: self.publish_control(name)
 
             return automata
 
@@ -1827,12 +1855,11 @@ class ObjCtrl(cod3s.PycComponent):
         for aut in automata if blinding is None else automata + [blinding]:
             aut._bkd.addSensitiveMethod(method_name, write_signal)
 
-        # The seed, and it is load-bearing twice over. A signal variable is not
-        # reinitialised between steps -- it is a state, not a pulse -- so
-        # nothing else would give it the value its condition already has at
-        # t = 0, and a montage starting past its own threshold would sit idle
-        # until the reading came back and crossed it again.
-        self.addStartMethod(method_name, write_signal)
+        self.emit_publishers[name] = write_signal
+
+        # What a model reads back before it has run anything. The seed of every
+        # SEQUENCE is a start method registered at the pre-run step, where the
+        # order the outputs settle in is known.
         write_signal()
 
         return automata
@@ -2224,56 +2251,69 @@ class ObjCtrl(cod3s.PycComponent):
 
         self.emit_republications[out_name] = read
 
-        self.seed_republication(out_name)
+    def seed_emitted_outputs(self) -> typing.List[str]:
+        """Publish every output this controller carries at t = 0 (R42, R45).
 
-    def seed_republication(self, out_name: str) -> None:
-        """Publish a value output at t = 0 of every Monte Carlo sequence (R42).
+        Both natures need this, for reasons that are mirror images of one
+        another, which is why one of the two seeds was written the day the
+        grammar was and the other was not:
 
-        The counterpart, on the VALUE branch, of the seed a boolean output has
-        always carried (:meth:`compile_emit`), and it is load-bearing for the
-        same reason. What keeps a republication current is the equation
-        registered at the pre-run step, and **the engine samples instant 0
-        before it evaluates a single equation**: unseeded, an instrument
-        standing in front of a full tank reports its declared default for the
-        whole of the first integration step, so a regulation whose reading
-        already stands past its threshold sits idle until that reading comes
-        back and crosses it.
+        * a **signal** variable is not reinitialised between steps -- it is a
+          state, not a pulse -- so nothing but a start method gives it the value
+          its condition already holds at t = 0;
+        * a **published reading** IS reinitialised, and what refreshes it is a
+          PDMP equation, which the engine does not run at instant 0: it samples
+          that instant first and evaluates afterwards.
 
-        The precedent is
+        Either way the output carried its declared default while the quantity it
+        observes held something else, and either way that is silent. A
+        regulation whose reading already stands past its threshold then sits
+        idle until that reading comes back and crosses it, which on a level that
+        only rises is never. The precedent for the value branch is
         :meth:`muscadet.FlowContinuousOut.initial_fed_value`, which applies a
-        production profile at instant 0 for exactly that reason -- a solar
-        source announcing its peak rate at midnight -- and it is why this is a
-        START METHOD and not a one-off write: the init value is what a sequence
-        restarts from, so a seed written once would leave every sequence but
-        the first reporting the default again.
+        production profile at instant 0 for exactly that reason: a solar source
+        announcing its peak rate at midnight.
 
-        Published through :meth:`publish_control`, so the gain applies and a
-        forced output is honoured exactly as at any other instant. A seed
-        publishing around either would start a sequence on a number the very
-        next step contradicts.
+        **Start** methods and not one-off writes, so every Monte Carlo sequence
+        restarts from an observed value rather than the first one alone: the
+        engine restores every declared init between sequences, so a value
+        written once is gone by the second. Nothing is published here and now
+        either: this runs at the pre-run step, an instant before that same
+        restore, so a write here would be overwritten.
 
-        **What this does NOT settle: the order the seeds run in.** A start
-        method runs in the order it was registered, which is the order the
-        components were DECLARED, while the order the controllers evaluate in
-        is derived from the signal graph at the pre-run step (R45). The two
-        agree for a montage declared in signal order and diverge otherwise: a
-        controller thresholding another controller's republication, declared
-        BEFORE it, seeds its boolean output on the publication of the instant
-        before -- and picks the right one up at the first step, so it is one
-        instantaneous step of lag and not a whole integration step. Settling it
-        would mean running every controller seed, boolean ones included, in the
-        derived order rather than in registration order, which is a change to
-        the ordering unit and not to this method.
+        **Why the pre-run step, and not where the output is declared.**
+        PyCATSHOO calls start methods in the order they were REGISTERED -- one
+        global list, component boundaries ignored -- and a controller output may
+        read another controller's output (R4). Registered at declaration the
+        seeds would run in DECLARATION order, so a chain declared against the
+        direction its signal travels would seed its second stage from the first
+        stage's default: the wrong number this seed exists to remove,
+        reintroduced one hop downstream. A boolean output thresholding a
+        republished reading would settle before the instrument publishing it,
+        which is the shape a visible sensor driving a regulation has, and is
+        therefore the shape a model writes.
+        :func:`muscadet.ordering.register_controller_seeds` calls this in the
+        topological order of the signal graph instead: one derivation used
+        twice, the order a chain settles in at instant 0 being the order it
+        settles in at every instant after.
+
+        Returns
+        -------
+        list
+            The outputs seeded by this call, in registration order. Empty on a
+            controller whose outputs carry no grammar, and on a second call.
         """
+        seeded = []
 
-        def write_value() -> None:
-            self.publish_control(out_name)
+        for out_name, publish in self.emit_publishers.items():
+            if out_name in self.emit_seeded:
+                continue
 
-        # The same method name the boolean branch derives, and it cannot
-        # collide with one: an output claims its name once (``claim_name``),
-        # whatever its nature.
-        self.addStartMethod(f"emit_{self.name()}_{out_name}", write_value)
-        write_value()
+            self.addStartMethod(f"seed_{self.name()}_{out_name}", publish)
+            self.emit_seeded.add(out_name)
+            seeded.append(out_name)
+
+        return seeded
 
     def needs_control_equation(self) -> bool:
         """True when this controller has an equation left to register (R45).
