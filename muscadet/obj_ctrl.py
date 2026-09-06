@@ -1770,7 +1770,10 @@ class ObjCtrl(cod3s.PycComponent):
         notification of every automaton that subtree declared -- and on a start
         method, so the signal is seeded at t = 0 of every Monte Carlo sequence,
         which a non-reinitialised variable needs. A value output becomes a PDMP
-        equation.
+        equation, **and a start method of its own** for the very same reason:
+        the engine samples instant 0 before it evaluates a single equation, so
+        an unseeded republication reports its declared default until the first
+        integration step. See :meth:`seed_republication`.
 
         **Not one sensitive method on a reading.** Every registration below is
         on an automaton, which is discrete and announces its state; the reading
@@ -2221,6 +2224,57 @@ class ObjCtrl(cod3s.PycComponent):
 
         self.emit_republications[out_name] = read
 
+        self.seed_republication(out_name)
+
+    def seed_republication(self, out_name: str) -> None:
+        """Publish a value output at t = 0 of every Monte Carlo sequence (R42).
+
+        The counterpart, on the VALUE branch, of the seed a boolean output has
+        always carried (:meth:`compile_emit`), and it is load-bearing for the
+        same reason. What keeps a republication current is the equation
+        registered at the pre-run step, and **the engine samples instant 0
+        before it evaluates a single equation**: unseeded, an instrument
+        standing in front of a full tank reports its declared default for the
+        whole of the first integration step, so a regulation whose reading
+        already stands past its threshold sits idle until that reading comes
+        back and crosses it.
+
+        The precedent is
+        :meth:`muscadet.FlowContinuousOut.initial_fed_value`, which applies a
+        production profile at instant 0 for exactly that reason -- a solar
+        source announcing its peak rate at midnight -- and it is why this is a
+        START METHOD and not a one-off write: the init value is what a sequence
+        restarts from, so a seed written once would leave every sequence but
+        the first reporting the default again.
+
+        Published through :meth:`publish_control`, so the gain applies and a
+        forced output is honoured exactly as at any other instant. A seed
+        publishing around either would start a sequence on a number the very
+        next step contradicts.
+
+        **What this does NOT settle: the order the seeds run in.** A start
+        method runs in the order it was registered, which is the order the
+        components were DECLARED, while the order the controllers evaluate in
+        is derived from the signal graph at the pre-run step (R45). The two
+        agree for a montage declared in signal order and diverge otherwise: a
+        controller thresholding another controller's republication, declared
+        BEFORE it, seeds its boolean output on the publication of the instant
+        before -- and picks the right one up at the first step, so it is one
+        instantaneous step of lag and not a whole integration step. Settling it
+        would mean running every controller seed, boolean ones included, in the
+        derived order rather than in registration order, which is a change to
+        the ordering unit and not to this method.
+        """
+
+        def write_value() -> None:
+            self.publish_control(out_name)
+
+        # The same method name the boolean branch derives, and it cannot
+        # collide with one: an output claims its name once (``claim_name``),
+        # whatever its nature.
+        self.addStartMethod(f"emit_{self.name()}_{out_name}", write_value)
+        write_value()
+
     def needs_control_equation(self) -> bool:
         """True when this controller has an equation left to register (R45).
 
@@ -2247,9 +2301,25 @@ class ObjCtrl(cod3s.PycComponent):
         """PDMP equation: refresh every republication this controller carries.
 
         One equation for the whole component, as ``compute_measurements`` is on
-        an ``ObjFlow``. The gain is applied by
-        :meth:`muscadet.MeasurementOut.publish`, so what a mode clamps there
-        reaches every reading this output carries and nothing else.
+        an ``ObjFlow``.
+        """
+        for out_name in self.emit_republications:
+            self.publish_control(out_name)
+
+    def publish_control(self, out_name: str) -> None:
+        """Write ONE republication: its forced value if forced, its reading if not.
+
+        The single publication path of a value output, shared by the equation
+        that refreshes it at every integration step
+        (:meth:`compute_controls`) and by the start method that seeds it at
+        t = 0 (:meth:`seed_republication`). Sharing it is what makes the seed a
+        publication like any other rather than a second spelling of one: the
+        two would otherwise be free to disagree about the gain, about forcing,
+        and about anything either gains later.
+
+        The gain is applied by :meth:`muscadet.MeasurementOut.publish`, so what
+        a mode clamps there reaches every reading this output carries and
+        nothing else.
 
         **A forced output publishes its forced value, gain and all** (R44). One
         publication path and one gain: routing a forced value around the gain
@@ -2258,14 +2328,13 @@ class ObjCtrl(cod3s.PycComponent):
         everywhere else. With the gain at its declared 1, forcing publishes
         exactly the number the mode named.
         """
-        for out_name, read in self.emit_republications.items():
-            forced = self.emit_forced.get(out_name)
+        forced = self.emit_forced.get(out_name)
 
-            if forced is not None and bool(forced[0].value()):
-                self.controls_out[out_name].publish(float(forced[1].value()))
-                continue
+        if forced is not None and bool(forced[0].value()):
+            self.controls_out[out_name].publish(float(forced[1].value()))
+            return
 
-            self.controls_out[out_name].publish(read())
+        self.controls_out[out_name].publish(self.emit_republications[out_name]())
 
     # ------------------------------------------------------------------
     # Aggregation kinks (R41)
