@@ -2346,17 +2346,3 @@ def allocate_capacity_equation_order(system) -> int:
     order = getattr(system, "_capacity_equation_order_next", 0)
     system._capacity_equation_order_next = order + 1
     return order
-
-
-def allocate_measurement_equation_order(system) -> int:
-    """Allocate a distinct PDMP equation order for a published measurement.
-
-    Its own band, ABOVE the capacity one: a republished reading is read from the
-    level a capacity holds, so it must be refreshed once that level is current.
-    Within the band the allocation is declaration order, which is what a *chain*
-    of republishers depends on -- declare it upstream first. One hop, the shipped
-    sensor's, needs nothing of the sort.
-    """
-    order = getattr(system, "_measurement_equation_order_next", 0)
-    system._measurement_equation_order_next = order + 1
-    return order

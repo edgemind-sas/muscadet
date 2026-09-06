@@ -161,7 +161,6 @@ from .capacity import (
     MeasurementIn,
     MeasurementOut,
     allocate_capacity_equation_order,
-    allocate_measurement_equation_order,
 )
 
 from .transfer import TransferPair, build_transfer
@@ -342,8 +341,17 @@ class ObjFlow(cod3s.PycComponent):
         self._capacity_equation_registered = False
 
         # The same, for ``compute_measurements``: one registration covers every
-        # published measurement that declares a source (R37).
+        # published measurement that declares a source (R37). Written at the
+        # PRE-RUN step (R45), by :meth:`register_measurement_equation`: the
+        # integer comes from the signal graph, which does not exist while a
+        # component is still being declared.
         self._measurement_equation_registered = False
+
+        # And for the instant-0 seed of those same publications, which takes
+        # its RANK from that same derivation. Kept apart from the flag above
+        # because the seed is owed even by a component the equation gate skips
+        # on a second engine system.
+        self._measurement_seed_registered = False
 
         # Demand bounds read by the demand sweep, for the production sweep of
         # the SAME evaluation to reuse. Emptied at the head of compute_demand;
@@ -1733,6 +1741,15 @@ class ObjFlow(cod3s.PycComponent):
 
         measurement = MeasurementOut(name=name, **params)
         measurement.check_source_carries(self)
+
+        # BEFORE a single variable or message box exists, and before the
+        # publication is stored: a refused declaration must leave nothing
+        # behind, or a caller catching the refusal keeps a half-built
+        # publication that the equation of this component -- already
+        # registered, and iterating over every entry it holds -- goes on
+        # refreshing outside the derived order and without an instant-0 seed.
+        self.check_publication_before_prerun(measurement, name)
+
         measurement.add_variables(self)
         measurement.add_mb(self)
 
@@ -1752,69 +1769,158 @@ class ObjFlow(cod3s.PycComponent):
             for var in measurement.every_variable():
                 system.pdmp_add_explicit_variable(var)
 
-            if not self._measurement_equation_registered:
-                system.pdmp_add_equation_method(
-                    "compute_measurements",
-                    self,
-                    allocate_measurement_equation_order(system),
-                )
-                # The instant-0 seed of the same publications, registered in the
-                # same breath so the seeds fall in the order the equations do:
-                # both are allocated at declaration, and PyCATSHOO calls start
-                # methods in registration order. See :meth:`seed_measurements`.
-                self.addStartMethod(
-                    f"seed_{self.name()}_measurements", self.seed_measurements
-                )
-                self._measurement_equation_registered = True
+            # The equation refreshing this publication, and the start method
+            # seeding it at instant 0, are BOTH registered at the pre-run step
+            # (R45), by ``muscadet.ordering``: their integer and their rank
+            # come from a topological sort of the signal graph, which does not
+            # exist while a component is still being declared. See
+            # :meth:`register_measurement_equation`.
 
         return measurement
+
+    def check_publication_before_prerun(self, measurement, name):
+        """Refuse a sourced publication declared after the pre-run step (R37).
+
+        That step is one-shot and it is where a publication takes its place in
+        the signal order, so one arriving afterwards has no place at all. What
+        happens to it depends on what the component already carried, and
+        neither outcome is acceptable:
+
+        * on a component publishing nothing sourced yet, no equation is ever
+          registered and the publication reports its declared default for the
+          whole run, in silence;
+        * on a component that already had one, the equation is registered and
+          iterates over every entry, so this publication IS refreshed -- but
+          outside the derived order, and with no instant-0 seed, so it reports
+          its default at the start of every Monte Carlo sequence and lags
+          whatever it reads.
+
+        The same rule the controller unit already applies to its own late
+        republication, and for the same reason: an order derived once cannot
+        take a latecomer.
+
+        A publication declaring **no source** is untouched and always was: it
+        is a plain writable variable, nothing refreshes it, and a purely
+        discrete model that declares one still never gains a PDMP manager.
+
+        Raises
+        ------
+        ValueError
+            When the system's pre-run step has already run.
+        """
+        if measurement.source is None:
+            return
+
+        if not getattr(self.system(), "prerun_done", False):
+            return
+
+        raise ValueError(
+            f"Object {self.name()}: published measurement {name!r} declares a "
+            "source, and both the equation refreshing it and the start method "
+            "seeding it at instant 0 are registered at the pre-run step (R45), "
+            "which has already run on this system. That step derives the order "
+            "of the publications from the whole signal graph and runs once, so "
+            "this publication would take no place in it: it would report its "
+            "declared default at the start of every sequence, and lag whatever "
+            "it reads or never be refreshed at all, with nothing raised to say "
+            "so. Declare every instrument before the first simulate() / "
+            "isimu_start()"
+        )
+
+    def needs_measurement_equation(self) -> bool:
+        """True when this component has a publication equation left to register.
+
+        A component publishing nothing sourced has nothing for the solver to
+        evaluate. It may still be a node of the signal graph -- it reads
+        publications -- in which case it constrains the nodes around it and
+        simply takes no integer, exactly as a controller carrying only boolean
+        outputs does.
+        """
+        return (
+            any(
+                measurement.source is not None
+                for measurement in self.measurements_out.values()
+            )
+            and not self._measurement_equation_registered
+        )
+
+    def register_measurement_equation(self, system, order):
+        """Register :meth:`compute_measurements` at the derived order (R45).
+
+        Called from :func:`muscadet.ordering.register_controller_equations` at
+        the pre-run step, once every connection exists and the signal graph has
+        been sorted. One registration covers every publication of the
+        component, as ``compute_controls`` does on a controller.
+
+        **The integer comes from the signal band, shared with the
+        controllers.** A published reading used to take one from a band of its
+        own, below theirs and allocated in declaration order at declaration
+        time; an instrument reading a controller was therefore refreshed before
+        it whatever the wiring said, and two instruments in a row ran in the
+        order they were written in. One sorted band answers both.
+        """
+        system.pdmp_add_equation_method("compute_measurements", self, order)
+        self._measurement_equation_registered = True
 
     def compute_measurements(self):
         """PDMP equation: refresh every published measurement of this component."""
         for measurement in self.measurements_out.values():
             measurement.compute(self)
 
-    def seed_measurements(self):
+    def seed_published_measurements(self):
         """Publish every sourced measurement at t = 0 of every sequence (R37).
 
-        The equation above is what keeps a republication current, and the engine
-        does not run it at instant 0: it samples that instant first and
-        evaluates afterwards. So an instrument standing in front of a full tank
-        announced its declared default there, and a regulation reading that
-        instrument stayed idle until the level crossed a threshold it had
-        already crossed before the run began. Silent, and repeated identically
-        at the start of every Monte Carlo sequence.
+        The equation is what keeps a republication current, and the engine does
+        not run it at instant 0: it samples that instant first and evaluates
+        afterwards. So an instrument standing in front of a full tank announced
+        its declared default there, and a regulation reading that instrument
+        stayed idle until the level crossed a threshold it had already crossed
+        before the run began. Silent, and repeated identically at the start of
+        every Monte Carlo sequence.
 
-        This is the same fault, on the same day, as the one
+        The same fault as the one
         :meth:`muscadet.ObjCtrl.seed_emitted_outputs` answers on a controller's
         value output: a republication is written twice in this library, and the
         shipped ``SensorContinuous`` compiles its ``publish`` channel to THIS
-        one. A capacity has never had the fault, :meth:`muscadet.Capacity.
-        add_variables` giving its levels, fills and shares their starting values
-        at declaration for this reason and in those words. An observer is not
-        supposed to be able to tell a capacity from a republisher, and this is
-        what keeps that true at instant 0.
+        one. A capacity has never had the fault,
+        :meth:`muscadet.Capacity.add_variables` giving its levels, fills and
+        shares their starting values at declaration for this reason and in
+        those words. An observer is not supposed to be able to tell a capacity
+        from a republisher, and this is what keeps that true at instant 0.
 
         The same call the equation makes, so one path, one gain and one set of
         readings: seeding around :meth:`muscadet.MeasurementOut.publish` would
         leave a mode that kills an instrument a no-op for exactly one instant.
 
-        **The seed takes the order its equation takes, and no better one.**
-        Registered here, beside that equation, so both are allocated at
-        declaration and PyCATSHOO -- which calls start methods in registration
-        order -- runs the seeds in the order the measurement band runs its
-        equations. That is what keeps instant 0 consistent with every instant
-        after it, and it inherits the band's known limit: the measurement band
-        runs BELOW the controller band and orders itself by declaration, so an
-        instrument reading a controller's output, or reading another
-        instrument declared after it, is one evaluation behind. In a running
-        sequence the solver's repeated evaluations wash that lag out; at
-        instant 0 there is no previous evaluation to be behind, so what such an
-        instrument reports is its default. Same limit, and closing it means
-        putting the ObjFlow republishers into the signal graph -- which is the
-        library's own open question, not this seed's.
+        **Registered at the pre-run step, in the signal order**, by
+        :func:`muscadet.ordering.register_controller_seeds`, and that is what
+        makes a mixed chain settle whole. PyCATSHOO calls start methods in
+        registration order; registered where the instrument is declared, this
+        one ran before every controller whatever the graph said, so a shipped
+        sensor reading a controller observed the right number and reported its
+        default at the very same instant.
+
+        Returns
+        -------
+        list
+            The publications seeded by this call, in registration order. Empty
+            on a component publishing nothing sourced, and on a second call.
         """
-        self.compute_measurements()
+        seeded = [
+            name
+            for name, measurement in self.measurements_out.items()
+            if measurement.source is not None
+        ]
+
+        if not seeded or self._measurement_seed_registered:
+            return []
+
+        self.addStartMethod(
+            f"seed_{self.name()}_measurements", self.compute_measurements
+        )
+        self._measurement_seed_registered = True
+
+        return seeded
 
     # ------------------------------------------------------------------
     # Rule declaration (KD7, R12, R13, R14)

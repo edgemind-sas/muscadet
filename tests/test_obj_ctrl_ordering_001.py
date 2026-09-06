@@ -444,9 +444,20 @@ def test_every_pass_evaluates_the_chain_from_upstream_to_downstream(the_run):
     assert walked == {tuple(expected)}
 
 
-def test_the_controller_band_sits_above_the_measurement_one(the_run):
-    """A controller READS a measurement, so it is refreshed after every one."""
-    assert ordering.CONTROL_ORDER_BASE > ordering.MEASUREMENT_ORDER_BASE
+def test_the_signal_band_sits_above_the_capacity_one(the_run):
+    """A publication is taken from a level, so it is refreshed after every one.
+
+    The measurement band this used to be compared against is gone: a published
+    measurement and a controller share ONE band now, sorted together, because
+    the question the sort answers -- has this reading settled -- does not
+    depend on the class publishing it. What stays true, and is what this pins,
+    is that the whole signal band runs after everything a publication reads.
+    """
+    assert ordering.CONTROL_ORDER_BASE > ordering.CAPACITY_ORDER_BASE
+    assert not hasattr(ordering, "MEASUREMENT_ORDER_BASE"), (
+        "the measurement band was folded into the signal one; a constant left "
+        "behind would invite a second allocation below it"
+    )
 
     registered = control_registrations(the_run["chain_registrations"])
     others = [
