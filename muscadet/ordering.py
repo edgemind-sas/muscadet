@@ -151,8 +151,8 @@ evaluation sequence of one integration step:
 2. demand sweep, reverse-topological  -- allocated here, straight after
 3. production sweep, topological      -- allocated here, straight after that
 4. capacity levels integrate          -- :data:`CAPACITY_ORDER_BASE` upwards
-5. published measurements refresh     -- :data:`MEASUREMENT_ORDER_BASE` upwards
-6. controllers republish              -- :data:`CONTROL_ORDER_BASE` upwards (R45)
+5. signal nodes republish             -- :data:`CONTROL_ORDER_BASE` upwards (R45),
+   published measurements and controllers alike, sorted together
 
 The capability band is **first**, and it has to be: a demand is bounded by what
 the rule's other inputs could supply, so every capability in the system must be
@@ -179,16 +179,27 @@ from a topological sort of the SIGNAL graph -- who publishes into whom -- and
 not from the order the components were declared in, which is what a chain
 written downstream first used to get.
 
-The signal graph is built by :func:`controller_signal_links` and is a graph of
-**controllers only**. Two limits follow, and both are deliberate:
+The signal graph is built by :func:`controller_signal_links` and holds **every
+node that publishes a reading an equation refreshes**: a controller's VALUE
+output and an ``ObjFlow``'s sourced ``MeasurementOut`` alike, which is what the
+shipped ``SensorContinuous`` compiles its ``publish`` channel to. It was a graph
+of controllers only, and the instrument drew from a band of its own below them,
+allocated in declaration order at declaration time -- so an instrument reading a
+controller was refreshed BEFORE it however the controllers were sorted, and two
+instruments in a row ran in the order they were written in. Both are gone: one
+band, one sort, and the question the sort answers -- has this reading settled --
+does not depend on the class answering it.
 
-* a republication routed through an ``ObjFlow`` instrument -- controller,
-  instrument, controller -- is not an edge here. The instrument draws from the
-  measurement band, so it is refreshed BEFORE the controller feeding it and
-  reads that controller one evaluation late whatever this module does; no
-  ordering of the controllers repairs it. Such a montage is neither ordered nor
-  refused today. Put the two controllers side by side, or accept the lag
-  knowingly;
+Two limits follow, and both are deliberate:
+
+* **the sort is over COMPONENTS, so the refusal is too.** Two nodes
+  republishing into each other close a loop of two whatever channels carry the
+  two publications, and a set of channels that forms no loop is refused with
+  them: a controller watching, through an instrument, a reading it publishes
+  itself is the shape this costs. It is the granularity controllers have always
+  been refused at; widening the population widened what it catches. A
+  per-channel graph is what would close it, and it would change the existing
+  controller refusal too, which is why it is not done here;
 * a loop closing through a rate OBSERVATION is not this graph's business:
   :func:`find_rate_observation_loops` reports it, with the message written for
   it. What is refused here is the shape that walk terminates on rather than
@@ -234,22 +245,35 @@ PRODUCTION_EQUATION_METHOD = "compute_production"
 #: what keeps this module free of an import of the controller unit.
 CONTROL_EQUATION_METHOD = "compute_controls"
 
+#: The equation an ``ObjFlow`` refreshes its sourced publications with (R37).
+#: It takes its integer from the same band, and the same sort, as the one
+#: above: the two are one concept, a publication refreshed from something read.
+MEASUREMENT_EQUATION_METHOD = "compute_measurements"
+
 #: First integer of the capacity band. Capacity equations are registered when a
 #: capacity is *declared*, before any graph exists, so they cannot be part of the
 #: graph-derived allocation -- they take the top band instead, which also makes
 #: them run after both sweeps, as the evaluation sequence requires.
 CAPACITY_ORDER_BASE = 1_000_000
 
-#: First integer of the published-measurement band (R37). Above the capacity one
-#: because a republished reading is taken from a level a capacity holds: the
-#: level must be current before the instrument reporting it is refreshed.
-MEASUREMENT_ORDER_BASE = 2_000_000
-
-#: First integer of the controller band (R45). The top band, above the
-#: measurement one: a controller READS a measurement, so every published reading
-#: must be current before the first controller equation runs. Within the band the
-#: integers follow a topological sort of the signal graph, which is what makes a
-#: chain of controllers settle in ONE evaluation of the equation set.
+#: First integer of the SIGNAL band (R37, R45). The top band, above the capacity
+#: one because every publication is ultimately taken from a level a capacity
+#: holds: the level must be current before the instrument reporting it is
+#: refreshed. Within the band the integers follow a topological sort of the
+#: signal graph, which is what makes a chain settle in ONE evaluation of the
+#: equation set.
+#:
+#: **One band for two equations**, and it used to be two. A published
+#: measurement had a band of its own below this one, allocated in declaration
+#: order at declaration time, so an instrument reading a controller was
+#: refreshed before it whatever the wiring said, and two instruments in a row
+#: ran in the order they were written in. What the sort answers is "this
+#: reading has settled", and that question does not depend on the class
+#: answering it. The old constant is gone with the band. The base is unchanged,
+#: but the integers above it are NOT: an instrument sorting ahead of a
+#: controller takes one from the same allocator, so a model that reads an
+#: equation order back sees its controllers shifted up by however many
+#: publications precede them.
 CONTROL_ORDER_BASE = 3_000_000
 
 
@@ -1873,15 +1897,16 @@ def find_rate_observation_loops(system, graph):
 
 
 # ----------------------------------------------------------------------
-# The order of the controllers among themselves (R45)
+# The order of the signal nodes among themselves (R45)
 # ----------------------------------------------------------------------
 #
 # A graph of its own, and it has to be: a controller carries no flow, so the
-# continuous-flow graph holds no node for it, and it carries no transported
-# quantity, so none of its links may ever become an edge of that graph (KD19).
-# What is walked here is the SIGNAL wiring -- who publishes a computed value
-# into whose observation input -- and the walk is over controllers only. The
-# two montages it deliberately leaves alone are named in the module docstring.
+# continuous-flow graph holds no node for it, and neither a controller nor a
+# measurement link carries a transported quantity, so none of their links may
+# ever become an edge of that graph (KD19). What is walked here is the SIGNAL
+# wiring -- who publishes a reading into whose observation channel -- over
+# every node whose own equation refreshes a publication, whichever of the two
+# classes it belongs to.
 
 
 def is_controller(comp):
@@ -1896,47 +1921,99 @@ def is_controller(comp):
 
 
 def computed_publications(comp):
-    """The value outputs of ``comp`` its own equation refreshes (R42, R45).
+    """The publications of ``comp`` its own equation refreshes (R42, R45).
 
-    A value output declaring no ``emit`` is absent: nothing computes it, so a
-    reader of it depends on whatever a model or a failure mode wrote and not on
-    when this component's equation ran. Same rule, and the same reading of
-    ``controls_emit``, as :func:`republished_channels`.
+    **Both vocabularies**, read the way :func:`republished_channels` reads
+    them: a controller's VALUE output names its inputs inside the ``emit``
+    grammar and leaves ``source`` unset, while an ``ObjFlow`` instrument names
+    what it republishes in ``MeasurementOut.source``. The two are one concept
+    here -- a reading somebody else's equation has to have settled first -- and
+    telling them apart is what kept the ``ObjFlow`` half out of the signal
+    graph, and therefore out of its order.
+
+    A publication computing nothing is absent from the result, whichever
+    vocabulary it is written in: its value is written by hand, so a reader of
+    it depends on the hand that wrote it and not on when any equation ran.
+
+    A source naming a **capacity of the same component** is kept, unlike in
+    :func:`republished_channels` where it is dropped. The two ask different
+    questions: that one asks what a RATE travelled through, and a level is not
+    a rate; this one asks whether an equation refreshes this publication, and
+    one does.
     """
     emit = getattr(comp, "controls_emit", None)
+    published = published_measurements(comp)
 
-    if emit is None:
-        return []
+    if emit is not None:
+        return [name for name in published if emit.get(name) is not None]
 
-    return [name for name in published_measurements(comp) if emit.get(name) is not None]
+    return [
+        name
+        for name, channel in published.items()
+        if getattr(channel, "source", None) is not None
+    ]
+
+
+def publishes_computed_readings(comp):
+    """True when an equation of ``comp`` refreshes at least one publication.
+
+    What makes a component a node of the signal graph other than by being a
+    controller: an ``ObjFlow`` republishing a sourced measurement carries an
+    equation whose order matters exactly as a controller's does.
+    """
+    return bool(computed_publications(comp))
+
+
+def is_signal_node(comp):
+    """True when ``comp`` takes a place in the signal order (R45).
+
+    Every controller, republishing or not -- an isolated one is still a node,
+    and one carrying only boolean outputs still constrains the components
+    around it -- plus every other component whose equation refreshes a
+    publication, which is the ``ObjFlow`` instrument.
+    """
+    return is_controller(comp) or publishes_computed_readings(comp)
 
 
 def controller_signal_links(system):
-    """The controllers of ``system``, and the signal links between them (R45).
+    """The signal nodes of ``system``, and the links between them (R45).
+
+    A node is a controller or any other component whose equation refreshes a
+    publication, which in practice is an ``ObjFlow`` instrument republishing a
+    sourced measurement (:func:`is_signal_node`). **Both belong here for one
+    reason**: what the order exists to guarantee is that a reading has settled
+    before whoever reads it is evaluated, and that claim is about the
+    publication, not about the class publishing it. Keeping the ``ObjFlow``
+    half out made "controller, instrument, controller" unorderable, and left a
+    chain of two shipped sensors ordered by declaration alone -- so a relay
+    declared before the instrument it reads was one evaluation behind it
+    forever, and reported its declared default at instant 0.
+
+    The name is kept for the surface it already had.
 
     Returns
     -------
     tuple
-        ``(controllers, links)`` -- the controllers keyed as ``system.comp``
-        keys them, in declaration order, and one
-        :class:`ObservationConnection` per wiring from a computed value output
-        to another controller's observation input. Both empty on a model
-        holding no controller, in which case the engine is not walked at all.
+        ``(nodes, links)`` -- the nodes keyed as ``system.comp`` keys them, in
+        declaration order, and one :class:`ObservationConnection` per wiring
+        from a computed publication to another node's observation channel.
+        Both empty on a model holding neither, in which case the engine is not
+        walked at all.
     """
     components = getattr(system, "comp", None) or {}
 
-    controllers = {key: comp for key, comp in components.items() if is_controller(comp)}
+    nodes = {key: comp for key, comp in components.items() if is_signal_node(comp)}
 
-    # The engine is asked nothing on a model that declares no controller, which
-    # is every model that predates this unit.
-    if not controllers:
-        return controllers, []
+    # The engine is asked nothing on a model that publishes no computed
+    # reading, which is every model that predates the measurement link.
+    if not nodes:
+        return nodes, []
 
     by_engine_name = engine_name_index(components)
 
     links: typing.List[ObservationConnection] = []
 
-    for pub_key, pub_comp in controllers.items():
+    for pub_key, pub_comp in nodes.items():
         cnct_info = pub_comp.get_cnct_info()
 
         for name in computed_publications(pub_comp):
@@ -1945,12 +2022,11 @@ def controller_signal_links(system):
 
             for target in info.get("targets", []):
                 obs_key = by_engine_name.get(target.get("obj"), target.get("obj"))
-                obs_comp = controllers.get(obs_key)
+                obs_comp = nodes.get(obs_key)
 
-                # Not a controller: an ObjFlow instrument republishing this
-                # reading draws from the measurement band and is refreshed
-                # BEFORE this controller whatever is decided here, so it is not
-                # an edge of this graph. See the module docstring.
+                # An observer that publishes nothing computed has no equation
+                # in this band, so there is nothing to order it against: its
+                # own behaviour is settled by the sweeps, which run below.
                 if obs_comp is None:
                     continue
 
@@ -1964,7 +2040,7 @@ def controller_signal_links(system):
                     ObservationConnection(pub_key, obs_key, channel, box, obs_box)
                 )
 
-    return controllers, links
+    return nodes, links
 
 
 def controller_cycle_error(err, links):
@@ -1986,7 +2062,7 @@ def controller_cycle_error(err, links):
 
 
 def compute_controller_order(system):
-    """Controller names in the order their equations must run (R45).
+    """Signal node names in the order their equations must run (R45).
 
     A topological sort of :func:`controller_signal_links`, ties broken by
     declaration order exactly as the flow graph breaks its own (KTD3): the
@@ -1994,13 +2070,17 @@ def compute_controller_order(system):
     insertion order, so the derived sequence is reproducible from run to run
     and independent of hash randomisation.
 
-    Every controller is in the result, including one nothing reads and one that
-    reads nothing: an isolated controller is a node too.
+    Every node is in the result, including one nothing reads and one that reads
+    nothing: an isolated controller is a node too, and so is an instrument
+    reading a capacity and nothing else.
 
     Raises
     ------
     ControllerSignalCycleError
-        When a chain of republications closes on itself.
+        When a chain of republications closes on itself. Reachable through an
+        ``ObjFlow`` instrument since those became nodes: a controller reading
+        an instrument that republishes that controller's own output is a cycle
+        of two, and it used to build.
     """
     controllers, links = controller_signal_links(system)
 
@@ -2257,66 +2337,104 @@ def register_equation_order(system):
     return order
 
 
+#: What each signal node registers, in the order the pair is tried: the
+#: predicate asking whether this node still owes an equation, the method that
+#: registers it, and the name that equation is recorded under.
+SIGNAL_EQUATIONS = (
+    ("needs_control_equation", "register_control_equation", CONTROL_EQUATION_METHOD),
+    (
+        "needs_measurement_equation",
+        "register_measurement_equation",
+        MEASUREMENT_EQUATION_METHOD,
+    ),
+)
+
+
 def register_controller_equations(system, order):
-    """Register every controller's equation in the control band (R45).
+    """Register every signal node's equation in the control band (R45).
 
     Called once the sweeps have taken their integers, so the allocator sees
     them: "distinct" holds across the whole system and not only within a band.
 
-    A controller carrying no republication registers nothing and takes no
-    integer -- it has no equation to order -- but it is still a node of the
-    signal graph, so it still constrains the controllers around it.
+    **One band for the two equations**, and that is the whole of what makes a
+    mixed chain settle. A published reading used to take its integer from a
+    band of its own, BELOW this one and allocated in declaration order at
+    declaration time, so an instrument reading a controller was refreshed
+    before it whatever the graph said, and two instruments in a row were
+    ordered by the order they were written in. Sharing one topologically
+    sorted band removes both: what the sort answers is "this reading has
+    settled", and that question does not depend on the class answering it.
+
+    A node carrying no equation registers nothing and takes no integer -- a
+    controller with only boolean outputs, an instrument publishing nothing
+    sourced -- but it is still a node of the signal graph, so it still
+    constrains the nodes around it.
 
     **Gated on the PDMP manager**, exactly as
     :meth:`muscadet.System.register_controller_crossings` is, and for the same
     reason: a purely discrete system must stay one, and creating a manager here
-    would drag it onto the continuous solver for no gain. A controller that
+    would drag it onto the continuous solver for no gain. A node that
     republishes has already created one at declaration, its published variables
     being explicit variables of the solver.
 
     Returns
     -------
     list
-        The controllers whose equation was registered, in registration order.
+        The nodes whose equation was registered, in registration order.
     """
     if not order.controller_order or getattr(system, "pdmp_manager", None) is None:
         return []
 
     allocate = _order_allocator(
-        system, start=CONTROL_ORDER_BASE, ceiling=None, band="controller band"
+        system, start=CONTROL_ORDER_BASE, ceiling=None, band="signal band"
     )
 
     registered = []
 
     for comp_name in order.controller_order:
         comp = system.comp[comp_name]
-        needs = getattr(comp, "needs_control_equation", None)
 
-        if needs is None or not needs():
-            continue
+        for needs_name, register_name, method in SIGNAL_EQUATIONS:
+            needs = getattr(comp, needs_name, None)
 
-        value = allocate()
-        comp.register_control_equation(system, value)
-        order.registrations.append(
-            EquationRegistration(
-                comp=comp_name, method=CONTROL_EQUATION_METHOD, order=value
+            if needs is None or not needs():
+                continue
+
+            value = allocate()
+            getattr(comp, register_name)(system, value)
+            order.registrations.append(
+                EquationRegistration(comp=comp_name, method=method, order=value)
             )
-        )
-        registered.append(comp_name)
+            registered.append(comp_name)
+
+            # One equation per node: the two natures are two classes, and the
+            # loop above is a dispatch, not an accumulation. Stopping here is
+            # what keeps the returned list one entry per node.
+            break
 
     return registered
 
 
+#: The methods a signal node seeds its publications with, tried in this order
+#: on each node. A controller answers the first, an ``ObjFlow`` instrument the
+#: second, and each returns what it seeded so the walk can report it.
+SIGNAL_SEEDS = ("seed_emitted_outputs", "seed_published_measurements")
+
+
 def register_controller_seeds(system, order):
-    """Seed every controller output at instant 0, in the derived order (R45).
+    """Seed every signal node at instant 0, in the derived order (R45).
 
     The instant-0 counterpart of :func:`register_controller_equations`, walking
-    the same sequence for the same reason: a controller output may read another
-    controller's output, so what a chain publishes at instant 0 has to be
-    written from the top down. PyCATSHOO calls start methods in registration
-    order, so registering them here IS ordering them.
-    :meth:`muscadet.ObjCtrl.seed_emitted_outputs` says what a seed answers and
-    why each nature of output owes one.
+    the same sequence for the same reason: a publication may be read by
+    whoever comes next, so a chain has to be written from the top down.
+    PyCATSHOO calls start methods in registration order, so registering them
+    here IS ordering them. :meth:`muscadet.ObjCtrl.seed_emitted_outputs` says
+    what a seed answers and why each nature of output owes one.
+
+    Both natures of node, and one walk for the two: an instrument seeded where
+    it was declared ran before every controller whatever the graph said, which
+    is how a shipped sensor reading a controller reported its default at
+    instant 0 while observing the right number at the same instant.
 
     **Deliberately not gated on the PDMP manager**, where the equations are.
     Seeding is a signal-graph concern and not a solver one: a boolean output
@@ -2327,19 +2445,21 @@ def register_controller_seeds(system, order):
     Returns
     -------
     list
-        ``(controller name, output name)`` per seed registered, in registration
-        order. Empty on a model holding no controller.
+        ``(node name, publication name)`` per seed registered, in registration
+        order. Empty on a model holding no signal node.
     """
     registered: typing.List[typing.Tuple[str, str]] = []
 
     for comp_name in order.controller_order:
         comp = system.comp[comp_name]
-        seed = getattr(comp, "seed_emitted_outputs", None)
 
-        if seed is None:
-            continue
+        for seed_name in SIGNAL_SEEDS:
+            seed = getattr(comp, seed_name, None)
 
-        registered.extend((comp_name, out_name) for out_name in seed())
+            if seed is None:
+                continue
+
+            registered.extend((comp_name, name) for name in seed())
 
     return registered
 

@@ -2295,7 +2295,9 @@ class ObjCtrl(cod3s.PycComponent):
         :func:`muscadet.ordering.register_controller_seeds` calls this in the
         topological order of the signal graph instead: one derivation used
         twice, the order a chain settles in at instant 0 being the order it
-        settles in at every instant after.
+        settles in at every instant after. That graph holds the ``ObjFlow``
+        instruments too, so a chain that alternates the two natures settles
+        whole and not one nature at a time.
 
         Returns
         -------
