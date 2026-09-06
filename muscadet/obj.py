@@ -1758,6 +1758,13 @@ class ObjFlow(cod3s.PycComponent):
                     self,
                     allocate_measurement_equation_order(system),
                 )
+                # The instant-0 seed of the same publications, registered in the
+                # same breath so the seeds fall in the order the equations do:
+                # both are allocated at declaration, and PyCATSHOO calls start
+                # methods in registration order. See :meth:`seed_measurements`.
+                self.addStartMethod(
+                    f"seed_{self.name()}_measurements", self.seed_measurements
+                )
                 self._measurement_equation_registered = True
 
         return measurement
@@ -1766,6 +1773,48 @@ class ObjFlow(cod3s.PycComponent):
         """PDMP equation: refresh every published measurement of this component."""
         for measurement in self.measurements_out.values():
             measurement.compute(self)
+
+    def seed_measurements(self):
+        """Publish every sourced measurement at t = 0 of every sequence (R37).
+
+        The equation above is what keeps a republication current, and the engine
+        does not run it at instant 0: it samples that instant first and
+        evaluates afterwards. So an instrument standing in front of a full tank
+        announced its declared default there, and a regulation reading that
+        instrument stayed idle until the level crossed a threshold it had
+        already crossed before the run began. Silent, and repeated identically
+        at the start of every Monte Carlo sequence.
+
+        This is the same fault, on the same day, as the one
+        :meth:`muscadet.ObjCtrl.seed_emitted_outputs` answers on a controller's
+        value output: a republication is written twice in this library, and the
+        shipped ``SensorContinuous`` compiles its ``publish`` channel to THIS
+        one. A capacity has never had the fault, :meth:`muscadet.Capacity.
+        add_variables` giving its levels, fills and shares their starting values
+        at declaration for this reason and in those words. An observer is not
+        supposed to be able to tell a capacity from a republisher, and this is
+        what keeps that true at instant 0.
+
+        The same call the equation makes, so one path, one gain and one set of
+        readings: seeding around :meth:`muscadet.MeasurementOut.publish` would
+        leave a mode that kills an instrument a no-op for exactly one instant.
+
+        **The seed takes the order its equation takes, and no better one.**
+        Registered here, beside that equation, so both are allocated at
+        declaration and PyCATSHOO -- which calls start methods in registration
+        order -- runs the seeds in the order the measurement band runs its
+        equations. That is what keeps instant 0 consistent with every instant
+        after it, and it inherits the band's known limit: the measurement band
+        runs BELOW the controller band and orders itself by declaration, so an
+        instrument reading a controller's output, or reading another
+        instrument declared after it, is one evaluation behind. In a running
+        sequence the solver's repeated evaluations wash that lag out; at
+        instant 0 there is no previous evaluation to be behind, so what such an
+        instrument reports is its default. Same limit, and closing it means
+        putting the ObjFlow republishers into the signal graph -- which is the
+        library's own open question, not this seed's.
+        """
+        self.compute_measurements()
 
     # ------------------------------------------------------------------
     # Rule declaration (KD7, R12, R13, R14)

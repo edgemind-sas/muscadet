@@ -1471,6 +1471,8 @@ my_loop.comp["I3"].add_delay_failure_mode(
 )
 ```
 
+**A sourced publication reports its reading at instant 0**, and at the start of every Monte Carlo sequence, exactly like a capacity's own level. The equation that keeps it current does not run at that instant: the engine samples it first and evaluates afterwards, so until 4.3.0 an instrument standing in front of a full tank announced its declared default there. The same holds for the `publish` channel of the shipped `SensorContinuous`, which compiles to one of these. See [what an output carries at instant 0](#what-an-output-carries-at-instant-0), which is the same statement made on a controller's `"value"` output.
+
 With that fault standing and the tank at 26, the three readings are 26, 26 and 130. The median voter reads 26 and stays quiet; a mean voter reads 60.7 and raises an alarm for a level that never happened.
 
 `SensorContinuous` carries all of it as declaration keys — `combine`, `combine_fun`, `publish` (republish the reading under this channel name; `True` reuses `measurement`) and `gain`. A sensor that declares `publish` and no `activate` is a pure instrument, with no control port and no deadband.
@@ -1937,6 +1939,48 @@ A minimal declaration of each:
 
 An output declaring no `emit` keeps a value written by hand, which is what a test drives.
 
+### What an output carries at instant 0
+
+**An output carrying an `emit` publishes what it observes before the run starts**, and it does so at the start of every Monte Carlo sequence. A regulation whose quantity already stands past its threshold therefore fires at t = 0, instead of waiting for a crossing that has already happened.
+
+That needs saying because the two natures of output reach the question from opposite directions, and neither answers it on its own. A `"bool"` output is a signal variable, which is not reinitialised between steps: nothing but a start method would give it the value its condition already holds. A `"value"` output is a publication refreshed by a PDMP equation, and the engine samples instant 0 before it evaluates any equation: the first thing an observer would read is the declared default. Both are silent, and the value branch carried its default until 4.3.0.
+
+```python
+plant.add_component(
+    name="TANK", cls="CapacityContinuous", flow="q",
+    capacity=100.0, capacity_name="tank",
+    content_init={"q": 8.0},          # already above the threshold below
+    fill_rate=float("inf"),
+)
+plant.add_component(
+    name="GAUGE", cls="ObjCtrl",
+    controls_in=[{"name": "tank"}],
+    controls_out=[{"name": "reading", "kind": "value",
+                   "emit": {"op": "republish", "input": "tank", "gain": 1.0}}],
+)
+plant.add_component(
+    name="ALARM", cls="ObjCtrl",
+    controls_in=[{"name": "reading"}],
+    controls_out=[{"name": "high", "kind": "bool",
+                   "emit": {"op": "compare", "input": "reading",
+                            "operator": ">=", "threshold": 5.0}}],
+)
+plant.connect("TANK", "tank_level_out", "GAUGE", "tank_level_in")
+plant.connect("GAUGE", "reading_level_out", "ALARM", "reading_level_in")
+
+plant.isimu_start()
+plant.comp["GAUGE"].controls_out["reading"].get_level()   # 8.0, not 0.0
+plant.comp["ALARM"].controls_out["high"].get_signal()     # True, before any step
+```
+
+Three things follow, and each is worth knowing:
+
+- the value goes through `{name}_level_gain` like any other publication, so an instrument a failure mode has killed reports a dead reading at instant 0 too, and a forced output publishes its forced number;
+- **a chain of controllers is written in the order of the signal graph**, the same order their equations take, so it settles whole however it was declared. That matters because PyCATSHOO calls start methods in registration order and a chain is often written downstream first;
+- what is published is the value *observed* at instant 0, not a value captured at declaration. A montage whose initial state differs between Monte Carlo sequences is seeded from each sequence's own state.
+
+**A seed takes the order its own equation takes, and no better one.** The rule above is a controller's, derived from the signal graph; a sourced `MeasurementOut` on an `ObjFlow` is seeded in the order of the measurement band, which is declaration order and runs below the controller band. So the one shape that does not settle at instant 0 is the one that does not settle in a single evaluation either: an `ObjFlow` instrument reading a controller's output, or reading another instrument declared after it. See [known limits](#known-limits).
+
 ### What is refused, and why the solver decides it
 
 **No function supplied by the modeller**, whatever it attests:
@@ -2001,7 +2045,7 @@ Blinding is the scenario worth knowing: the reading is still right, the band is 
 Four, named rather than smoothed over.
 
 - **Two sibling sources coupled by a shared demand escape both loop detectors.** Two sources feeding one consumer, with a controller observing one and driving the other, is accepted. The coupling runs sideways through the shared demand and traverses no edge, and the two detectors share one upstream-by-transport criterion. Widening it would newly refuse the ordinary main-plus-backup shape, which is why it is left alone in a module where refusing wrongly is worse than missing.
-- **A republication routed through an `ObjFlow` instrument is neither ordered nor refused.** Controller, instrument, controller is not an edge of the signal graph. The instrument draws from the measurement band, so it is refreshed before the controller feeding it and reads that controller one evaluation late whatever order the controllers take. Put the two controllers side by side, or take the lag knowingly.
+- **A republication routed through an `ObjFlow` instrument is neither ordered nor refused.** Controller, instrument, controller is not an edge of the signal graph. The instrument draws from the measurement band, so it is refreshed before the controller feeding it and reads that controller one evaluation late whatever order the controllers take. The same holds between two `ObjFlow` instruments, the measurement band ordering itself by declaration: a relay declared before the instrument it reads is one evaluation behind it. **At instant 0 that lag is a default, not a stale number**, there being no previous evaluation to be behind: such an instrument reports its `level_default` at t = 0 and picks the reading up at the first step. Put the republishers side by side in declaration order, use controllers for a chain that must settle at t = 0, or take the lag knowingly.
 - **A numeric effect is readable from its occurrence date, not at it.** What a mode clamps on a value output is read back by the equation at every integration step, so it stands from its own event onward and is read at the first integration point past it. That is the behaviour `{name}_level_gain` has always had. What a mode clamps on a boolean output is read at the single write seam, and the output is re-evaluated at the instant the availability turns, in either direction.
 - **Two modes clamping one endpoint are last-writer-wins.** There is no composition by minimum here like the one concurrent deratings get on a continuous output. In the same family: a mode may move a band's edges into the inverted configuration the declaration validator refuses, and such a band latches on its first activation and never releases. Documented, and unguarded at run time.
 
