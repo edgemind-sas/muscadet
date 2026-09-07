@@ -332,6 +332,91 @@ def validate_operand_shape(
     check_operand_negation(label, op, negate)
 
 
+#: Threshold a boolean operand naming a continuous flow compares against (R46).
+BOOLEAN_THRESHOLD = 0.0
+
+#: Operator such an operand normalises to, keyed by whether it was negated.
+#: ``not (x != 0)`` is ``x == 0``, so the negation goes INTO the operator
+#: rather than beside it -- which is also what the third shape rule requires.
+BOOLEAN_OPERATORS = {False: "!=", True: "=="}
+
+
+def normalise_boolean_operand(
+    source, op, value, negate
+) -> typing.Tuple[typing.Optional[str], typing.Optional[float], bool]:
+    """A boolean operand naming a CONTINUOUS flow becomes ``!= 0`` (R46).
+
+    Returns the ``(op, value, negate)`` triple to store. Unchanged for an
+    operand that already carries a comparison, and unchanged for one naming a
+    flow of the DISCRETE family, whose ``var_fed`` is a state and whose boolean
+    read is exactly what was meant.
+
+    Why this exists at all
+    ----------------------
+    An operand written without a comparison builds its reader from
+    ``source.var_fed.value()``. On a continuous flow that value is a **rate**,
+    so the condition means "the rate differs from zero" -- bit for bit -- while
+    a modeller writing ``{"name": "level"}`` almost certainly wanted a
+    threshold. Nothing said so, and nothing could tell the two apart
+    afterwards: the matrices recorded only the ABSENCE of a comparison.
+
+    Saying it explicitly is not cosmetic, and the reason was measured rather
+    than argued. The seeds of the instantaneous-loop walk collect COMPARISONS
+    on continuous flows, so the boolean spelling was invisible to them: one
+    topology -- a discrete verdict derived from an arriving rate, wired back to
+    gate that rate's producer -- was refused written as ``{"op": ">=", "value":
+    5}`` and ACCEPTED written as ``{"name": "q"}``, although both read the same
+    rate algebraically and close the same loop. Normalising closes that hole as
+    a direct consequence, which is why the third option of the three
+    ("accept and document") was not taken.
+
+    What else moves, and none of it is a side effect to be undone
+    ------------------------------------------------------------
+    The TEST itself is unchanged: ``bool(x)`` and ``x != 0`` agree on every
+    float. Three things around it are not.
+
+    * **The reading stops lagging.** A boolean operand reads ``var_fed``, a
+      mirror a sensitive method refreshes BETWEEN integration steps; a
+      comparison reads ``live_value()``, which
+      :class:`~muscadet.flow_continuous.FlowContinuousIn` overrides onto the
+      allocated share taken live from the connections. R12 asks a comparison
+      for exactly that, because the solver root-finds a crossing and a mirror
+      would be one step behind the value being watched. A boolean operand on a
+      rate never got it.
+    * **The crossing becomes WATCHED.**
+      :func:`~muscadet.flow.add_prod_cond_threshold_automata` gives an
+      automaton to every comparison on a continuous quantity, so the condition
+      fires AT zero instead of at the following integration step, by an amount
+      that used to depend on the step size. The cost is one automaton per
+      operand, and it settles at t=0: an INTERACTIVE driver therefore sees one
+      extra step before the first dated transition it used to reach.
+    * **The stored form states its threshold**, so a model read back from data
+      says what it does.
+
+    Why it is called at RESOLUTION, from both directions
+    ----------------------------------------------------
+    R-5 pins that a rule guard and a discrete production condition accept
+    exactly the same operand shapes, from one implementation; two of those
+    shapes name a continuous port without a comparison, so the two vocabularies
+    change together or not at all. Hence one function, called by
+    :meth:`muscadet.ObjFlow.resolve_rule_set` and by
+    :meth:`muscadet.ObjFlow.apply_prod_cond`.
+
+    It cannot be a validator of :class:`RuleOperand`: ``flow`` is bound later,
+    by ``add_rules``, so at validation time nothing knows which family the
+    source belongs to. The family is read through ``is_continuous``, the
+    property both families declare for exactly this discrimination, rather than
+    by an ``isinstance`` -- this module deliberately imports nothing from the
+    rest of muscadet. An object that does not declare it is left alone: a
+    boolean operand never resolves onto a measurement channel anyway, since a
+    level carries no state to read.
+    """
+    if op is not None or not getattr(source, "is_continuous", False):
+        return op, value, negate
+
+    return BOOLEAN_OPERATORS[bool(negate)], BOOLEAN_THRESHOLD, False
+
+
 class RuleOperand(cod3s.ObjCOD3S):
     """One operand of a rule guard.
 
