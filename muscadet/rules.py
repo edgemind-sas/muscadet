@@ -101,9 +101,8 @@ import operator
 import re
 import typing
 
-import pydantic
-
 import cod3s
+import pydantic
 
 from .common import entity_label, fresh_instant_occ_law
 
@@ -342,7 +341,10 @@ BOOLEAN_OPERATORS = {False: "!=", True: "=="}
 
 
 def normalise_boolean_operand(
-    source, op, value, negate
+    source: typing.Any,
+    op: typing.Optional[str],
+    value: typing.Optional[float],
+    negate: bool,
 ) -> typing.Tuple[typing.Optional[str], typing.Optional[float], bool]:
     """A boolean operand naming a CONTINUOUS flow becomes ``!= 0`` (R46).
 

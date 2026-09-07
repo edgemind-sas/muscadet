@@ -37,9 +37,9 @@ what each produced.
 import warnings
 
 import cod3s
-import muscadet
 import pytest
 
+import muscadet
 from muscadet import ordering
 
 # Imported for their side effect: a component class resolves by name.
@@ -261,6 +261,30 @@ class SclSelfGatedStore(muscadet.ObjFlow):
             serve_cond=[
                 {"name": "q", "port": "out", "op": "<", "value": SCL_THRESHOLD}
             ],
+        )
+
+
+class SclBooleanSelfGated(muscadet.ObjFlow):
+    """The same self-loop, written as a BARE BOOLEAN operand (R46 + R50).
+
+    Two chantiers of the 5.0.0 batch meet here and neither was written for the
+    other. R46 normalises a boolean operand naming a CONTINUOUS flow to
+    ``!= 0``, so it stops being invisible to the seeds; R50 refuses a discharge
+    reading the rate it serves. Written boolean, this montage therefore reaches
+    the same refusal as the comparison spelling, through a normalisation that
+    happens two units away.
+    """
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        self.add_flow_continuous_out(name="q", var_fed_default=SCL_DEMAND)
+        self.add_capacity(
+            name="store",
+            flow="q",
+            side="out",
+            capacity=SCL_VOLUME,
+            content_init={"q": SCL_INIT},
+            serve_cond=[{"name": "q", "port": "out"}],
         )
 
 
@@ -534,6 +558,25 @@ def run_self_gated_scenario(obs):
         system.deleteSys()
 
 
+def run_boolean_self_gated_scenario(obs):
+    """The self-loop written boolean rather than compared."""
+    system = muscadet.System(name="SclBooleanSelfGated")
+    try:
+        system.add_component(name="BAT", cls="SclBooleanSelfGated")
+        system.add_component(
+            name="LOAD", cls="ConsumerContinuous", flow="q", demand=SCL_DEMAND
+        )
+        system.connect_flow(source="BAT", target="LOAD", flow_name="q")
+
+        obs["boolean_compare"] = list(
+            system.comp["BAT"].capacities["store"].serve_cond_compare
+        )
+
+        start_and_record(system, obs, "boolean")
+    finally:
+        system.deleteSys()
+
+
 def run_relay_scenario(obs):
     """A signal RELAYED through a discharge, on to a threshold on its output."""
     system = muscadet.System(name="SclRelay")
@@ -696,6 +739,7 @@ def the_run():
     run_reserve_floor_scenario(obs)
     run_observation_gate_scenario(obs)
     run_self_gated_scenario(obs)
+    run_boolean_self_gated_scenario(obs)
     run_relay_scenario(obs)
     run_namesake_scenario(obs)
     run_tear_scenario(obs)
@@ -872,6 +916,23 @@ def test_a_discharge_reading_the_rate_it_serves_is_refused(the_run):
     assert f"q < {SCL_THRESHOLD:g}" in message
     assert "no connection at all" in message
     assert error.connections == [], "there is no wiring: that is the point"
+
+
+def test_a_boolean_discharge_condition_reaches_the_same_refusal(the_run):
+    """Two chantiers of one release meet, and neither was written for the other.
+
+    R46 normalises a boolean operand naming a CONTINUOUS flow to ``!= 0``, at
+    resolution, in the unit that owns the operand shapes. A discharge condition
+    resolves through that very function, so the bare boolean spelling of this
+    self-loop stops being invisible to the seeds and reaches the R50 refusal
+    the compared spelling reaches. Neither change knows about the other; the
+    composition is what having ONE resolution buys.
+    """
+    assert the_run["boolean_compare"] == [
+        [{"op": "!=", "value": 0.0}]
+    ], "the boolean operand must have been normalised at resolution"
+    assert the_run["boolean_started"] is False
+    assert isinstance(the_run["boolean_error"], muscadet.CommandedRateSelfLoopError)
 
 
 def test_a_signal_relayed_through_a_discharge_travels_on(the_run):

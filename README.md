@@ -918,7 +918,9 @@ plant.add_component(
     content_init={"elec": 500.0}, serve_rate=40.0,
     control="supply", serve_cond=["supply"],
 )
-``` A comparison reads a **capacity level over a measurement link**, which is the sanctioned shape: `serve_cond=[{"name": "reserve", "op": ">=", "value": 100.0}]` gives a volume a reserve floor. The crossing is watched, so the floor is settled on rather than noticed at the following step: measured on one montage, the level stops 0.043 below the floor against 0.5 with the automaton removed.
+```
+
+A comparison reads a **capacity level over a measurement link**, which is the sanctioned shape: `serve_cond=[{"name": "reserve", "op": ">=", "value": 100.0}]` gives a volume a reserve floor. The crossing is watched, so the floor is settled on rather than noticed at the following step: measured on one montage, the level stops 0.043 below the floor against 0.5 with the automaton removed.
 
 **A discharge command is watched by the loop detectors, like any other.** The seeds read a capacity's condition alongside the production conditions of the output flows, and a discharge is a fourth way a component's production can depend on a discrete input. So the same physics written on a capacity and on an output gets the same verdict: a signal thresholded on a rate and wired back to command the volume delivering it is refused at the first run, and so is a discharge commanded by a threshold on its own observed rate. Moving a gate from an output to a capacity no longer loses the diagnostic.
 
