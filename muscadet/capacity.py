@@ -637,6 +637,23 @@ class Capacity(cod3s.ObjCOD3S):
             )
         return value
 
+    @pydantic.field_validator("serve_cond_inner_mode")
+    @classmethod
+    def check_serve_cond_inner_mode(cls, value, info):
+        """Refuse a mode that is not one of the two, as the flow side does.
+
+        ``prod_cond_holds`` reads anything that is not the literal ``"or"`` as
+        ``"and"``, so ``"OR"`` silently inverts the whole condition: a volume
+        meant to serve when the command holds AND the level is above its floor
+        would serve when EITHER did.
+        """
+        if value not in ("and", "or"):
+            raise ValueError(
+                f"{entity_label('Capacity', info)}: serve_cond_inner_mode must "
+                f"be 'and' or 'or', got {value!r}"
+            )
+        return value
+
     @pydantic.model_validator(mode="after")
     def check_declaration(self):
         if not self.flows:
@@ -1254,11 +1271,18 @@ class Capacity(cod3s.ObjCOD3S):
         downstream of the volume rather than stopping it, with nothing raised
         anywhere. A command that does not hold answers zero outright.
         """
+        # The name is checked FIRST, and the order is load bearing: gating
+        # ahead of it made the refusal below depend on the command's current
+        # verdict, so a typo raised while the command held and answered 0.0
+        # while it did not. Validation that comes and goes with the model state
+        # is worse than either behaviour consistently.
+        if flow_name is not None:
+            self.flow_entry(flow_name)
+
         if not self.serve_holds():
             return 0.0
 
         if flow_name is not None:
-            self.flow_entry(flow_name)
             var = self.var_serve_rate.get(flow_name)
 
             return float(self.serve_rate) if var is None else float(var.value())
@@ -1300,9 +1324,16 @@ class Capacity(cod3s.ObjCOD3S):
 
         No sensitive method is passed: nothing mirrors this verdict, the two
         bounds read it live where they need it.
+
+        The base name carries a ``_serve`` tag because flows and capacities are
+        two namespaces and the engine's states are one. ``add_capacity(name=X,
+        flow=X)`` is the most natural spelling there is, and without the tag a
+        capacity and the flow it holds both wanted the state ``X_cond_0_0_below``
+        -- refused by PyCATSHOO, in French, naming a state and neither of the
+        two declarations that collided.
         """
         return add_cond_threshold_automata(
-            comp, self.serve_cond, self.serve_cond_compare, self.name
+            comp, self.serve_cond, self.serve_cond_compare, f"{self.name}_serve"
         )
 
     def serves_from_stock(self, flow_name: typing.Optional[str] = None) -> bool:

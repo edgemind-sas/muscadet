@@ -433,14 +433,25 @@ class CapacityContinuous(ContinuousComponent):
         implies.
     demand : float, optional
         Demand claimed on every input, for an accumulator. Defaults to 0.
+    control : str, optional
+        Name of a discrete input to declare. It gates nothing by itself: it is
+        the PORT a ``serve_cond`` operand then names, and the two are written
+        together. Splitting them that way is deliberate -- what the port does
+        stays visible in the condition rather than implied by the key -- and it
+        is what makes a boolean command expressible on this class at all, its
+        own continuous flows being the only other operands it could resolve.
+    control_logic : str or int, optional
+        Input logic of that port, as ``add_flow_in`` takes it.
     serve_cond : list, optional
         Condition commanding the DISCHARGE, in the operand vocabulary a
         production condition uses: boolean operands, negations and comparisons
-        alike. The operands name things this component already carries, so a
-        BOOLEAN command port is declared by whoever declares the component --
-        a subclass, or a spec (``muscadet.declare``) -- and named here. A
-        comparison on a capacity LEVEL read over a measurement link needs no
-        extra port and is the sanctioned way to give a volume a reserve floor.
+        alike. The operands name things this component carries, which on this
+        class means a port declared through ``control`` or one of its own
+        continuous flows. **Threshold a LEVEL, never a rate**: a level is an
+        integrated state and breaks a loop, a rate does not, and a comparison
+        on a rate here is not seen by the loop detectors (#172). Reading a
+        level needs a measurement channel, which this class does not declare:
+        that montage is a subclass or a spec.
     serve_rate : float, optional
         CEILING on what the volume releases, per held flow. Defaults to
         ``math.inf``, no ceiling. Not the twin of ``fill_rate``: that one is a
@@ -472,6 +483,8 @@ class CapacityContinuous(ContinuousComponent):
         "fill_rate",
         "serve_rate",
         "serve_cond",
+        "control",
+        "control_logic",
         "content_init",
         "capacity_name",
     ) + ALLOCATION_KEYS
@@ -487,6 +500,7 @@ class CapacityContinuous(ContinuousComponent):
 
         serve_rate = float(kwargs.get("serve_rate", math.inf))
         serve_cond = kwargs.get("serve_cond")
+        control = kwargs.get("control")
 
         commanded = [
             key
@@ -521,6 +535,11 @@ class CapacityContinuous(ContinuousComponent):
                 )
             if ports in ("both", "out"):
                 self.add_flow_continuous_out(name=entry["name"], **allocation)
+
+        # Declared BEFORE the capacity, since a ``serve_cond`` operand naming
+        # it is resolved as the capacity is declared.
+        if control is not None:
+            self.add_flow_in(name=control, logic=kwargs.get("control_logic", "and"))
 
         self.add_capacity(
             name=kwargs.get("capacity_name", "capacity"),

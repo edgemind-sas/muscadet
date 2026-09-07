@@ -148,10 +148,11 @@ FULL_DECLARATIONS = {
         demand=0.0,
         fill_rate=0.0,
         serve_rate=float("inf"),
-        # The one operand a bare CapacityContinuous can resolve: it carries its
-        # own continuous flows and nothing else, a boolean command port coming
-        # from a subclass or a spec. What this exercises is the KEY.
-        serve_cond=[{"name": "q", "port": "in", "op": ">=", "value": 0.0}],
+        control="cmd",
+        control_logic="and",
+        # The port declared just above, named in the condition rather than
+        # implied by the key: the two are written together on purpose.
+        serve_cond=["cmd"],
         content_init={"q": 1.0},
         capacity_name="vessel",
         allocation="proportional",

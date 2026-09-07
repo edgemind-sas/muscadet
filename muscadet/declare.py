@@ -502,7 +502,7 @@ def _declaration_fields(obj, where, skip=()):
     # listed as derived is treated as a declaration, so a field added later
     # trips the refusal above instead of disappearing.
     for key, field in type(obj).model_fields.items():
-        if not field.exclude or key in fields:
+        if not field.exclude or key in fields or key in skip:
             continue
         if key.startswith(RUNTIME_FIELD_PREFIXES) or key in DERIVED_EXCLUDED_FIELDS:
             continue
@@ -823,43 +823,41 @@ def component_spec(comp):
             fields["cls"] = type(flow).__name__
             flows.append(fields)
 
-    def dump_all(objects, kind):
+    def dump_all(objects, kind, skip=()):
         out = []
         for obj_name, obj in objects.items():
-            fields = _declaration_fields(obj, f"{where}, {kind} {obj_name}")
+            fields = _declaration_fields(obj, f"{where}, {kind} {obj_name}", skip=skip)
             fields.pop("cls", None)
             out.append(fields)
         return out
 
-    capacities = []
+    # A discharge command is stored RESOLVED, exactly as a production condition
+    # is, so it is rebuilt rather than dumped and the two matrices derived from
+    # it are skipped: the rebuild recomputes them, and a stale copy beside a
+    # rebuilt condition is worse than none.
+    capacities = dump_all(comp.capacities, "capacity", skip=SERVE_COND_FIELDS)
 
-    for capacity_name, capacity in comp.capacities.items():
-        # A discharge command is stored RESOLVED, exactly as a production
-        # condition is, so it is rebuilt rather than dumped and the two
-        # matrices derived from it are skipped: the rebuild recomputes them,
-        # and a stale copy beside a rebuilt condition is worse than none.
-        entry = _declaration_fields(
-            capacity, f"{where}, capacity {capacity_name}", skip=SERVE_COND_FIELDS
-        )
-        entry.pop("cls", None)
-
+    for entry, capacity in zip(capacities, comp.capacities.values()):
         serve_cond = _prod_cond_spec(
             comp,
             getattr(capacity, "serve_cond", None),
             getattr(capacity, "serve_cond_negate", None),
             getattr(capacity, "serve_cond_compare", None),
         )
+
         if serve_cond:
             entry["serve_cond"] = serve_cond
+        else:
+            # Without a condition the mode says nothing, and writing it would
+            # change the bytes of every capacity spec ever stored -- the very
+            # argument the infinite ceiling is popped on, just below.
+            entry.pop("serve_cond_inner_mode", None)
 
-        capacities.append(entry)
-
-    for entry in capacities:
-        # A discharge ceiling of ``inf`` says nothing, and writing it would put
-        # the JSON literal ``Infinity`` into EVERY capacity spec, including
-        # those of models declared before the field existed (R48). ``fill_rate``
-        # is the counter-example and stays: its default is 0.0, so an infinite
-        # one is something a modeller wrote.
+        # A discharge ceiling of ``inf`` says nothing either, and writing it
+        # would put the JSON literal ``Infinity`` into EVERY capacity spec,
+        # including those of models declared before the field existed (R48).
+        # ``fill_rate`` is the counter-example and stays: its default is 0.0,
+        # so an infinite one is something a modeller wrote.
         if entry.get("serve_rate") == math.inf:
             entry.pop("serve_rate")
 

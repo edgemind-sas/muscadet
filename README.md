@@ -880,7 +880,7 @@ battery.add_atm2states(
 )
 ```
 
-A command composes with the ceiling by **branching**, never by product: `serve_rate` defaults to `math.inf`, and `inf * 0` is NaN, which would poison every level downstream of the volume rather than stopping it. False gives zero, true gives the ceiling. A commanded halt stops the **discharge** and not the volume, so charging stays available and the capability announces zero, which is what keeps a consumer downstream from sizing itself as though the battery were pouring:
+A command composes with the ceiling by **branching**, never by product: `serve_rate` defaults to `math.inf`, and `inf * 0` is NaN, which would poison every level downstream of the volume rather than stopping it. False gives zero, true gives the ceiling. The capability announces zero over the same span, which is what keeps a consumer downstream from sizing itself as though the battery were pouring. Charging through a commanded halt is available and it is **declared**: a volume carries upstream what it may release plus what its `fill_rate` claims for itself, so at the default `fill_rate=0` a halt stops the way in as well, and a battery meant to charge while shed says so:
 
 ```python
 class Battery(muscadet.ObjFlow):
@@ -902,7 +902,17 @@ class Battery(muscadet.ObjFlow):
         )
 ```
 
-The operands name what the component already carries, so a boolean command port is declared by whoever declares the component: a subclass as above, or a spec. `CapacityContinuous` carries the key and not the port. A comparison needs no extra port at all, and a **capacity level read over a measurement link** is the sanctioned shape: `serve_cond=[{"name": "reserve", "op": ">=", "value": 100.0}]` gives a volume a reserve floor, watched by the solver so the floor is reached exactly rather than overshot by one integration step. A level is integrated; the same threshold on a *rate* is what the loop detectors refuse.
+The operands name what the component already carries, so a boolean command port has to be declared. A subclass does it as above; on `CapacityContinuous` the `control` key declares one, and it gates nothing by itself: it is the port a `serve_cond` operand then names, which keeps what the port does visible in the condition rather than implied by the key.
+
+```python
+plant.add_component(
+    name="BAT", cls="CapacityContinuous", flow="elec", capacity=1000.0,
+    content_init={"elec": 500.0}, serve_rate=40.0,
+    control="supply", serve_cond=["supply"],
+)
+``` A comparison reads a **capacity level over a measurement link**, which is the sanctioned shape: `serve_cond=[{"name": "reserve", "op": ">=", "value": 100.0}]` gives a volume a reserve floor. The crossing is watched, so the floor is settled on rather than noticed at the following step: measured on one montage, the level stops 0.043 below the floor against 0.5 with the automaton removed.
+
+**Threshold a level, not a rate.** A level is an integrated state and breaks a loop; a rate does not. A `serve_cond` comparison on a rate that reaches back to its own producer closes an instantaneous loop that **is not currently detected**: the loop seeds read the production conditions of the output flows and know nothing of a capacity's, so the identical model written as a production condition is refused and this one builds. That is a known gap with a ticket of its own, not a supported shape.
 
 The ceiling caps what **leaves**, whatever the state of the volume and whichever side it sits on. An empty capacity is a pass-through and still passes on at most its rating; a capacity declared `side="in"` releases into its component's rules under the same ceiling, so a hopper at `serve_rate=40` feeds a mill 40 whatever the mill would otherwise draw.
 

@@ -64,6 +64,17 @@ CSC_HORIZON = 4.0
 #: The level a discharge command reads to stop itself: a reserve floor.
 CSC_FLOOR = 100.0
 
+#: Far enough past the crossing that the floor is REACHED inside the observed
+#: window. At :data:`CSC_HORIZON` the level arrives at the floor exactly at the
+#: horizon, so the gate never flips and a test would pass with the watched
+#: automaton deleted.
+CSC_LONG_HORIZON = 10.0
+
+#: What the settled level may sit below the floor by. Measured: 0.042917 with
+#: the crossing watched, 0.5 without it, the integration step being what a
+#: threshold nothing watches is noticed one of.
+CSC_OVERSHOOT = 0.1
+
 
 class CscHorizon(muscadet.ObjFlow):
     """A dated transition, so the interactive session has somewhere to go."""
@@ -108,6 +119,18 @@ class CscMeteredBattery(muscadet.ObjFlow):
             capacity=CSC_VOLUME,
             content_init={"elec": float(kwargs.get("init", CSC_INIT))},
             serve_cond=[{"name": "reserve", "op": ">=", "value": CSC_FLOOR}],
+        )
+
+
+class CscLongHorizon(muscadet.ObjFlow):
+    """The same dated transition, far enough out to cross the reserve floor."""
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        self.add_atm2states(
+            name="horizon",
+            occ_law_12={"cls": "delay", "time": CSC_LONG_HORIZON},
+            cond_occ_21=False,
         )
 
 
@@ -314,12 +337,74 @@ def run_metered_scenario(obs):
             system.deleteSys()
 
 
-def run_kb_key_scenario(obs):
-    """The shipped class accepts the key, on a comparison it can resolve.
+def run_crossing_scenario(obs):
+    """Driven PAST the reserve floor, which is where the automaton earns itself.
 
-    A ``CapacityContinuous`` carries its own continuous flows and nothing else,
-    so the operand names one of them. What this pins is the KEY, not the
-    montage: a boolean command port comes from a subclass or a spec.
+    The short-horizon scenario reaches the floor exactly at its horizon, so the
+    gate never flips inside the window and the watched automaton could be
+    deleted without a test noticing. Here the volume runs into the floor and
+    settles on it, and how far past it settles is the whole measurement.
+    """
+    system = muscadet.System(name="CscCrossing")
+    try:
+        system.add_component(name="BAT", cls="CscMeteredBattery", init=CSC_INIT)
+        system.add_component(name="BMS", cls="CscProbe")
+        system.add_component(
+            name="LOAD", cls="ConsumerContinuous", flow="elec", demand=CSC_DEMAND
+        )
+        system.add_component(name="H", cls="CscLongHorizon")
+        system.connect_flow(source="BAT", target="LOAD", flow_name="elec")
+        system.connect("BAT", "store_level_out", "BMS", "store_level_in")
+        system.connect("BMS", "reserve_level_out", "BAT", "reserve_level_in")
+
+        store = system.comp["BAT"].capacities["store"]
+
+        system.isimu_start()
+        for _ in range(6):
+            system.isimu_step_forward()
+            if system.currentTime() >= CSC_LONG_HORIZON:
+                break
+
+        obs["crossing_time"] = system.currentTime()
+        obs["crossing_level"] = store.get_quantity("elec")
+        obs["crossing_holds"] = store.serve_holds()
+        obs["crossing_delivered"] = system.comp["BAT"].flows_out["elec"].var_fed.value()
+
+        system.isimu_stop()
+    finally:
+        system.deleteSys()
+
+
+def run_default_fill_scenario(obs):
+    """A commanded halt at the DEFAULT ``fill_rate``, with a live producer.
+
+    The charging scenario declares a fill rate, so it says nothing about the
+    default. It has to be said: the demand a volume carries upstream is capped
+    by what it may release (R48), so at ``fill_rate=0`` a commanded halt stops
+    the inflow as well. That is the documented meaning of a pure pass-through
+    buffer and not a defect, but it is the opposite of "charging stays
+    available" read without the qualifier.
+    """
+    system = build_battery_system("CscDefaultFill", False)
+    try:
+        system.add_component(
+            name="GRID", cls="SourceContinuous", flow="elec", rate=CSC_DEMAND
+        )
+        system.connect_flow(source="GRID", target="BAT", flow_name="elec")
+
+        observe(system, obs, "defaultfill")
+    finally:
+        system.deleteSys()
+
+
+def run_kb_key_scenario(obs):
+    """The shipped class declares the port and names it in the condition.
+
+    ``control`` declares a discrete input and gates nothing by itself;
+    ``serve_cond`` names it. Written the other way -- a comparison on one of
+    the class's own continuous flows -- the operand would threshold a RATE,
+    which is the shape the loop detectors do not yet see (#172) and therefore
+    not what a shipped example should show.
     """
     system = muscadet.System(name="CscKbKey")
     try:
@@ -331,11 +416,16 @@ def run_kb_key_scenario(obs):
             capacity_name="store",
             content_init={"elec": CSC_INIT},
             demand=CSC_DEMAND,
-            serve_cond=[{"name": "elec", "port": "in", "op": ">=", "value": 0.0}],
+            control="cmd",
+            serve_cond=["cmd"],
         )
-        obs["kb_accepts_serve_cond"] = bool(
-            system.comp["TANK"].capacities["store"].serve_cond
-        )
+        store = system.comp["TANK"].capacities["store"]
+
+        obs["kb_port"] = "cmd" in system.comp["TANK"].flows_in
+        # The port is UNFED, so the command does not hold: a gate that pinned
+        # nothing would answer the same either way.
+        obs["kb_holds"] = store.serve_holds()
+        obs["kb_ceiling"] = store.serve_ceiling("elec")
 
         # A command on a volume with no way out is refused by name, exactly as
         # a ceiling on one is: an accumulator releases nothing, so nothing
@@ -395,6 +485,8 @@ def the_run():
     run_charging_scenario(obs)
     run_undeclared_scenario(obs)
     run_metered_scenario(obs)
+    run_crossing_scenario(obs)
+    run_default_fill_scenario(obs)
     run_kb_key_scenario(obs)
     run_spec_round_trip(obs)
 
@@ -492,14 +584,46 @@ def test_a_threshold_on_an_integrated_level_commands_the_discharge(the_run):
 
 
 def test_a_continuous_comparison_gets_a_watched_automaton(the_run):
-    """The crossing is stopped on, not noticed at the following step (R22).
-
-    A level moving inside an integration step announces no change of its own,
-    so without the automaton a reserve floor would be crossed late by up to one
-    step, and by more the coarser the integration.
-    """
+    """The crossing is stopped on, not noticed at the following step (R22)."""
     assert the_run["above_automata"], "a comparison on a level must be watched"
     assert the_run["below_automata"] == the_run["above_automata"]
+
+
+def test_the_floor_is_stopped_on_rather_than_crossed_late(the_run):
+    """What the watched automaton actually buys, in the one unit that says it.
+
+    A level moving inside an integration step announces no change of its own,
+    so a floor nothing watched is noticed at the following step and the volume
+    is already past it. Measured on this montage: the level settles
+    **0.042917** below the floor with the crossing watched and **0.5** below it
+    with ``add_serve_cond_automata`` stubbed out, an order of magnitude that a
+    presence-of-automaton assertion cannot see.
+    """
+    assert the_run["crossing_time"] == pytest.approx(CSC_LONG_HORIZON)
+    assert (
+        the_run["crossing_holds"] is False
+    ), "the floor must be reached INSIDE the window, or this measures nothing"
+    assert the_run["crossing_delivered"] == pytest.approx(0.0)
+
+    overshoot = CSC_FLOOR - the_run["crossing_level"]
+
+    assert 0.0 <= overshoot < CSC_OVERSHOOT, (
+        f"settled {overshoot} below the floor; an unwatched crossing settles "
+        f"at one integration step's worth, measured at 0.5"
+    )
+
+
+def test_a_commanded_halt_at_the_default_fill_rate_stops_the_inflow_too(the_run):
+    """The qualifier "charging stays available" needs, stated rather than implied.
+
+    A volume carries upstream only what it may release plus what it claims for
+    itself (R48, R-20), so at the documented default ``fill_rate=0`` -- a pure
+    pass-through buffer that never stocks up -- a commanded halt stops the way
+    in as well. Charging through a halt is available, and it is DECLARED: it
+    takes a fill rate, which the scenario above shows working.
+    """
+    assert the_run["defaultfill_delivered"] == pytest.approx(0.0)
+    assert the_run["defaultfill_level"] == pytest.approx(CSC_INIT, rel=1e-4)
 
 
 # ----------------------------------------------------------------------
@@ -530,7 +654,9 @@ def test_the_kb_carries_the_command_and_a_spec_restores_it(the_run):
     assert the_run["spec_capacity"]["serve_cond"] == [
         [{"name": "supply", "port": "in"}]
     ]
-    assert the_run["kb_accepts_serve_cond"] is True
+    assert the_run["kb_port"] is True
+    assert the_run["kb_holds"] is False
+    assert the_run["kb_ceiling"] == pytest.approx(0.0)
     # The two derived matrices are recomputed by the rebuild; a stale copy
     # beside a rebuilt condition is worse than none.
     assert "serve_cond_negate" not in the_run["spec_capacity"]
