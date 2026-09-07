@@ -818,6 +818,14 @@ An operand mapping carries:
 - `op` and `value` — given together, they make the operand a **comparison** of the quantity that name carries against a threshold. The six operators are `<`, `<=`, `>`, `>=`, `==`, `!=`. A comparison cannot also be negated: use the opposite operator.
 - `port` — `"in"` or `"out"`, to disambiguate a name carried by both an input and an output flow of the component. Left out, the input is resolved first.
 
+An operand carrying no `op` reads a boolean state, which is what a **discrete** flow holds. On a **continuous** flow there is no state to read, only a rate, so such an operand is normalised at declaration into the comparison it always meant: `{"name": "q"}` becomes `q != 0` and `{"name": "q", "negate": True}` becomes `q == 0`. The stored form, what `component_spec` reads back and the error messages all show the comparison. The same normalisation applies to a discrete output's `var_prod_cond`, which shares this vocabulary.
+
+The test is unchanged, since `bool(x)` and `x != 0` agree on every float, but three things around it are not:
+
+- the quantity is now read **live** from the connections instead of from the `var_fed` mirror a sensitive method refreshes between integration steps, so the condition no longer lags one step behind the value it watches;
+- the crossing becomes **watched**, so the condition fires at zero rather than at the next integration step. The automaton settles at `t = 0`, which costs an **interactive** session one extra `isimu_step_forward` before it reaches the first dated transition. A driver stepping a fixed number of times, or asserting which transition fires first, sees that change;
+- the operand becomes visible to the instantaneous-loop detection, which collects comparisons only. **A model that gates a producer on a boolean read of a rate arriving from it is therefore now refused** at its first `isimu_start()` or `simulate()`, with `RateComparisonLoopError`, where it used to build and run. The loop was always there; only the diagnostic is new. Break it with an integrated state, typically by reading a capacity level over a measurement link rather than the rate itself.
+
 The string grammar is deliberately minimal: a flat conjunction joined by `and`, with `not` / `!` and the six comparison operators. There is no disjunction, no parenthesis and no arithmetic — express a disjunction as several rules.
 
 Guards compile into a **watched mode automaton**, one state per rule. Two consequences matter to a modeller: a threshold such as `level >= 10` fires *at* the crossing rather than at the next integration step, and the coefficients are frozen while the mode holds. The active rule is readable back:
@@ -1321,7 +1329,7 @@ Its `amplitude` and `offset` are in **flow units**, so `rate` defaults to `1` th
 
 ### Driving a discrete output from a continuous value
 
-A boolean output may be conditioned on a continuous quantity: `var_prod_cond` accepts the very same `{name, op, value}` comparison operand a rule guard uses. That is the whole declaration of a threshold alarm — no component code reads the level, and no equation is written by hand:
+A boolean output may be conditioned on a continuous quantity: `var_prod_cond` accepts the very same `{name, op, value}` comparison operand a rule guard uses, and normalises a boolean operand naming a continuous flow the same way (see the guard operand section above for what that changes). That is the whole declaration of a threshold alarm — no component code reads the level, and no equation is written by hand:
 
 ```python
 class Alarm(muscadet.ObjFlow):

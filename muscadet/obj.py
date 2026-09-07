@@ -154,6 +154,7 @@ from .rules import (
     Rule,
     RuleMode,
     RuleSet,
+    normalise_boolean_operand,
     validate_operand_shape,
 )
 from .capacity import (
@@ -661,15 +662,48 @@ class ObjFlow(cod3s.PycComponent):
                         # a level carries no state to read.
                         fcond = self.measurements_in.get(name)
                 if fcond is not None:
-                    # A BOOLEAN operand naming a CONTINUOUS flow is accepted
-                    # here, and it is worth saying why rather than leaving the
-                    # silence: its reader is ``source.var_fed.value()``, so on a
-                    # rate the condition means "differs from zero" and not the
-                    # threshold a modeller almost certainly wanted. Refusing it
-                    # would break the parity R-5 pins -- a rule guard and a
-                    # production condition accept exactly the same operand
-                    # shapes, from one implementation -- so the two vocabularies
-                    # have to change together or not at all.
+                    # A BOOLEAN operand naming a CONTINUOUS flow says what it
+                    # does (R46): it becomes ``!= 0``, and a negated one becomes
+                    # ``== 0`` with the flag consumed. Refusing the shape
+                    # instead would have broken the parity R-5 pins, so the two
+                    # vocabularies normalise together, through one function that
+                    # ``resolve_rule_set`` calls as well.
+                    #
+                    # The TEST is unchanged -- ``bool(x)`` and ``x != 0`` agree
+                    # on every float -- but three things around it are not, and
+                    # a reader chasing a behaviour change needs all three:
+                    #
+                    # * the operand moves off ``_prod_cond_state_reader``, which
+                    #   reads ``var_fed`` -- a MIRROR a sensitive method
+                    #   refreshes between integration steps -- onto
+                    #   ``live_value()``, which ``FlowContinuousIn`` overrides
+                    #   onto the allocated share read live from the connections.
+                    #   So the condition stops lagging one step behind the
+                    #   quantity it watches, which is what R12 asks of a
+                    #   comparison and what a boolean operand never got;
+                    # * the crossing becomes WATCHED, since
+                    #   ``add_prod_cond_threshold_automata`` builds an automaton
+                    #   for every comparison on a continuous quantity. That is
+                    #   one more automaton per operand, and it fires at t=0, so
+                    #   an INTERACTIVE driver sees one extra step before the
+                    #   first dated transition it used to reach;
+                    # * the operand becomes visible to the loop-detection seeds,
+                    #   which collect comparisons only. That is the measured
+                    #   hole this exists to close, and it is why a model gating
+                    #   a producer on a boolean read of an arriving rate is now
+                    #   refused at its first start.
+                    #
+                    # AFTER the resolution above, and that order is load
+                    # bearing: normalising earlier would turn a boolean operand
+                    # into a comparison, and a comparison is precisely what is
+                    # allowed to resolve onto a MEASUREMENT channel. A boolean
+                    # ``{"name": "tank"}`` would then start resolving onto a
+                    # level that carries no state to read.
+                    compare_op, compare_value, negate = normalise_boolean_operand(
+                        fcond, compare_op, compare_value, negate
+                    )
+                    if compare_op is not None:
+                        compare = {"op": compare_op, "value": compare_value}
                     return fcond, negate, compare
                 raise ValueError(
                     f"Object {self.name()}: Flow {name} does not exist as {kind} flow (you must create it before using it in a FlowOut condition)"
@@ -2107,6 +2141,14 @@ class ObjFlow(cod3s.PycComponent):
             for operand in rule.cond:
                 operand.flow, operand.port = self._resolve_rule_flow(
                     operand.name, operand.port, where, "rule guard"
+                )
+                # A boolean operand naming a CONTINUOUS flow says what it does
+                # (R46). Here and not in a validator of RuleOperand: the flow
+                # is only bound on the line above, so nothing knew its family
+                # any earlier. The production-condition direction normalises
+                # through the very same function (R-5).
+                operand.op, operand.value, operand.negate = normalise_boolean_operand(
+                    operand.flow, operand.op, operand.value, operand.negate
                 )
 
             for flow_name in rule.cons:
