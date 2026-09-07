@@ -23,10 +23,7 @@ muscadet = pytest.importorskip("muscadet")
 
 from muscadet.importers.cod3s_platform import system_from_export  # noqa: E402
 
-
-_FIXTURE = os.path.join(
-    os.path.dirname(__file__), "fixtures", "dil_v2_export.json"
-)
+_FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "dil_v2_export.json")
 
 
 @pytest.fixture(scope="module")
@@ -71,8 +68,7 @@ def test_class_names_preserved(dil_v2_system):
     # DIL V2 uses these class names (subset of the 15 templates)
     expected_subset = {"Alimentation_electrique", "Convertisseur_RS485_FO", "Ethernet"}
     assert expected_subset.issubset(classes), (
-        f"Missing classes from converted system: "
-        f"{expected_subset - classes}"
+        f"Missing classes from converted system: " f"{expected_subset - classes}"
     )
 
 
@@ -84,19 +80,17 @@ def test_each_component_has_its_kb_flows(dil_v2_payload, dil_v2_system):
         class_name = comp.metadata["class_name"]
         ifaces = kb_templates[class_name]["interfaces"]
         expected_in = {
-            i["name"] for i in ifaces.values()
-            if i["port_type"]["general"] == "input"
+            i["name"] for i in ifaces.values() if i["port_type"]["general"] == "input"
         }
         expected_out = {
-            i["name"] for i in ifaces.values()
-            if i["port_type"]["general"] == "output"
+            i["name"] for i in ifaces.values() if i["port_type"]["general"] == "output"
         }
-        assert set(comp.flows_in) == expected_in, (
-            f"Component {comp.name()}: input flows mismatch"
-        )
-        assert set(comp.flows_out) == expected_out, (
-            f"Component {comp.name()}: output flows mismatch"
-        )
+        assert (
+            set(comp.flows_in) == expected_in
+        ), f"Component {comp.name()}: input flows mismatch"
+        assert (
+            set(comp.flows_out) == expected_out
+        ), f"Component {comp.name()}: output flows mismatch"
 
 
 def test_all_connections_wired(dil_v2_payload, dil_v2_system):
@@ -115,8 +109,7 @@ def test_all_connections_wired(dil_v2_payload, dil_v2_system):
         if not src_comp.is_connected_to(tgt_name, flow):
             missing.append((conn_id, src_name, flow, tgt_name))
     assert not missing, (
-        f"{len(missing)}/177 connections not wired. First few: "
-        f"{missing[:5]}"
+        f"{len(missing)}/177 connections not wired. First few: " f"{missing[:5]}"
     )
 
 

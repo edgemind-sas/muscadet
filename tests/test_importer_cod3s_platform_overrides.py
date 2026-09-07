@@ -159,14 +159,18 @@ class TestApplyInstanceOverrides:
 
     def test_rejects_logic_in_on_output(self):
         flows = self._flows()
-        with pytest.raises(Cod3sPlatformImportError, match="role=logic_in.*expects a input"):
+        with pytest.raises(
+            Cod3sPlatformImportError, match="role=logic_in.*expects a input"
+        ):
             _apply_instance_overrides(
                 flows, {("out_x", "logic_in"): "and"}, comp_name="c"
             )
 
     def test_rejects_prod_init_on_input(self):
         flows = self._flows()
-        with pytest.raises(Cod3sPlatformImportError, match="role=prod_init.*expects a output"):
+        with pytest.raises(
+            Cod3sPlatformImportError, match="role=prod_init.*expects a output"
+        ):
             _apply_instance_overrides(
                 flows, {("in_a", "prod_init"): True}, comp_name="c"
             )
@@ -180,7 +184,9 @@ class TestApplyInstanceOverrides:
 
     def test_rejects_var_in_default_on_output(self):
         flows = self._flows()
-        with pytest.raises(Cod3sPlatformImportError, match="role=var_in_default.*expects a input"):
+        with pytest.raises(
+            Cod3sPlatformImportError, match="role=var_in_default.*expects a input"
+        ):
             _apply_instance_overrides(
                 flows, {("out_x", "var_in_default"): True}, comp_name="c"
             )
@@ -249,9 +255,13 @@ def _payload(component_attributes):
 
 class TestEndToEndOverrides:
     def test_logic_override_propagated_through_parse(self):
-        ctx = parse_platform_export(_payload([
-            {"name": "in_a", "role": "logic_in", "value": "3"},
-        ]))
+        ctx = parse_platform_export(
+            _payload(
+                [
+                    {"name": "in_a", "role": "logic_in", "value": "3"},
+                ]
+            )
+        )
         comp = ctx.components[0]
         in_a = next(f for f in comp.flows if f.name == "in_a")
         assert in_a.logic == 3
@@ -260,18 +270,26 @@ class TestEndToEndOverrides:
         assert out_x.init_value is None
 
     def test_init_override_propagated_through_parse(self):
-        ctx = parse_platform_export(_payload([
-            {"name": "out_x", "role": "prod_init", "value": True},
-        ]))
+        ctx = parse_platform_export(
+            _payload(
+                [
+                    {"name": "out_x", "role": "prod_init", "value": True},
+                ]
+            )
+        )
         comp = ctx.components[0]
         out_x = next(f for f in comp.flows if f.name == "out_x")
         assert out_x.init_value is True
 
     def test_combined_logic_and_init_overrides(self):
-        ctx = parse_platform_export(_payload([
-            {"name": "in_a", "role": "logic_in", "value": "and"},
-            {"name": "out_x", "role": "prod_init", "value": True},
-        ]))
+        ctx = parse_platform_export(
+            _payload(
+                [
+                    {"name": "in_a", "role": "logic_in", "value": "and"},
+                    {"name": "out_x", "role": "prod_init", "value": True},
+                ]
+            )
+        )
         comp = ctx.components[0]
         in_a = next(f for f in comp.flows if f.name == "in_a")
         out_x = next(f for f in comp.flows if f.name == "out_x")
@@ -280,17 +298,25 @@ class TestEndToEndOverrides:
 
     def test_fed_in_attribute_does_not_override(self):
         # role=fed_in is a runtime observable — must be ignored.
-        ctx = parse_platform_export(_payload([
-            {"name": "in_a", "role": "fed_in", "value": True},
-        ]))
+        ctx = parse_platform_export(
+            _payload(
+                [
+                    {"name": "in_a", "role": "fed_in", "value": True},
+                ]
+            )
+        )
         comp = ctx.components[0]
         in_a = next(f for f in comp.flows if f.name == "in_a")
         assert in_a.logic == "or"  # KB default unchanged
 
     def test_overrides_persisted_in_component_metadata(self):
-        ctx = parse_platform_export(_payload([
-            {"name": "in_a", "role": "logic_in", "value": "2"},
-        ]))
+        ctx = parse_platform_export(
+            _payload(
+                [
+                    {"name": "in_a", "role": "logic_in", "value": "2"},
+                ]
+            )
+        )
         comp = ctx.components[0]
         # Traceability: instance_overrides bag carries the raw map
         assert comp.metadata["instance_overrides"] == {("in_a", "logic_in"): "2"}
@@ -310,33 +336,48 @@ class TestParseInitValue:
 
     def test_native_true(self):
         from muscadet.importers.cod3s_platform import _parse_init_value
+
         assert _parse_init_value(True, flow_name="x", comp_name="c") is True
 
     def test_native_false(self):
         from muscadet.importers.cod3s_platform import _parse_init_value
+
         assert _parse_init_value(False, flow_name="x", comp_name="c") is False
 
     def test_string_true_canonical(self):
         from muscadet.importers.cod3s_platform import _parse_init_value
+
         assert _parse_init_value("true", flow_name="x", comp_name="c") is True
         assert _parse_init_value(" TRUE ", flow_name="x", comp_name="c") is True
         assert _parse_init_value("1", flow_name="x", comp_name="c") is True
 
     def test_string_false_not_silently_truthy(self):
-        from muscadet.importers.cod3s_platform import _parse_init_value, Cod3sPlatformImportError
+        from muscadet.importers.cod3s_platform import (
+            Cod3sPlatformImportError,
+            _parse_init_value,
+        )
+
         # The bug we guard against: bool("false") == True in pure Python.
         assert _parse_init_value("false", flow_name="x", comp_name="c") is False
         assert _parse_init_value("0", flow_name="x", comp_name="c") is False
 
     def test_arbitrary_string_rejected(self):
-        from muscadet.importers.cod3s_platform import _parse_init_value, Cod3sPlatformImportError
+        from muscadet.importers.cod3s_platform import (
+            Cod3sPlatformImportError,
+            _parse_init_value,
+        )
+
         with pytest.raises(Cod3sPlatformImportError, match="invalid init"):
             _parse_init_value("yes", flow_name="x", comp_name="c")
         with pytest.raises(Cod3sPlatformImportError, match="invalid init"):
             _parse_init_value("abc", flow_name="x", comp_name="c")
 
     def test_non_string_non_bool_rejected(self):
-        from muscadet.importers.cod3s_platform import _parse_init_value, Cod3sPlatformImportError
+        from muscadet.importers.cod3s_platform import (
+            Cod3sPlatformImportError,
+            _parse_init_value,
+        )
+
         with pytest.raises(Cod3sPlatformImportError, match="invalid init"):
             _parse_init_value(1, flow_name="x", comp_name="c")
         with pytest.raises(Cod3sPlatformImportError, match="invalid init"):
@@ -350,22 +391,36 @@ class TestUnknownRoleHandling:
 
     def test_unknown_role_logs_warning(self, caplog):
         import logging
+
         from muscadet.importers.cod3s_platform import _build_overrides_index
-        with caplog.at_level(logging.WARNING, logger="muscadet.importers.cod3s_platform"):
-            idx = _build_overrides_index([
-                {"name": "x", "role": "spurious", "value": "y"},
-            ])
+
+        with caplog.at_level(
+            logging.WARNING, logger="muscadet.importers.cod3s_platform"
+        ):
+            idx = _build_overrides_index(
+                [
+                    {"name": "x", "role": "spurious", "value": "y"},
+                ]
+            )
         assert idx == {}
-        assert any("Unknown attribute role" in rec.getMessage() for rec in caplog.records)
+        assert any(
+            "Unknown attribute role" in rec.getMessage() for rec in caplog.records
+        )
 
     def test_observable_role_silent(self, caplog):
         import logging
+
         from muscadet.importers.cod3s_platform import _build_overrides_index
-        with caplog.at_level(logging.WARNING, logger="muscadet.importers.cod3s_platform"):
-            idx = _build_overrides_index([
-                {"name": "x", "role": "is_available", "value": True},
-                {"name": "y", "role": "fed_in", "value": False},
-            ])
+
+        with caplog.at_level(
+            logging.WARNING, logger="muscadet.importers.cod3s_platform"
+        ):
+            idx = _build_overrides_index(
+                [
+                    {"name": "x", "role": "is_available", "value": True},
+                    {"name": "y", "role": "fed_in", "value": False},
+                ]
+            )
         assert idx == {}
         # No warning for observable roles — they're a known taxonomy.
         assert not any("Unknown" in rec.getMessage() for rec in caplog.records)
@@ -376,20 +431,30 @@ class TestInputLogicWhitespace:
 
     def test_whitespace_string_int(self):
         from muscadet.importers.cod3s_platform import _parse_input_logic_value
+
         assert _parse_input_logic_value(" 2 ", flow_name="x", comp_name="c") == 2
 
     def test_whitespace_string_keyword(self):
         from muscadet.importers.cod3s_platform import _parse_input_logic_value
+
         assert _parse_input_logic_value(" or ", flow_name="x", comp_name="c") == "or"
         assert _parse_input_logic_value(" and ", flow_name="x", comp_name="c") == "and"
 
     def test_float_string_rejected(self):
-        from muscadet.importers.cod3s_platform import _parse_input_logic_value, Cod3sPlatformImportError
+        from muscadet.importers.cod3s_platform import (
+            Cod3sPlatformImportError,
+            _parse_input_logic_value,
+        )
+
         with pytest.raises(Cod3sPlatformImportError, match="invalid logic"):
             _parse_input_logic_value("2.5", flow_name="x", comp_name="c")
 
     def test_empty_string_rejected(self):
-        from muscadet.importers.cod3s_platform import _parse_input_logic_value, Cod3sPlatformImportError
+        from muscadet.importers.cod3s_platform import (
+            Cod3sPlatformImportError,
+            _parse_input_logic_value,
+        )
+
         with pytest.raises(Cod3sPlatformImportError, match="invalid logic"):
             _parse_input_logic_value("", flow_name="x", comp_name="c")
 
@@ -404,17 +469,24 @@ class TestInputLogicWhitespace:
 
 class TestServiceFunctionActiveInit:
     def test_build_overrides_index_keeps_active_init(self):
-        idx = _build_overrides_index([
-            {"name": "SRVFEU", "role": "active_init", "value": False},
-        ])
+        idx = _build_overrides_index(
+            [
+                {"name": "SRVFEU", "role": "active_init", "value": False},
+            ]
+        )
         assert idx == {("SRVFEU", "active_init"): False}
 
     def test_build_overrides_index_skips_is_active_observable(self):
         # is_active is a runtime observable (the effect target), never a
         # config override on the parse layer.
-        assert _build_overrides_index([
-            {"name": "SRVFEU", "role": "is_active", "value": True},
-        ]) == {}
+        assert (
+            _build_overrides_index(
+                [
+                    {"name": "SRVFEU", "role": "is_active", "value": True},
+                ]
+            )
+            == {}
+        )
 
     def test_apply_active_init_sets_is_active_default(self):
         flows = [
@@ -431,45 +503,56 @@ class TestServiceFunctionActiveInit:
 
     def test_rejects_active_init_on_input(self):
         flows = [FlowSpec(name="in_a", direction="input", logic="or")]
-        with pytest.raises(Cod3sPlatformImportError, match="role=active_init.*expects a output"):
+        with pytest.raises(
+            Cod3sPlatformImportError, match="role=active_init.*expects a output"
+        ):
             _apply_instance_overrides(
                 flows, {("in_a", "active_init"): False}, comp_name="c"
             )
 
     def test_end_to_end_active_init_propagated(self):
         # A service-function output WITH a prod_cond + active_init=False.
-        ctx = parse_platform_export({
-            "model": {
-                "name": "M",
-                "kb": {"name": "KB", "version": "1.0.0"},
-                "elements": {
-                    "components": {
-                        "c1": {
-                            "name": "C1",
-                            "class_name": "Cls",
-                            "attributes": [
-                                {"name": "SRVFEU", "role": "active_init", "value": False},
-                            ],
+        ctx = parse_platform_export(
+            {
+                "model": {
+                    "name": "M",
+                    "kb": {"name": "KB", "version": "1.0.0"},
+                    "elements": {
+                        "components": {
+                            "c1": {
+                                "name": "C1",
+                                "class_name": "Cls",
+                                "attributes": [
+                                    {
+                                        "name": "SRVFEU",
+                                        "role": "active_init",
+                                        "value": False,
+                                    },
+                                ],
+                            },
                         },
+                        "connections": {},
                     },
-                    "connections": {},
                 },
-            },
-            "kb": {
-                "component_templates": {
-                    "Cls": {
-                        "interfaces": {
-                            "in_a__input": {"name": "in_a", "port_type": {"general": "input"}},
-                            "SRVFEU__output": {
-                                "name": "SRVFEU",
-                                "port_type": {"general": "output"},
-                                "prod_cond": [["in_a"]],
+                "kb": {
+                    "component_templates": {
+                        "Cls": {
+                            "interfaces": {
+                                "in_a__input": {
+                                    "name": "in_a",
+                                    "port_type": {"general": "input"},
+                                },
+                                "SRVFEU__output": {
+                                    "name": "SRVFEU",
+                                    "port_type": {"general": "output"},
+                                    "prod_cond": [["in_a"]],
+                                },
                             },
                         },
                     },
                 },
-            },
-        })
+            }
+        )
         comp = ctx.components[0]
         srv = next(f for f in comp.flows if f.name == "SRVFEU")
         assert srv.is_active_default is False
@@ -483,38 +566,47 @@ class TestServiceFunctionActiveInit:
         # var_fed = var_prod AND var_is_active AND var_fed_available_out).
         from muscadet.importers.cod3s_platform import system_from_export
 
-        system = system_from_export({
-            "model": {
-                "name": "Msvc",
-                "kb": {"name": "KB", "version": "1.0.0"},
-                "elements": {
-                    "components": {
-                        "c1": {
-                            "name": "C1",
-                            "class_name": "Cls",
-                            "attributes": [
-                                {"name": "SRVFEU", "role": "active_init", "value": False},
-                            ],
+        system = system_from_export(
+            {
+                "model": {
+                    "name": "Msvc",
+                    "kb": {"name": "KB", "version": "1.0.0"},
+                    "elements": {
+                        "components": {
+                            "c1": {
+                                "name": "C1",
+                                "class_name": "Cls",
+                                "attributes": [
+                                    {
+                                        "name": "SRVFEU",
+                                        "role": "active_init",
+                                        "value": False,
+                                    },
+                                ],
+                            },
                         },
+                        "connections": {},
                     },
-                    "connections": {},
                 },
-            },
-            "kb": {
-                "component_templates": {
-                    "Cls": {
-                        "interfaces": {
-                            "in_a__input": {"name": "in_a", "port_type": {"general": "input"}},
-                            "SRVFEU__output": {
-                                "name": "SRVFEU",
-                                "port_type": {"general": "output"},
-                                "prod_cond": [["in_a"]],
+                "kb": {
+                    "component_templates": {
+                        "Cls": {
+                            "interfaces": {
+                                "in_a__input": {
+                                    "name": "in_a",
+                                    "port_type": {"general": "input"},
+                                },
+                                "SRVFEU__output": {
+                                    "name": "SRVFEU",
+                                    "port_type": {"general": "output"},
+                                    "prod_cond": [["in_a"]],
+                                },
                             },
                         },
                     },
                 },
-            },
-        })
+            }
+        )
         cleanup_system.append(system)
         comp = system.comp["C1"]
         srv = comp.flows_out["SRVFEU"]
@@ -524,27 +616,32 @@ class TestServiceFunctionActiveInit:
         # No active_init override → normal flow stays always-active (default).
         from muscadet.importers.cod3s_platform import system_from_export
 
-        system = system_from_export({
-            "model": {
-                "name": "Mnorm",
-                "kb": {"name": "KB", "version": "1.0.0"},
-                "elements": {
-                    "components": {
-                        "c1": {"name": "C1", "class_name": "Cls", "attributes": []},
+        system = system_from_export(
+            {
+                "model": {
+                    "name": "Mnorm",
+                    "kb": {"name": "KB", "version": "1.0.0"},
+                    "elements": {
+                        "components": {
+                            "c1": {"name": "C1", "class_name": "Cls", "attributes": []},
+                        },
+                        "connections": {},
                     },
-                    "connections": {},
                 },
-            },
-            "kb": {
-                "component_templates": {
-                    "Cls": {
-                        "interfaces": {
-                            "out_x__output": {"name": "out_x", "port_type": {"general": "output"}},
+                "kb": {
+                    "component_templates": {
+                        "Cls": {
+                            "interfaces": {
+                                "out_x__output": {
+                                    "name": "out_x",
+                                    "port_type": {"general": "output"},
+                                },
+                            },
                         },
                     },
                 },
-            },
-        })
+            }
+        )
         cleanup_system.append(system)
         comp = system.comp["C1"]
         assert comp.flows_out["out_x"].var_is_active_default is True
@@ -560,9 +657,11 @@ class TestServiceFunctionActiveInit:
 
 class TestServiceFunctionFedAvailableInit:
     def test_build_overrides_index_keeps_fed_available_init(self):
-        idx = _build_overrides_index([
-            {"name": "SRVFEU", "role": "fed_available_init", "value": False},
-        ])
+        idx = _build_overrides_index(
+            [
+                {"name": "SRVFEU", "role": "fed_available_init", "value": False},
+            ]
+        )
         assert idx == {("SRVFEU", "fed_available_init"): False}
 
     def test_apply_fed_available_init_sets_flowspec_field(self):
@@ -582,7 +681,9 @@ class TestServiceFunctionFedAvailableInit:
 
     def test_rejects_fed_available_init_on_input(self):
         flows = [FlowSpec(name="in_a", direction="input", logic="or")]
-        with pytest.raises(Cod3sPlatformImportError, match="role=fed_available_init.*expects a output"):
+        with pytest.raises(
+            Cod3sPlatformImportError, match="role=fed_available_init.*expects a output"
+        ):
             _apply_instance_overrides(
                 flows, {("in_a", "fed_available_init"): False}, comp_name="c"
             )
@@ -590,63 +691,81 @@ class TestServiceFunctionFedAvailableInit:
     def test_runtime_flowout_gets_var_fed_available_out_init(self, cleanup_system):
         from muscadet.importers.cod3s_platform import system_from_export
 
-        system = system_from_export({
-            "model": {
-                "name": "Msvc_avail",
-                "kb": {"name": "KB", "version": "1.0.0"},
-                "elements": {
-                    "components": {
-                        "c1": {
-                            "name": "C1",
-                            "class_name": "Cls",
-                            "attributes": [
-                                {"name": "SRVFEU", "role": "fed_available_init", "value": False},
-                            ],
+        system = system_from_export(
+            {
+                "model": {
+                    "name": "Msvc_avail",
+                    "kb": {"name": "KB", "version": "1.0.0"},
+                    "elements": {
+                        "components": {
+                            "c1": {
+                                "name": "C1",
+                                "class_name": "Cls",
+                                "attributes": [
+                                    {
+                                        "name": "SRVFEU",
+                                        "role": "fed_available_init",
+                                        "value": False,
+                                    },
+                                ],
+                            },
                         },
+                        "connections": {},
                     },
-                    "connections": {},
                 },
-            },
-            "kb": {
-                "component_templates": {
-                    "Cls": {
-                        "interfaces": {
-                            "in_a__input": {"name": "in_a", "port_type": {"general": "input"}},
-                            "SRVFEU__output": {
-                                "name": "SRVFEU",
-                                "port_type": {"general": "output"},
-                                "prod_cond": [["in_a"]],
+                "kb": {
+                    "component_templates": {
+                        "Cls": {
+                            "interfaces": {
+                                "in_a__input": {
+                                    "name": "in_a",
+                                    "port_type": {"general": "input"},
+                                },
+                                "SRVFEU__output": {
+                                    "name": "SRVFEU",
+                                    "port_type": {"general": "output"},
+                                    "prod_cond": [["in_a"]],
+                                },
                             },
                         },
                     },
                 },
-            },
-        })
+            }
+        )
         cleanup_system.append(system)
         srv = system.comp["C1"].flows_out["SRVFEU"]
         assert srv.var_fed_available_out_init is False
 
-    def test_runtime_normal_flow_keeps_fed_available_out_init_true(self, cleanup_system):
+    def test_runtime_normal_flow_keeps_fed_available_out_init_true(
+        self, cleanup_system
+    ):
         from muscadet.importers.cod3s_platform import system_from_export
 
-        system = system_from_export({
-            "model": {
-                "name": "Mnorm_avail",
-                "kb": {"name": "KB", "version": "1.0.0"},
-                "elements": {
-                    "components": {"c1": {"name": "C1", "class_name": "Cls", "attributes": []}},
-                    "connections": {},
+        system = system_from_export(
+            {
+                "model": {
+                    "name": "Mnorm_avail",
+                    "kb": {"name": "KB", "version": "1.0.0"},
+                    "elements": {
+                        "components": {
+                            "c1": {"name": "C1", "class_name": "Cls", "attributes": []}
+                        },
+                        "connections": {},
+                    },
                 },
-            },
-            "kb": {
-                "component_templates": {
-                    "Cls": {
-                        "interfaces": {
-                            "out_x__output": {"name": "out_x", "port_type": {"general": "output"}},
+                "kb": {
+                    "component_templates": {
+                        "Cls": {
+                            "interfaces": {
+                                "out_x__output": {
+                                    "name": "out_x",
+                                    "port_type": {"general": "output"},
+                                },
+                            },
                         },
                     },
                 },
-            },
-        })
+            }
+        )
         cleanup_system.append(system)
         assert system.comp["C1"].flows_out["out_x"].var_fed_available_out_init is True

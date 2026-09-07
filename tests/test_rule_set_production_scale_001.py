@@ -54,8 +54,9 @@ lives in the one system below, driven through a single interactive session.
 import math
 
 import cod3s
-import muscadet
 import pytest
+
+import muscadet
 
 #: Tick of the interactive session, and how far it is driven.
 RSP_TICK = 0.5

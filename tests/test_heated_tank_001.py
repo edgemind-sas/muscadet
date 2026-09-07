@@ -90,9 +90,9 @@ true and which a third rule guard reads through ``port="out"``.
 
 import math
 
+import cod3s
 import pytest
 
-import cod3s
 import muscadet
 from muscadet.kb.continuous import (  # noqa: F401
     CapacityContinuous,

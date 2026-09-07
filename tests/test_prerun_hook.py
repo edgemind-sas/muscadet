@@ -15,9 +15,10 @@ entry point, so "it ran" and "it ran first" are distinguishable.
 
 import contextlib
 
-import muscadet
 import cod3s
 import pytest
+
+import muscadet
 
 
 def simu_params():

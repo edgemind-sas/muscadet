@@ -27,10 +27,10 @@ each produced and the last is kept alive for the teardown.
 """
 
 import cod3s
-import muscadet
 import pytest
-
 from cod3s.pycatshoo.isimu.engine import ISimuEngine
+
+import muscadet
 
 # Imported for their side effect: a component class resolves by name.
 from muscadet.kb.continuous import (  # noqa: F401

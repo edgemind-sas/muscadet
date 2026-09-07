@@ -4,9 +4,10 @@ together, regardless of direction or connection path (``connect_flow``,
 discrete trigger source with a discrete triggered output.
 """
 
-import muscadet
 import cod3s
 import pytest
+
+import muscadet
 
 
 @pytest.fixture(scope="module")

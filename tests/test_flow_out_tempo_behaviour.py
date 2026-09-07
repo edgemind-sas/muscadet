@@ -14,10 +14,10 @@ Three properties are locked here with the deterministic interactive simulation:
 Cf. the tempo finalisation chantier (2026-07).
 """
 
-import muscadet
-
 import cod3s
 import pytest
+
+import muscadet
 
 
 @pytest.fixture(scope="module")

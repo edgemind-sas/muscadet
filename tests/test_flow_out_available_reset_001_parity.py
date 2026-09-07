@@ -11,9 +11,10 @@ This locks the parity gate of the primitive:
   * the runtime gate reverts after a momentary set + retract (behavioural).
 """
 
-import muscadet
 import cod3s
 import pytest
+
+import muscadet
 
 GATE = "S_fed_available_out"
 

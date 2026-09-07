@@ -4,9 +4,10 @@ Declaration-time only: rules are declared, normalised, validated and stored.
 Nothing here evaluates a rule or runs a simulation.
 """
 
-import muscadet
 import cod3s
 import pytest
+
+import muscadet
 
 # The user's reference example: three ordered rules on a component carrying a
 # discrete input F4, three continuous inputs F1/F2/F3 and a continuous output X.

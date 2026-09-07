@@ -19,9 +19,10 @@ Notable translations from the muscadet wrapper:
    The outer list is an OR (default), the inner list is an AND (default).
 """
 
-import muscadet
 import cod3s
 import pytest
+
+import muscadet
 
 
 @pytest.fixture(scope="module")

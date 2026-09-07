@@ -5,9 +5,10 @@ sensitive method must recompute and propagate the new result downstream.
 This proves the automaton-free gate reacts to runtime changes, not only at init.
 """
 
-import muscadet
 import cod3s
 import pytest
+
+import muscadet
 
 
 class SD(muscadet.ObjFlow):

@@ -57,9 +57,9 @@ one-for-one coefficient.
 
 import math
 
+import cod3s
 import pytest
 
-import cod3s
 import muscadet
 import muscadet.kb.continuous  # noqa: F401  -- registers the shipped classes
 

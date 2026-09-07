@@ -20,9 +20,9 @@ to delete.
 
 import math
 
+import cod3s
 import pytest
 
-import cod3s
 import muscadet
 
 

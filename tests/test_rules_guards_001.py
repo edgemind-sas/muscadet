@@ -28,10 +28,10 @@ three rules -- ``F4`` false: 3.F3 + 2.F2 -> 2.X; ``F4`` true and F1 < 10: no
 production; ``F4`` true and F1 >= 10: 3.F1 -> 0.5.X.
 """
 
-import muscadet
 import cod3s
 import pytest
 
+import muscadet
 from muscadet import rules
 
 #: Horizon the interactive session runs to, so every mode has settled.

@@ -5,9 +5,10 @@ draws) integrates with muscadet ObjFlow components, mirroring the
 ``add_delay_failure_mode`` shortcut used in the k/n tests.
 """
 
-import muscadet
 import cod3s
 import pytest
+
+import muscadet
 
 
 @pytest.fixture(scope="module")

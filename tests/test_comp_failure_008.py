@@ -1,8 +1,9 @@
-import muscadet
+import itertools
 
 import cod3s
 import pytest
-import itertools
+
+import muscadet
 
 
 @pytest.fixture(scope="module")

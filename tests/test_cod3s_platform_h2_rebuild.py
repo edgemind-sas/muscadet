@@ -29,14 +29,8 @@ variable, and the mode declared afterwards finds it and reuses it.
 
 import math
 
-import pytest
-
 import cod3s
-import muscadet
-import muscadet.kb.continuous  # noqa: F401  -- registers the shipped classes
-
-from muscadet.importers.cod3s_platform import system_from_export
-
+import pytest
 from test_h2_stack_001 import (
     H2_BATTERY_CAPACITY,
     H2_BATTERY_CONTENT,
@@ -52,6 +46,10 @@ from test_h2_stack_001 import (
     H2_TANK_CONTENT,
     H2_TANK_FILL_RATE,
 )
+
+import muscadet
+import muscadet.kb.continuous  # noqa: F401  -- registers the shipped classes
+from muscadet.importers.cod3s_platform import system_from_export
 
 # ---------------------------------------------------------------------------
 # The payload: the same plant, written as the platform would export it

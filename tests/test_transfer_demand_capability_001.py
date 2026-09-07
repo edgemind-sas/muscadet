@@ -21,9 +21,9 @@ PyCATSHOO forbids more than one live system per process, so every chain lives
 in the one system below.
 """
 
+import cod3s
 import pytest
 
-import cod3s
 import muscadet
 
 TDC_CLOCK = 5.0

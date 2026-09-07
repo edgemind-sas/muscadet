@@ -10,7 +10,6 @@ import pytest
 
 from muscadet.builders import PlatformExportBuilder
 
-
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "minimal_export.json"
 
 

@@ -119,11 +119,10 @@ import math
 import statistics
 import typing
 
+import cod3s
 import Pycatshoo as pyc
 import pydantic
 from colored import attr, fg
-
-import cod3s
 
 from .common import entity_label, fresh_instant_occ_law
 from .flow import add_cond_threshold_automata, cond_readers, prod_cond_holds

@@ -22,11 +22,11 @@ is built, driven and deleted before the next one starts; the fixture snapshots
 what each produced.
 """
 
-import Pycatshoo as pyc
 import cod3s
-import muscadet
+import Pycatshoo as pyc
 import pytest
 
+import muscadet
 from muscadet import ordering
 
 #: Recording of every stub equation call, in the order the engine made them.

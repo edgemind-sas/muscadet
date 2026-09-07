@@ -19,8 +19,9 @@ excess to the constituents that were flowing in rather than to every one.
 import math
 
 import cod3s
-import muscadet
 import pytest
+
+import muscadet
 from muscadet.kb.continuous import (  # noqa: F401
     CapacityContinuous,
     ConsumerContinuous,

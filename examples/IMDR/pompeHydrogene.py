@@ -1,6 +1,7 @@
 import muscadet
 import muscadet.kb.datacenter as dc
 
+
 # Global Class
 # ===============
 class Electrolyseur(muscadet.ObjFlow):

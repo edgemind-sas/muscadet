@@ -30,9 +30,10 @@ PyCATSHOO forbids more than one live system per process, so every scenario
 lives in the one system below.
 """
 
-import muscadet
 import cod3s
 import pytest
+
+import muscadet
 
 #: A date the interactive session can always step to, so the equations run.
 CST_CLOCK = 5.0

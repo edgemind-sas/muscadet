@@ -155,9 +155,8 @@ components were declared in.
 
 import typing
 
-import pydantic
-
 import cod3s
+import pydantic
 
 from .capacity import (
     COMBINE_MAX,

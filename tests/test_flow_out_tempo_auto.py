@@ -19,10 +19,10 @@ The shutdown assertions are what guard the ``_disable`` transition, whose condit
 used to be registered under the ``_enable`` condition name (cf. issue #1).
 """
 
-import muscadet
-
 import cod3s
 import pytest
+
+import muscadet
 
 
 @pytest.fixture(scope="module")
@@ -105,9 +105,7 @@ def the_system():
 def _value(system, indicator_name, instant):
     """Read one indicator value at one instant from the simulation results."""
     frame = system.indic_to_frame()
-    rows = frame[
-        (frame["name"] == indicator_name) & (frame["instant"] == instant)
-    ]
+    rows = frame[(frame["name"] == indicator_name) & (frame["instant"] == instant)]
     assert not rows.empty, f"no value for {indicator_name} at t={instant}"
     return rows["values"].iloc[0]
 

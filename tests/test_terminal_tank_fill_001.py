@@ -38,8 +38,9 @@ and the last is kept alive for the teardown.
 import math
 
 import cod3s
-import muscadet
 import pytest
+
+import muscadet
 
 # Imported for their side effect too: a component class resolves by name, so
 # declaring cls="SourceContinuous" needs the class to have been imported.

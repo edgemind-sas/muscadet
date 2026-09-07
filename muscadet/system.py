@@ -1,12 +1,15 @@
+import copy
+import re
+
 import cod3s
 
 from .capacity import MEASUREMENT_LEVEL, MEASUREMENT_RATE, MEASUREMENT_RATIO
-from .obj_logic import LogicOr, LogicAnd
 from .flow_continuous import (
-    FlowContinuous,
     RATE_OBSERVATION_IN_SUFFIX,
     RATE_OBSERVATION_OUT_SUFFIX,
+    FlowContinuous,
 )
+from .obj_logic import LogicAnd, LogicOr
 from .ordering import (
     CAPACITY_ORDER_BASE,
     EquationRegistration,
@@ -14,8 +17,6 @@ from .ordering import (
     component_is_continuous,
     register_equation_order,
 )
-import re
-import copy
 
 #: Name of the single PDMP manager a muscadet system owns. Every continuous
 #: declaration registers on *this* manager, which is what makes PyCATSHOO

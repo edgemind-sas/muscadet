@@ -24,8 +24,9 @@ resolves the message box back to a flow object rather than trusting its name:
 """
 
 import cod3s
-import muscadet
 import pytest
+
+import muscadet
 
 # Imported for their side effect: a component class resolves by name.
 from muscadet.kb.continuous import (  # noqa: F401

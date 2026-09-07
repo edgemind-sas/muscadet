@@ -12,9 +12,10 @@ and the interactive session must advance monotonically for the crossing dates to
 mean anything.
 """
 
-import muscadet
 import cod3s
 import pytest
+
+import muscadet
 
 # Analytic crossing dates of the two bounded tanks below. Both are reached long
 # before the horizon clock, which is the whole point of watching the bounds.

@@ -13,9 +13,10 @@ covered by the existing ``test_flow_out_tempo.py`` and
 ``test_flow_out_trigger_001.py`` (which stay green unchanged).
 """
 
-import muscadet
 import cod3s
 import pytest
+
+import muscadet
 
 
 class TempoPersistentComp(muscadet.ObjFlow):

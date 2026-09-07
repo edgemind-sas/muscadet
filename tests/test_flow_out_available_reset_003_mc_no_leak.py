@@ -17,9 +17,10 @@ Two checks:
   * NO-LEAK: Persist @ t=0 (start of each sequence, BEFORE the pulse) ~ 0.
 """
 
-import muscadet
 import cod3s
 import pytest
+
+import muscadet
 
 GATE = "S_fed_available_out"
 PULSE_DELAY = 0.5

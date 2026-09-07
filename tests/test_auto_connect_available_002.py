@@ -4,9 +4,10 @@ i.e. uses ``flows_out["f1"]`` / ``flows_in["f1"]`` for the auth
 check (not the suffixed name ``"f1_available"``).
 """
 
-import muscadet
 import cod3s
 import pytest
+
+import muscadet
 
 
 @pytest.fixture(scope="module")

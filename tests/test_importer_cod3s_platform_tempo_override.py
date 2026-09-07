@@ -20,9 +20,9 @@ flow behaves exactly like a classic one.
 import pytest
 
 from muscadet.importers.cod3s_platform import (
+    _SUPPORTS_INSTANCE_TEMPO_OVERRIDE,
     Cod3sPlatformImportError,
     FlowSpec,
-    _SUPPORTS_INSTANCE_TEMPO_OVERRIDE,
     _apply_instance_overrides,
     _build_overrides_index,
     _derive_output_flow_type,
@@ -63,14 +63,24 @@ class TestDeriveOutputFlowType:
         assert _derive_output_flow_type(self._out()) == "classic"
 
     def test_enable_law_is_tempo(self):
-        assert _derive_output_flow_type(self._out(occ_enable={"cls": "delay", "time": 3})) == "tempo"
+        assert (
+            _derive_output_flow_type(self._out(occ_enable={"cls": "delay", "time": 3}))
+            == "tempo"
+        )
 
     def test_disable_law_is_tempo(self):
-        assert _derive_output_flow_type(self._out(occ_disable={"cls": "exp", "rate": 1e-3})) == "tempo"
+        assert (
+            _derive_output_flow_type(
+                self._out(occ_disable={"cls": "exp", "rate": 1e-3})
+            )
+            == "tempo"
+        )
 
     def test_on_trigger_is_preserved(self):
         # on_trigger is a distinct flow class, never derived from occ laws.
-        assert _derive_output_flow_type(self._out(flow_type="on_trigger")) == "on_trigger"
+        assert (
+            _derive_output_flow_type(self._out(flow_type="on_trigger")) == "on_trigger"
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -80,23 +90,40 @@ class TestDeriveOutputFlowType:
 
 class TestBuildOverridesIndexTempo:
     def test_keeps_tempo_law_dict(self):
-        idx = _build_overrides_index([
-            {"name": "flow", "role": "tempo_activation", "value": {"cls": "delay", "time": 3}},
-        ])
+        idx = _build_overrides_index(
+            [
+                {
+                    "name": "flow",
+                    "role": "tempo_activation",
+                    "value": {"cls": "delay", "time": 3},
+                },
+            ]
+        )
         assert idx == {("flow", "tempo_activation"): {"cls": "delay", "time": 3}}
 
     def test_keeps_none_sentinel(self):
         # {"cls": "none"} is a real (non-None) value: force classic. Kept.
-        idx = _build_overrides_index([
-            {"name": "flow", "role": "tempo_deactivation", "value": {"cls": "none"}},
-        ])
+        idx = _build_overrides_index(
+            [
+                {
+                    "name": "flow",
+                    "role": "tempo_deactivation",
+                    "value": {"cls": "none"},
+                },
+            ]
+        )
         assert idx == {("flow", "tempo_deactivation"): {"cls": "none"}}
 
     def test_drops_null_value_inherit(self):
         # value=None means inherit the KB default — dropped.
-        assert _build_overrides_index([
-            {"name": "flow", "role": "tempo_activation", "value": None},
-        ]) == {}
+        assert (
+            _build_overrides_index(
+                [
+                    {"name": "flow", "role": "tempo_activation", "value": None},
+                ]
+            )
+            == {}
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -117,7 +144,9 @@ class TestApplyTempoOverride:
     def test_activation_on_classic_promotes_to_tempo(self):
         flows = self._flows()  # classic (no law)
         result = _apply_instance_overrides(
-            flows, {("flow", "tempo_activation"): {"cls": "delay", "time": 3}}, comp_name="c"
+            flows,
+            {("flow", "tempo_activation"): {"cls": "delay", "time": 3}},
+            comp_name="c",
         )
         out = self._out(result)
         assert out.occ_enable == {"cls": "delay", "time": 3}
@@ -126,7 +155,9 @@ class TestApplyTempoOverride:
     def test_deactivation_sets_disable_law(self):
         flows = self._flows()
         result = _apply_instance_overrides(
-            flows, {("flow", "tempo_deactivation"): {"cls": "exp", "rate": 1e-3}}, comp_name="c"
+            flows,
+            {("flow", "tempo_deactivation"): {"cls": "exp", "rate": 1e-3}},
+            comp_name="c",
         )
         out = self._out(result)
         assert out.occ_disable == {"cls": "exp", "rate": 1e-3}
@@ -174,9 +205,13 @@ class TestApplyTempoOverride:
 
     def test_rejects_tempo_on_input(self):
         flows = self._flows()
-        with pytest.raises(Cod3sPlatformImportError, match="role=tempo_activation.*expects a output"):
+        with pytest.raises(
+            Cod3sPlatformImportError, match="role=tempo_activation.*expects a output"
+        ):
             _apply_instance_overrides(
-                flows, {("in_a", "tempo_activation"): {"cls": "delay", "time": 1}}, comp_name="c"
+                flows,
+                {("in_a", "tempo_activation"): {"cls": "delay", "time": 1}},
+                comp_name="c",
             )
 
     def test_rejects_malformed_value(self):
@@ -201,7 +236,11 @@ def _payload(component_attributes, out_iface=None):
             "kb": {"name": "KB", "version": "1.0.0"},
             "elements": {
                 "components": {
-                    "c1": {"name": "C1", "class_name": "Cls", "attributes": component_attributes},
+                    "c1": {
+                        "name": "C1",
+                        "class_name": "Cls",
+                        "attributes": component_attributes,
+                    },
                 },
                 "connections": {},
             },
@@ -212,27 +251,51 @@ def _payload(component_attributes, out_iface=None):
 
 class TestEndToEndTempoOverride:
     def test_classic_flow_promoted_by_override(self):
-        ctx = parse_platform_export(_payload([
-            {"name": "flow", "role": "tempo_activation", "value": {"cls": "delay", "time": 3}},
-        ]))
+        ctx = parse_platform_export(
+            _payload(
+                [
+                    {
+                        "name": "flow",
+                        "role": "tempo_activation",
+                        "value": {"cls": "delay", "time": 3},
+                    },
+                ]
+            )
+        )
         flow = next(f for f in ctx.components[0].flows if f.name == "flow")
         assert flow.flow_type == "tempo"
         assert flow.occ_enable == {"cls": "delay", "time": 3}
 
     def test_kb_tempo_demoted_by_sentinel(self):
-        ctx = parse_platform_export(_payload(
-            [{"name": "flow", "role": "tempo_activation", "value": {"cls": "none"}}],
-            out_iface={"flow_type": "tempo", "occ_enable": {"cls": "delay", "time": 5}},
-        ))
+        ctx = parse_platform_export(
+            _payload(
+                [
+                    {
+                        "name": "flow",
+                        "role": "tempo_activation",
+                        "value": {"cls": "none"},
+                    }
+                ],
+                out_iface={
+                    "flow_type": "tempo",
+                    "occ_enable": {"cls": "delay", "time": 5},
+                },
+            )
+        )
         flow = next(f for f in ctx.components[0].flows if f.name == "flow")
         assert flow.flow_type == "classic"
         assert flow.occ_enable is None
 
     def test_no_override_keeps_kb_default(self):
-        ctx = parse_platform_export(_payload(
-            [],
-            out_iface={"flow_type": "tempo", "occ_enable": {"cls": "delay", "time": 5}},
-        ))
+        ctx = parse_platform_export(
+            _payload(
+                [],
+                out_iface={
+                    "flow_type": "tempo",
+                    "occ_enable": {"cls": "delay", "time": 5},
+                },
+            )
+        )
         flow = next(f for f in ctx.components[0].flows if f.name == "flow")
         assert flow.flow_type == "tempo"
         assert flow.occ_enable == {"cls": "delay", "time": 5}
@@ -247,9 +310,17 @@ class TestRuntimeTempoOverride:
     def test_override_builds_flowouttempo(self, cleanup_system):
         from muscadet.importers.cod3s_platform import system_from_export
 
-        system = system_from_export(_payload([
-            {"name": "flow", "role": "tempo_activation", "value": {"cls": "delay", "time": 3}},
-        ]))
+        system = system_from_export(
+            _payload(
+                [
+                    {
+                        "name": "flow",
+                        "role": "tempo_activation",
+                        "value": {"cls": "delay", "time": 3},
+                    },
+                ]
+            )
+        )
         cleanup_system.append(system)
         flow = system.comp["C1"].flows_out["flow"]
         assert type(flow).__name__ == "FlowOutTempo"
@@ -266,10 +337,21 @@ class TestRuntimeTempoOverride:
     def test_sentinel_demote_builds_flowout(self, cleanup_system):
         from muscadet.importers.cod3s_platform import system_from_export
 
-        system = system_from_export(_payload(
-            [{"name": "flow", "role": "tempo_activation", "value": {"cls": "none"}}],
-            out_iface={"flow_type": "tempo", "occ_enable": {"cls": "delay", "time": 5}},
-        ))
+        system = system_from_export(
+            _payload(
+                [
+                    {
+                        "name": "flow",
+                        "role": "tempo_activation",
+                        "value": {"cls": "none"},
+                    }
+                ],
+                out_iface={
+                    "flow_type": "tempo",
+                    "occ_enable": {"cls": "delay", "time": 5},
+                },
+            )
+        )
         cleanup_system.append(system)
         # Demoted to classic -> plain FlowOut (no-law parity path).
         assert type(system.comp["C1"].flows_out["flow"]).__name__ == "FlowOut"

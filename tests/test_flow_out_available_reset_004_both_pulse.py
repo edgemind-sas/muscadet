@@ -20,9 +20,10 @@ import os
 import subprocess
 import sys
 
-import muscadet
 import cod3s
 import pytest
+
+import muscadet
 
 GATE = "X_fed_available_out"
 MU_REPAIR = 5e-2

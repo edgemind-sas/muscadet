@@ -49,9 +49,9 @@ import json
 import math
 
 import cod3s
-import muscadet
 import pytest
 
+import muscadet
 from muscadet import declare
 
 # Imported for their side effect: a component class resolves by name.

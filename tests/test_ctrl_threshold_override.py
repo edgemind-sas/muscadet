@@ -348,8 +348,8 @@ class TestTheEdgesRestatedHereAreTheGrammarsOwn:
     def test_the_operators_carrying_them_are_the_grammars_own(self):
         from muscadet import obj_ctrl
         from muscadet.importers.cod3s_platform import (
-            CONTROLLER_THRESHOLD_EDGES,
             _CONTROLLER_COMBINE_OP,
+            CONTROLLER_THRESHOLD_EDGES,
         )
 
         assert CONTROLLER_THRESHOLD_EDGES[obj_ctrl.CTRL_OP_COMPARE] == (
@@ -556,6 +556,7 @@ class TestTwoThresholdsProjectingOntoOneName:
 @pytest.fixture(scope="module")
 def montage():
     import cod3s
+
     from muscadet.importers.cod3s_platform import system_from_export
 
     system = system_from_export(build_payload())

@@ -31,9 +31,9 @@ lives in the one system below.
 
 import math
 
+import cod3s
 import pytest
 
-import cod3s
 import muscadet
 from muscadet.kb.continuous import (  # noqa: F401
     CapacityContinuous,

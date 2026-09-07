@@ -35,8 +35,9 @@ its system, drives it, and gives it back before the next one starts.
 """
 
 import cod3s
-import muscadet
 import pytest
+
+import muscadet
 from muscadet.derating import solver_owned_endpoints
 from muscadet.kb.continuous import (  # noqa: F401
     CapacityContinuous,

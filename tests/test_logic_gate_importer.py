@@ -31,7 +31,6 @@ muscadet = pytest.importorskip("muscadet")
 
 from muscadet.importers.cod3s_platform import system_from_export  # noqa: E402
 
-
 # ---------------------------------------------------------------------------
 # Payload builders (canonical {model, kb} shape)
 # ---------------------------------------------------------------------------
@@ -94,7 +93,9 @@ def _source_component(name: str, flow: str, on: bool) -> dict:
     }
 
 
-def _gate_component(name: str, class_name: str, *, check_fed: bool = True, k=None) -> dict:
+def _gate_component(
+    name: str, class_name: str, *, check_fed: bool = True, k=None
+) -> dict:
     attrs = [{"name": "check_fed", "value": check_fed}]
     if k is not None:
         attrs.append({"name": "k", "value": k})

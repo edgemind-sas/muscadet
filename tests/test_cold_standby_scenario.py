@@ -14,10 +14,10 @@ Expected: nominal fed by main; a coverage GAP at the failure until the backup's
 startup delay elapses; then the backup takes over.
 """
 
-import muscadet
-
 import cod3s
 import pytest
+
+import muscadet
 
 
 @pytest.fixture(scope="module")

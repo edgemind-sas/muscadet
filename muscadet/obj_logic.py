@@ -1,9 +1,10 @@
-from .obj import ObjFlow
 import re
 
-import Pycatshoo as Pyc
 import cod3s
-from cod3s.pycatshoo.common import sanitize_cond_format, prepare_attr_tree
+import Pycatshoo as Pyc
+from cod3s.pycatshoo.common import prepare_attr_tree, sanitize_cond_format
+
+from .obj import ObjFlow
 
 
 class LogicBase(ObjFlow):

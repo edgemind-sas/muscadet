@@ -52,9 +52,9 @@ at each of them.
 import math
 
 import cod3s
-import muscadet
 import pytest
 
+import muscadet
 from muscadet.flow_continuous import NOMINAL_RATE
 from muscadet.kb.continuous import SourceSinusoidalContinuous  # noqa: F401
 from muscadet.ordering import compute_equation_order

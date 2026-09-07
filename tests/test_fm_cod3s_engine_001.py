@@ -29,10 +29,10 @@ One live system per process, so everything shares one.
 """
 
 import cod3s
-import muscadet
 import pytest
-
 from cod3s.pycatshoo.component import ObjMode2S
+
+import muscadet
 from muscadet.obj import ObjFailureMode, ObjFailureModeDelay, ObjFailureModeExp
 
 #: The wrapper classes warn on instantiation; the deprecation itself is

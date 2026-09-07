@@ -18,7 +18,11 @@ import pytest
 pyc_available = True
 try:
     import muscadet  # noqa: F401
-    from muscadet.obj import ObjFailureMode, ObjFailureModeExp, ObjFailureModeDelay  # noqa: F401
+    from muscadet.obj import (  # noqa: F401
+        ObjFailureMode,
+        ObjFailureModeDelay,
+        ObjFailureModeExp,
+    )
 except Exception:
     pyc_available = False
 

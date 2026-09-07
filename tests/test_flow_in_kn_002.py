@@ -4,9 +4,10 @@ Validates that `var_fed_available` reference is also evaluated with
 `sumValue() >= k` (symmetric with `var_in`), not `andValue()`.
 """
 
-import muscadet
 import cod3s
 import pytest
+
+import muscadet
 
 
 @pytest.fixture(scope="module")

@@ -18,9 +18,9 @@ step, beside the capability channel, which is what
 that the model runs at all.
 """
 
+import cod3s
 import pytest
 
-import cod3s
 import muscadet
 
 TSA_CLOCK = 5.0

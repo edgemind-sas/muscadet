@@ -25,8 +25,9 @@ reads back a snapshot: PyCATSHOO forbids more than one live system per process.
 """
 
 import cod3s
-import muscadet
 import pytest
+
+import muscadet
 
 # Imported for their side effect: a component class resolves by name.
 from muscadet.kb.continuous import (  # noqa: F401

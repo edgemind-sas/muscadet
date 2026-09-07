@@ -10,9 +10,10 @@ is built exactly like the observed tank, wired to nobody, and must integrate to
 the very same level.
 """
 
-import muscadet
 import cod3s
 import pytest
+
+import muscadet
 
 TANK_VOLUME = 100.0
 TANK_INIT = 20.0

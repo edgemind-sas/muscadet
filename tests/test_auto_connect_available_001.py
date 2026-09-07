@@ -7,9 +7,10 @@ because the authorization check looked up ``flows_out["f1_available"]``
 which is not a real key (the key is ``"f1"``).
 """
 
-import muscadet
 import cod3s
 import pytest
+
+import muscadet
 
 
 @pytest.fixture(scope="module")

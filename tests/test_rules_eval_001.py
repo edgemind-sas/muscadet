@@ -23,10 +23,10 @@ per process, so each scenario is built, driven and deleted before the next one
 starts; the fixture snapshots what each produced.
 """
 
-import muscadet
 import cod3s
 import pytest
 
+import muscadet
 from muscadet import ordering, rules
 
 #: A date the interactive session can always step to, so the solver integrates.

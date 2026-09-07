@@ -21,8 +21,9 @@ to mean anything.
 """
 
 import cod3s
-import muscadet
 import pytest
+
+import muscadet
 
 # Imported for their side effect: a component class resolves by name, so
 # declaring cls="SourceContinuous" needs the class to have been imported.

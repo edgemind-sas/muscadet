@@ -48,9 +48,9 @@ produced and the last is kept alive for the teardown.
 import math
 
 import cod3s
-import muscadet
 import pytest
 
+import muscadet
 from muscadet import capability, ordering
 
 # Imported for their side effect: a component class resolves by name.

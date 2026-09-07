@@ -12,8 +12,8 @@ Each test below pins one shape that came back different, or not at all.
 
 import copy
 
-import Pycatshoo as Pyc
 import cod3s
+import Pycatshoo as Pyc
 import pytest
 from cod3s.pycatshoo.automaton import DelayOccDistribution
 

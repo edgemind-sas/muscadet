@@ -7,9 +7,10 @@ toggled by a failure mid-simulation) is covered in
 ``test_logic_gate_dynamic.py``.
 """
 
-import muscadet
 import cod3s
 import pytest
+
+import muscadet
 
 
 class SA(muscadet.ObjFlow):
@@ -66,33 +67,53 @@ def the_system():
 
     # OR(fa=ON, fb=OFF) = True ; heterogeneous flow names fa/fb.
     system.add_component(
-        name="GOR", cls="ObjLogicGate", kind="or",
-        cond=_units(("SA", "fa"), ("SB", "fb")), out_elements=["g"],
+        name="GOR",
+        cls="ObjLogicGate",
+        kind="or",
+        cond=_units(("SA", "fa"), ("SB", "fb")),
+        out_elements=["g"],
     )
     # AND(fa=ON, fb=OFF) = False.
     system.add_component(
-        name="GAND_TF", cls="ObjLogicGate", kind="and",
-        cond=_units(("SA", "fa"), ("SB", "fb")), out_elements=["g"],
+        name="GAND_TF",
+        cls="ObjLogicGate",
+        kind="and",
+        cond=_units(("SA", "fa"), ("SB", "fb")),
+        out_elements=["g"],
     )
     # AND(fa=ON, fc=ON) = True.
     system.add_component(
-        name="GAND_TT", cls="ObjLogicGate", kind="and",
-        cond=_units(("SA", "fa"), ("SC", "fc")), out_elements=["g"],
+        name="GAND_TT",
+        cls="ObjLogicGate",
+        kind="and",
+        cond=_units(("SA", "fa"), ("SC", "fc")),
+        out_elements=["g"],
     )
     # k=2 of (fa=ON, fb=OFF, fc=ON) -> 2 fed -> True.
     system.add_component(
-        name="GK2", cls="ObjLogicGate", kind="k", k=2,
-        cond=_units(("SA", "fa"), ("SB", "fb"), ("SC", "fc")), out_elements=["g"],
+        name="GK2",
+        cls="ObjLogicGate",
+        kind="k",
+        k=2,
+        cond=_units(("SA", "fa"), ("SB", "fb"), ("SC", "fc")),
+        out_elements=["g"],
     )
     # k=3 of the same -> only 2 fed -> False.
     system.add_component(
-        name="GK3", cls="ObjLogicGate", kind="k", k=3,
-        cond=_units(("SA", "fa"), ("SB", "fb"), ("SC", "fc")), out_elements=["g"],
+        name="GK3",
+        cls="ObjLogicGate",
+        kind="k",
+        k=3,
+        cond=_units(("SA", "fa"), ("SB", "fb"), ("SC", "fc")),
+        out_elements=["g"],
     )
     # Broadcast: one gate result to two targets.
     system.add_component(
-        name="GBC", cls="ObjLogicGate", kind="or",
-        cond=_units(("SA", "fa")), out_elements=["g"],
+        name="GBC",
+        cls="ObjLogicGate",
+        kind="or",
+        cond=_units(("SA", "fa")),
+        out_elements=["g"],
     )
 
     pairs = [
@@ -140,7 +161,7 @@ def test_and_true_when_all_on(the_system):
 def test_kofn(the_system):
     the_system.isimu_start()
     try:
-        assert _fed(the_system, "SinkK2") is True   # 2 of 3 fed, k=2
+        assert _fed(the_system, "SinkK2") is True  # 2 of 3 fed, k=2
         assert _fed(the_system, "SinkK3") is False  # 2 of 3 fed, k=3
     finally:
         the_system.isimu_stop()

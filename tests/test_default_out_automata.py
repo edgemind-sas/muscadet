@@ -1,7 +1,8 @@
-import muscadet
 import cod3s
-import pytest
 import kb_project
+import pytest
+
+import muscadet
 
 
 @pytest.fixture(scope="module")

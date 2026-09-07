@@ -34,9 +34,9 @@ after it.
 
 import gc
 
+import cod3s
 import pytest
 
-import cod3s
 import muscadet
 
 #: Horizon the interactive session runs to.

@@ -29,9 +29,10 @@ stop and quantities at the next one, which is what the clock stops below are
 for.
 """
 
-import muscadet
 import cod3s
 import pytest
+
+import muscadet
 
 # Imported for its side effect: a component class resolves by name.
 from muscadet.kb.continuous import CapacityContinuous  # noqa: F401

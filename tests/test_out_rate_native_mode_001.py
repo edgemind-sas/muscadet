@@ -42,9 +42,9 @@ stop and quantities at the next one, which is what the clock stops are for.
 """
 
 import cod3s
-import muscadet
 import pytest
 
+import muscadet
 from muscadet.flow_continuous import NOMINAL_RATE
 
 #: Horizon the interactive session runs to.

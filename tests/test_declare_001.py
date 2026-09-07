@@ -24,9 +24,9 @@ test is resolved globally, across every module pytest has imported.
 
 import math
 
+import cod3s
 import pytest
 
-import cod3s
 import muscadet
 import muscadet.kb.continuous  # noqa: F401  -- registers the shipped classes
 from muscadet.declare import ComponentSpecError

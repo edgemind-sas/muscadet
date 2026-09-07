@@ -90,11 +90,10 @@ the modeller states what muscadet cannot check.
 import math
 import typing
 
+import cod3s
 import Pycatshoo as pyc
 import pydantic
 from colored import attr, fg
-
-import cod3s
 
 #: What a modeller is told when the equation is not a declared-continuous one.
 #: It names the mechanism that would be needed rather than only the rule broken.

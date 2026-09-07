@@ -127,9 +127,9 @@ def cleanup_system():
     "source_a, source_b, expected_y",
     [
         (False, False, False),  # neither source: Y off
-        (True, False, True),    # source A only: Y on (would be False under AND)
-        (False, True, True),    # source B only: Y on (would be False under AND)
-        (True, True, True),     # both sources: Y on (always)
+        (True, False, True),  # source A only: Y on (would be False under AND)
+        (False, True, True),  # source B only: Y on (would be False under AND)
+        (True, True, True),  # both sources: Y on (always)
     ],
     ids=["neither", "only-A", "only-B", "both"],
 )

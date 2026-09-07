@@ -25,9 +25,10 @@ scenario, the batch scenario and the interactive one are built, driven and
 deleted one after the other.
 """
 
-import muscadet
 import cod3s
 import pytest
+
+import muscadet
 
 #: Horizon the interactive session runs to.
 HORIZON = 10.0

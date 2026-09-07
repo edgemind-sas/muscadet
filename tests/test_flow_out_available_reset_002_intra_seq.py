@@ -9,9 +9,10 @@ transition conditioned on the flow stays fireable, and an explicit clear effect
 This reproduces the go/no-go spike (patched / persistent branch) as a real test.
 """
 
-import muscadet
 import cod3s
 import pytest
+
+import muscadet
 
 GATE = "S_fed_available_out"
 SFED = "S_fed_out"

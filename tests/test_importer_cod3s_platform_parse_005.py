@@ -145,9 +145,7 @@ def test_asymmetric_interface_names_warns_but_succeeds(caplog):
         )
     # Source name wins
     assert conns[0].flow_name == "f1"
-    assert any(
-        "interface names differ" in record.message for record in caplog.records
-    )
+    assert any("interface names differ" in record.message for record in caplog.records)
 
 
 def test_empty_connections_dict():

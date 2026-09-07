@@ -1,9 +1,10 @@
-import Pycatshoo as pyc
 import typing
-import pydantic
-from colored import fg, attr
 
 import cod3s
+import Pycatshoo as pyc
+import pydantic
+from colored import attr, fg
+
 from .common import fresh_instant_occ_law, get_pyc_type
 
 

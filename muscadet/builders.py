@@ -81,9 +81,7 @@ class PlatformExportBuilder:
                 "PlatformExportBuilder: neither payload nor path was provided."
             )
         if not self._path.exists():
-            raise FileNotFoundError(
-                f"Platform export file not found: {self._path}"
-            )
+            raise FileNotFoundError(f"Platform export file not found: {self._path}")
         self._payload = json.loads(self._path.read_text())
         return self._payload
 
@@ -98,9 +96,7 @@ class PlatformExportBuilder:
         payload = self._load_payload()
         if logger is not None:
             comp_count = len(
-                (payload.get("model") or {}).get("elements", {}).get(
-                    "components", {}
-                )
+                (payload.get("model") or {}).get("elements", {}).get("components", {})
             )
             logger.info1(
                 f"Building muscadet system from platform export "

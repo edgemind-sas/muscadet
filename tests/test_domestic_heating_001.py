@@ -51,9 +51,9 @@ Every derived quantity below is computed from those, not tuned to the model.
 
 import math
 
+import cod3s
 import pytest
 
-import cod3s
 import muscadet
 from muscadet.kb.continuous import (  # noqa: F401
     CapacityContinuous,

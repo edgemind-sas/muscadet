@@ -624,6 +624,7 @@ def _record_plant(system):
 def montage():
     """The plant's record, then the controlled system, one at a time."""
     import cod3s
+
     from muscadet.importers.cod3s_platform import system_from_export
 
     plant = system_from_export(build_payload(with_controllers=False))

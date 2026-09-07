@@ -184,7 +184,7 @@ import typing
 
 import Pycatshoo as pyc
 import pydantic
-from colored import fg, attr
+from colored import attr, fg
 
 from .flow import (
     PROD_COND_COMPARE_DESCRIPTION,

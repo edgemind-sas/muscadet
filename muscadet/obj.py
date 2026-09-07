@@ -133,7 +133,38 @@ This module follows the project's coding conventions including:
 - Colored output for enhanced user experience
 """
 
+import copy
+import itertools
+import re
+import typing
+import warnings
+
+import cod3s
 import Pycatshoo as pyc
+import pydantic
+from colored import attr, fg
+
+# The two standalone algorithms over a component, bound as methods of ObjFlow
+# further down: the two-sweep evaluation and the derating engine. Imported as
+# modules rather than by name so the binding block reads as what it is.
+from . import capability, derating, evaluation
+from .capacity import (
+    Capacity,
+    MeasurementIn,
+    MeasurementOut,
+    allocate_capacity_equation_order,
+)
+from .common import copy_declaration
+
+# Standalone failure modes: components of their own, re-exported here because
+# ``muscadet.obj.ObjFailureMode*`` is where every 1.x model imports them from,
+# and because importing them is what registers them under those names for the
+# ``cls="ObjFailureModeExp"`` spelling of ``System.add_component``.
+from .failure_mode import (  # noqa: F401
+    ObjFailureMode,
+    ObjFailureModeDelay,
+    ObjFailureModeExp,
+)
 from .flow import (
     FlowDiscreteIn,
     FlowDiscreteOut,
@@ -150,6 +181,7 @@ from .flow_continuous import (
     FlowContinuousIn,
     FlowContinuousOut,
 )
+from .profile import build_profile
 from .rules import (
     Rule,
     RuleMode,
@@ -157,39 +189,7 @@ from .rules import (
     normalise_boolean_operand,
     validate_operand_shape,
 )
-from .capacity import (
-    Capacity,
-    MeasurementIn,
-    MeasurementOut,
-    allocate_capacity_equation_order,
-)
-
 from .transfer import TransferPair, build_transfer
-from .profile import build_profile
-from .common import copy_declaration
-
-# The two standalone algorithms over a component, bound as methods of ObjFlow
-# further down: the two-sweep evaluation and the derating engine. Imported as
-# modules rather than by name so the binding block reads as what it is.
-from . import capability, derating, evaluation
-
-# Standalone failure modes: components of their own, re-exported here because
-# ``muscadet.obj.ObjFailureMode*`` is where every 1.x model imports them from,
-# and because importing them is what registers them under those names for the
-# ``cls="ObjFailureModeExp"`` spelling of ``System.add_component``.
-from .failure_mode import (  # noqa: F401
-    ObjFailureMode,
-    ObjFailureModeDelay,
-    ObjFailureModeExp,
-)
-import cod3s
-import re
-import warnings
-import copy
-import itertools
-from colored import fg, attr
-import typing
-import pydantic
 
 #: How the operand-pairing message names a comparison on the discrete
 #: production-condition side. The rule-guard side says "a numeric operand"

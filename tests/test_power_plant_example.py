@@ -17,9 +17,10 @@ These cover the pedagogical claims of ``examples/isimu/power_plant.py``.
 import sys
 from pathlib import Path
 
-import muscadet
 import cod3s
 import pytest
+
+import muscadet
 
 # Make the example module importable.
 EXAMPLE_DIR = (Path(__file__).resolve().parent.parent / "examples" / "isimu").as_posix()

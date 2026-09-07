@@ -43,9 +43,10 @@ lives in the one system below, driven through a single interactive session.
 
 import math
 
-import muscadet
 import cod3s
 import pytest
+
+import muscadet
 
 #: A date the interactive session can always step to, so the solver integrates.
 UCD_CLOCK = 5.0

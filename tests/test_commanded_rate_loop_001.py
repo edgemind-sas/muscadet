@@ -44,11 +44,10 @@ what each produced.
 import warnings
 
 import cod3s
-import muscadet
 import pytest
 
+import muscadet
 from muscadet import ordering
-from muscadet.ordering import CommandedRateLoopError
 
 # Imported for their side effect: a component class resolves by name.
 from muscadet.kb.continuous import (  # noqa: F401
@@ -56,6 +55,7 @@ from muscadet.kb.continuous import (  # noqa: F401
     ConsumerContinuous,
     SourceContinuous,
 )
+from muscadet.ordering import CommandedRateLoopError
 
 #: The rate a commanded output delivers while it is told to run.
 CRL_RATE = 10.0

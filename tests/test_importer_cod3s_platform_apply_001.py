@@ -22,10 +22,7 @@ from muscadet.importers.cod3s_platform import (  # noqa: E402
     system_from_export,
 )
 
-
-_FIXTURE = os.path.join(
-    os.path.dirname(__file__), "fixtures", "minimal_export.json"
-)
+_FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "minimal_export.json")
 
 
 def _load():

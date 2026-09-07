@@ -12,9 +12,10 @@ behaves the same as the muscadet wrapper, and document any practical
 divergence (kept as comments in the test body).
 """
 
-import muscadet
 import cod3s
 import pytest
+
+import muscadet
 
 
 @pytest.fixture(scope="module")

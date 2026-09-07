@@ -9,10 +9,10 @@ dynamics (here a tempo delay), not the raw input.
 Cf. the prod_cond port-disambiguation chantier (2026-07).
 """
 
-import muscadet
-
 import cod3s
 import pytest
+
+import muscadet
 
 
 @pytest.fixture(scope="module")

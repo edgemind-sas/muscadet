@@ -36,10 +36,10 @@ built, driven and deleted before the next one starts.
 
 import contextlib
 
-import muscadet
 import cod3s
 import pytest
 
+import muscadet
 from muscadet.system import ModelChangedAfterPrerunError
 
 #: A date the interactive session can always step to, so the solver integrates.

@@ -25,6 +25,7 @@ Simulation:
 import muscadet
 import muscadet.kb.datacenter as dc
 
+
 # Global Class
 # ===============
 class AirConditioning(muscadet.ObjFlow):

@@ -25,8 +25,8 @@ class UserHydr(muscadet.ObjFlow):
             name=flow_name,
             logic="and",
         )
-        
-        
+
+
 class DipoleHydr(muscadet.ObjFlow):
     def add_flows(self, **kwargs):
         super().add_flows(**kwargs)

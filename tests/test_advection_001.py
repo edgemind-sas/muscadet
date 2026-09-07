@@ -45,9 +45,9 @@ worth having; its absence is an ergonomic gap, not a modelling one.
 
 import math
 
+import cod3s
 import pytest
 
-import cod3s
 import muscadet
 from muscadet.kb.continuous import SourceContinuous  # noqa: F401
 

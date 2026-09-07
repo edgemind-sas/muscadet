@@ -11,10 +11,7 @@ from muscadet.importers.cod3s_platform import (
     parse_platform_export,
 )
 
-
-_FIXTURE = os.path.join(
-    os.path.dirname(__file__), "fixtures", "minimal_export.json"
-)
+_FIXTURE = os.path.join(os.path.dirname(__file__), "fixtures", "minimal_export.json")
 
 
 def _load_minimal():

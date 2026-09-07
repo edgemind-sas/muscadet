@@ -39,7 +39,6 @@ from muscadet.importers.cod3s_platform import (  # noqa: E402
     system_from_export,
 )
 
-
 _FIXTURE = Path(__file__).parent / "fixtures" / "dil_v2_export.json"
 
 # Stable IDs from the fixture (cf. find_PLC scan)
@@ -213,9 +212,7 @@ def test_runtime_isimu_start_with_overrides_does_not_raise(
     system.isimu_start()
 
 
-def test_runtime_metadata_instance_overrides_propagated(
-    base_payload, cleanup_system
-):
+def test_runtime_metadata_instance_overrides_propagated(base_payload, cleanup_system):
     """Audit trail : after apply_to_system, ``comp.metadata['instance_overrides']``
     holds the condensed dict of overrides that were actually folded into the
     KB defaults. Regression guard for the cosmetic bug where the parse-layer

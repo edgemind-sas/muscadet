@@ -39,8 +39,9 @@ kept alive for the teardown test, per the module convention.
 """
 
 import cod3s
-import muscadet
 import pytest
+
+import muscadet
 from muscadet import ordering
 
 # Imported for their side effect: a component class resolves by name.

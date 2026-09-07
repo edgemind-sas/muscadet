@@ -31,9 +31,10 @@ lives in the one system below.
 
 import math
 
-import muscadet
 import cod3s
 import pytest
+
+import muscadet
 
 #: A date the interactive session can always step to, so the solver integrates.
 PTU_CLOCK = 5.0

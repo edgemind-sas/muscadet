@@ -18,10 +18,10 @@ The unobserved twin is what makes "changes nothing" observable: it is built and
 wired exactly like the observed triad, minus the observer.
 """
 
-import muscadet
 import cod3s
 import pytest
 
+import muscadet
 from muscadet import ordering
 
 #: The observed source's declared rate, and the two demands contending for it.

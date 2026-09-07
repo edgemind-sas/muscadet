@@ -31,10 +31,10 @@ while the only other stop in the run is the control signal dropping at t = 3,
 so a threshold the solver did not watch would be seen a whole step late.
 """
 
-import muscadet
 import cod3s
 import pytest
 
+import muscadet
 from muscadet import declare, ordering
 
 #: Horizon the interactive session runs to.

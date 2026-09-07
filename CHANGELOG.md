@@ -86,21 +86,22 @@ Each of these built and ran before. For each, what to write instead.
 
 ### Changed
 
-- **An input-side capacity no longer fills out of an over-demand.** A volume
-  accumulates what its declared `fill_rate` claims for itself and nothing else,
-  which is what `fill_rate=0` ("a pure pass-through buffer") has always meant.
-  The demand a volume carries upstream is additionally capped by what it may
-  release, so a buffer behind a `serve_rate` does not stock up the difference.
+- **A capacity carries upstream only what it may release.** The demand a volume
+  publishes to its producer is now capped by its `serve_rate` and its
+  `serve_cond`, on top of the `fill_rate` it claims for itself. Without the cap
+  a buffer at the documented default `fill_rate=0` ("a pure pass-through
+  buffer, it never stocks up") became an accumulator the moment a ceiling was
+  declared: measured, a volume at `serve_rate=40` between a source of 100 and a
+  load of 100 rose by 60 per unit of time. This only bites a model that
+  declares one of the two new fields, every other model being unchanged.
   *Rewrite*: declare the `fill_rate` the buffer really has.
 - **A `serve_rate` or a `serve_cond` on an accumulator is refused**
   (`CapacityContinuous(ports="in")`): it declares no output and no rule, so
   nothing would ever read them.
-- **An effect pattern that anchor-matches a discrete output flow name** clamps
-  that output's availability gate alone, where a loose basename search also
-  swept its other variables.
 - `capacity_breaks_inbound` no longer tears an edge when the volume's discharge
   condition reads the arriving flow: what leaves then depends algebraically on
-  what arrives, so the level no longer stands between the two.
+  what arrives, so the level no longer stands between the two. Reachable only
+  with a `serve_cond`, so again no existing model moves.
 
 ### Fixed
 

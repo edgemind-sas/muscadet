@@ -28,9 +28,9 @@ where a redistribution pass can be observed one at a time.
 import math
 
 import cod3s
-import muscadet
 import pytest
 
+import muscadet
 from muscadet import flow_continuous
 from muscadet.flow_continuous import (
     UNBOUNDED,

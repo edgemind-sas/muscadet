@@ -12,10 +12,11 @@ step -- long after every component was built and connected -- and the solver
 honours them. That is asserted end to end here, on the interactive path.
 """
 
-import Pycatshoo as pyc
-import muscadet
 import cod3s
+import Pycatshoo as pyc
 import pytest
+
+import muscadet
 
 FILL_RATE_T1 = 2.0
 FILL_RATE_T2 = 3.0

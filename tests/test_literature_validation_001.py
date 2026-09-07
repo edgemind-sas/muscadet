@@ -51,9 +51,9 @@ is why the balances below use a relative one.
 
 import math
 
+import cod3s
 import pytest
 
-import cod3s
 import muscadet
 
 # Counter-flow exchanger (Shah & Sekulic, effectiveness-NTU)

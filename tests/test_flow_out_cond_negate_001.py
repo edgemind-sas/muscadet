@@ -13,10 +13,10 @@ output flows whose production conditions exercise negation in both inner modes,
 single and double groups. Cf. per-operand-negation ADR (2026-07-22).
 """
 
-import muscadet
-
 import cod3s
 import pytest
+
+import muscadet
 
 
 @pytest.fixture(scope="module")

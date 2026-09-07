@@ -37,9 +37,9 @@ kept alive for the teardown.
 import warnings
 
 import cod3s
-import muscadet
 import pytest
 
+import muscadet
 from muscadet.flow_continuous import NOMINAL_RATE
 
 #: The wrapper classes warn on instantiation; the deprecation is asserted in
