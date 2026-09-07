@@ -1302,6 +1302,7 @@ class TestU2CapabilityMarkers:
             "_SUPPORTS_CONTINUOUS_RULE_SETS",
             "_SUPPORTS_INSTANCE_CAPACITY_OVERRIDE",
             "_SUPPORTS_DERATING_PREALLOCATION",
+            "_SUPPORTS_CAPACITY_SERVE_COMMAND",
         ],
     )
     def test_marker_is_declared_true(self, marker):
@@ -1466,6 +1467,431 @@ class TestParseCapacities:
         ctx = parse_platform_export(payload)
         (cap,) = ctx.components[0].capacities
         assert cap.name == "tank"
+
+    def test_the_discharge_keys_are_absent_until_they_are_declared(self):
+        # muscadet's own defaults are an unbounded ceiling and an empty
+        # command, so an undeclared key must reach ``add_capacity`` as an
+        # ABSENCE and never as a value this layer made up.
+        payload = _template_payload(
+            {"o": _cont_out("H2")},
+            sys_name="Mcap_serve_absent",
+            capacities=[{"name": "tank", "flows": "H2", "volume": 6.0}],
+        )
+        (cap,) = _capacities_of(payload)
+        assert cap.serve_rate is None
+        assert cap.serve_cond == ()
+        assert cap.serve_cond_inner_mode is None
+
+    def test_serve_rate_is_parsed_and_accepts_the_unbounded_spelling(self):
+        payload = _template_payload(
+            {"o": _cont_out("H2"), "p": _cont_out("O2")},
+            sys_name="Mcap_serve_rate",
+            capacities=[
+                {"name": "tank", "flows": "H2", "volume": 6.0, "serve_rate": 40.0},
+                {"name": "free", "flows": "O2", "volume": 6.0, "serve_rate": "inf"},
+            ],
+        )
+        tank, free = _capacities_of(payload)
+        assert tank.serve_rate == 40.0
+        assert free.serve_rate == float("inf")
+
+    def test_a_negative_serve_rate_is_refused(self):
+        payload = _template_payload(
+            {"o": _cont_out("H2")},
+            sys_name="Mcap_serve_neg",
+            capacities=[
+                {"name": "tank", "flows": "H2", "volume": 6.0, "serve_rate": -1.0}
+            ],
+        )
+        with pytest.raises(Cod3sPlatformImportError) as excinfo:
+            _capacities_of(payload)
+        message = str(excinfo.value)
+        assert "serve_rate" in message
+        assert "tank" in message
+        assert "positive or zero" in message
+
+    def test_serve_cond_reads_the_nested_operand_form_prod_cond_uses(self):
+        payload = _template_payload(
+            {
+                "c": {"name": "cmd", "port_type": {"general": "input"}},
+                "o": _cont_out("H2"),
+            },
+            sys_name="Mcap_serve_cond",
+            capacities=[
+                {
+                    "name": "battery",
+                    "flows": "H2",
+                    "volume": 6.0,
+                    "serve_cond": [
+                        [{"name": "cmd"}],
+                        [{"name": "H2", "port": "out", "op": ">=", "value": 2.0}],
+                    ],
+                }
+            ],
+        )
+        (cap,) = _capacities_of(payload)
+        first, second = cap.serve_cond
+        (cmd,) = first
+        assert (cmd.name, cmd.negate, cmd.port, cmd.op) == ("cmd", False, None, None)
+        (level,) = second
+        assert (level.name, level.port, level.op, level.value) == (
+            "H2",
+            "out",
+            ">=",
+            2.0,
+        )
+
+    def test_serve_cond_normalises_the_shorthands_muscadet_normalises(self):
+        # ``prod_cond`` accepts a bare operand and a flat list as much as the
+        # nested form, and muscadet normalises both to groups. Parsing them
+        # into a different shape here would be the second grammar this exists
+        # to avoid.
+        payload = _template_payload(
+            {
+                "c": {"name": "cmd", "port_type": {"general": "input"}},
+                "d": {"name": "other", "port_type": {"general": "input"}},
+                "o": _cont_out("H2"),
+            },
+            sys_name="Mcap_serve_short",
+            capacities=[
+                {"name": "bare", "flows": "H2", "volume": 6.0, "serve_cond": "cmd"},
+                {
+                    "name": "flat",
+                    "flows": "H2",
+                    "volume": 6.0,
+                    "serve_cond": ["cmd", "other"],
+                },
+            ],
+        )
+        bare, flat = _capacities_of(payload)
+        assert [[op.name for op in group] for group in bare.serve_cond] == [["cmd"]]
+        assert [[op.name for op in group] for group in flat.serve_cond] == [
+            ["cmd"],
+            ["other"],
+        ]
+
+    def test_a_serve_cond_operand_naming_no_flow_is_refused(self):
+        payload = _template_payload(
+            {"o": _cont_out("H2")},
+            sys_name="Mcap_serve_unknown",
+            capacities=[
+                {
+                    "name": "battery",
+                    "flows": "H2",
+                    "volume": 6.0,
+                    "serve_cond": [["cmd"]],
+                }
+            ],
+        )
+        with pytest.raises(Cod3sPlatformImportError) as excinfo:
+            _capacities_of(payload)
+        message = str(excinfo.value)
+        assert "'cmd'" in message
+        assert "battery" in message
+        # The operand is named for what it is. One function serves the rule
+        # guard and the discharge command, so calling this a "guard operand"
+        # would send the author looking for a rule set they never wrote.
+        assert "command operand" in message
+        assert "guard" not in message
+
+    def test_a_serve_cond_operand_naming_a_capacity_is_refused_as_such(self):
+        payload = _template_payload(
+            {"o": _cont_out("H2")},
+            sys_name="Mcap_serve_capname",
+            capacities=[
+                {
+                    "name": "battery",
+                    "flows": "H2",
+                    "volume": 6.0,
+                    "serve_cond": [["battery"]],
+                }
+            ],
+        )
+        with pytest.raises(Cod3sPlatformImportError) as excinfo:
+            _capacities_of(payload)
+        message = str(excinfo.value)
+        assert "capacity 'battery'" in message
+        assert "not a flow" in message
+
+    def test_a_serve_cond_naming_a_capacity_declared_LATER_is_refused_too(self):
+        # The names are collected off the raw entries before any is parsed: a
+        # refusal that depended on declaration order is one a reader cannot
+        # reproduce from the file they are looking at.
+        payload = _template_payload(
+            {"o": _cont_out("H2"), "p": _cont_out("O2")},
+            sys_name="Mcap_serve_forward",
+            capacities=[
+                {
+                    "name": "first",
+                    "flows": "H2",
+                    "volume": 6.0,
+                    "serve_cond": [["second"]],
+                },
+                {"name": "second", "flows": "O2", "volume": 6.0},
+            ],
+        )
+        with pytest.raises(Cod3sPlatformImportError) as excinfo:
+            _capacities_of(payload)
+        assert "capacity 'second'" in str(excinfo.value)
+
+    def test_an_unsupported_serve_cond_comparison_is_refused(self):
+        payload = _template_payload(
+            {"o": _cont_out("H2")},
+            sys_name="Mcap_serve_op",
+            capacities=[
+                {
+                    "name": "battery",
+                    "flows": "H2",
+                    "volume": 6.0,
+                    "serve_cond": [[{"name": "H2", "op": "=>", "value": 2.0}]],
+                }
+            ],
+        )
+        with pytest.raises(Cod3sPlatformImportError) as excinfo:
+            _capacities_of(payload)
+        assert "'=>'" in str(excinfo.value)
+
+    def test_serve_cond_inner_mode_is_carried_and_needs_a_condition(self):
+        payload = _template_payload(
+            {
+                "c": {"name": "cmd", "port_type": {"general": "input"}},
+                "o": _cont_out("H2"),
+            },
+            sys_name="Mcap_serve_mode",
+            capacities=[
+                {
+                    "name": "battery",
+                    "flows": "H2",
+                    "volume": 6.0,
+                    "serve_cond": [["cmd"]],
+                    "serve_cond_inner_mode": "or",
+                }
+            ],
+        )
+        (cap,) = _capacities_of(payload)
+        assert cap.serve_cond_inner_mode == "or"
+
+        alone = _template_payload(
+            {"o": _cont_out("H2")},
+            sys_name="Mcap_serve_mode_alone",
+            capacities=[
+                {
+                    "name": "battery",
+                    "flows": "H2",
+                    "volume": 6.0,
+                    "serve_cond_inner_mode": "or",
+                }
+            ],
+        )
+        with pytest.raises(Cod3sPlatformImportError) as excinfo:
+            _capacities_of(alone)
+        assert "serve_cond_inner_mode" in str(excinfo.value)
+
+    def test_a_command_operand_naming_a_flow_a_capacity_shares_its_name_with(self):
+        # The two vocabularies resolve through two engine functions, and only
+        # one of them looks at the capacities: a rule guard goes through
+        # _resolve_rule_flow, which refuses a capacity name outright, while a
+        # discharge command goes through apply_prod_cond, which resolves the
+        # FLOWS first and never sees a capacity. ``add_capacity(name=X,
+        # flow=X)`` is the spelling R49 calls the most natural there is, so
+        # refusing the operand here would refuse a model the engine builds.
+        payload = _template_payload(
+            {"i": _cont_in("elec"), "o": _cont_out("elec"), "p": _cont_out("H2")},
+            sys_name="Mcap_serve_shadow",
+            capacities=[
+                {"name": "elec", "flows": "elec", "volume": 10.0, "side": "in"},
+                {
+                    "name": "battery",
+                    "flows": "H2",
+                    "volume": 6.0,
+                    "side": "out",
+                    "serve_cond": [
+                        [{"name": "elec", "port": "in", "op": ">", "value": 0.0}]
+                    ],
+                },
+            ],
+        )
+        _, battery = _capacities_of(payload)
+        ((operand,),) = battery.serve_cond
+        assert (operand.name, operand.port, operand.op) == ("elec", "in", ">")
+
+    def test_a_rule_guard_still_refuses_a_flow_a_capacity_shares_its_name_with(self):
+        # The other half of the same contract: the engine DOES refuse it there,
+        # so relaxing the command path must not relax this one.
+        payload = _template_payload(
+            {"i": _cont_in("elec"), "o": _cont_out("H2")},
+            sys_name="Mcap_guard_shadow",
+            capacities=[
+                {"name": "elec", "flows": "elec", "volume": 10.0, "side": "in"}
+            ],
+            rule_sets=[
+                {
+                    "name": "make",
+                    "rules": [
+                        {
+                            "name": "on",
+                            "cond": [{"name": "elec", "op": ">", "value": 0.0}],
+                            "prod": {"H2": 1.0},
+                        }
+                    ],
+                }
+            ],
+        )
+        with pytest.raises(Cod3sPlatformImportError) as excinfo:
+            _rule_sets_of(payload)
+        assert "capacity 'elec'" in str(excinfo.value)
+
+    def test_an_empty_serve_cond_inner_mode_is_refused_rather_than_defaulted(self):
+        # A platform form serialising an unset select as "" must not silently
+        # select outer-OR / inner-AND: that inverts the condition of anyone who
+        # meant "or", with nothing anywhere saying so.
+        payload = _template_payload(
+            {
+                "c": {"name": "cmd", "port_type": {"general": "input"}},
+                "o": _cont_out("H2"),
+            },
+            sys_name="Mcap_serve_mode_empty",
+            capacities=[
+                {
+                    "name": "battery",
+                    "flows": "H2",
+                    "volume": 6.0,
+                    "serve_cond": [["cmd"]],
+                    "serve_cond_inner_mode": "",
+                }
+            ],
+        )
+        with pytest.raises(Cod3sPlatformImportError) as excinfo:
+            _capacities_of(payload)
+        assert "serve_cond_inner_mode" in str(excinfo.value)
+
+    def test_a_negation_beside_a_comparison_is_refused_at_the_parse_layer(self):
+        # muscadet's third operand shape rule. Left to the engine it surfaces
+        # as a ValueError about a "production condition operand", for something
+        # the author declared as a discharge command.
+        payload = _template_payload(
+            {"o": _cont_out("H2")},
+            sys_name="Mcap_serve_negate",
+            capacities=[
+                {
+                    "name": "battery",
+                    "flows": "H2",
+                    "volume": 6.0,
+                    "serve_cond": [
+                        [{"name": "H2", "negate": True, "op": ">=", "value": 2.0}]
+                    ],
+                }
+            ],
+        )
+        with pytest.raises(Cod3sPlatformImportError) as excinfo:
+            _capacities_of(payload)
+        message = str(excinfo.value)
+        assert "negate" in message
+        assert "battery" in message
+
+    def test_an_unknown_serve_cond_inner_mode_is_refused(self):
+        payload = _template_payload(
+            {
+                "c": {"name": "cmd", "port_type": {"general": "input"}},
+                "o": _cont_out("H2"),
+            },
+            sys_name="Mcap_serve_mode_bad",
+            capacities=[
+                {
+                    "name": "battery",
+                    "flows": "H2",
+                    "volume": 6.0,
+                    "serve_cond": [["cmd"]],
+                    "serve_cond_inner_mode": "xor",
+                }
+            ],
+        )
+        with pytest.raises(Cod3sPlatformImportError) as excinfo:
+            _capacities_of(payload)
+        assert "'xor'" in str(excinfo.value)
+
+
+# ---------------------------------------------------------------------------
+# Parse layer — a discharge nothing can read is refused, not accepted inert
+# ---------------------------------------------------------------------------
+
+
+def _accumulator_payload(sys_name, *, capacity_extra, rule_sets=None, outputs=None):
+    """A one-sided input volume, with whatever route out the test gives it."""
+    interfaces = {"i": _cont_in("H2")}
+    if outputs:
+        for index, name in enumerate(outputs):
+            interfaces[f"o{index}"] = _cont_out(name)
+    capacity = {"name": "hopper", "flows": "H2", "volume": 6.0, "side": "in"}
+    capacity.update(capacity_extra)
+    return _template_payload(
+        interfaces,
+        sys_name=sys_name,
+        capacities=[capacity],
+        rule_sets=rule_sets,
+    )
+
+
+class TestDischargeOnAVolumeWithNoWayOut:
+    @pytest.mark.parametrize(
+        "extra",
+        [
+            {"serve_rate": 40.0},
+            {"serve_cond": [["H2"]]},
+        ],
+        ids=["ceiling", "command"],
+    )
+    def test_a_discharge_nothing_can_read_is_refused(self, extra):
+        # muscadet's own CapacityContinuous refuses this by name on
+        # ports="in". The importer builds plain ObjFlow components, so nothing
+        # downstream enforces it: measured before this refusal, the model
+        # imported clean, wired the port, and the declaration changed nothing
+        # at any point of the run.
+        payload = _accumulator_payload("Macc_inert", capacity_extra=extra)
+        with pytest.raises(Cod3sPlatformImportError) as excinfo:
+            _build_kb_rule_sets(
+                payload["kb"],
+                _build_kb_lookup(payload["kb"]),
+                _build_kb_capacities(payload["kb"], _build_kb_lookup(payload["kb"])),
+            )
+        message = str(excinfo.value)
+        assert "hopper" in message
+        assert next(iter(extra)) in message
+
+    def test_a_rule_consuming_the_held_flow_is_a_way_out(self):
+        # R48: both sides honour the ceiling, a hopper releasing into its rules
+        # included. This must keep building.
+        payload = _accumulator_payload(
+            "Macc_rule",
+            capacity_extra={"serve_rate": 40.0},
+            outputs=["O2"],
+            rule_sets=[
+                {
+                    "name": "burn",
+                    "rules": [{"cons": {"H2": 1.0}, "prod": {"O2": 1.0}}],
+                }
+            ],
+        )
+        (cap,) = _capacities_of(payload)
+        assert cap.serve_rate == 40.0
+
+    def test_a_same_named_output_is_a_way_out(self):
+        # The identity transfer (R31) carries the flow across, so a volume
+        # declared on the input side of a pass-through does release.
+        payload = _accumulator_payload(
+            "Macc_passthrough",
+            capacity_extra={"serve_rate": 40.0},
+            outputs=["H2"],
+        )
+        (cap,) = _capacities_of(payload)
+        assert cap.serve_rate == 40.0
+
+    def test_an_undeclared_discharge_on_an_accumulator_is_left_alone(self):
+        # A volume with no way out is a legitimate accumulator. It is the
+        # DECLARATION that is refused, never the shape.
+        payload = _accumulator_payload("Macc_plain", capacity_extra={})
+        (cap,) = _capacities_of(payload)
+        assert cap.serve_rate is None
 
 
 # ---------------------------------------------------------------------------
@@ -1937,6 +2363,63 @@ class TestRuntimeCapacitiesRulesAndDeratings:
         assert capacity.content_init == {"H2": 3.0}
         assert capacity.fill_rate == 1.0
         assert [(f.name, f.weight) for f in capacity.flows] == [("H2", 2.0)]
+
+    def test_a_commanded_discharge_reaches_the_capacity(self, cleanup_system):
+        # #167: the platform declares the ceiling and the command, and the
+        # engine honours both. The verdict is read LIVE through
+        # ``serve_ceiling``, so an unfed command answers zero rather than the
+        # ceiling -- which is the whole point: the wire is not decorative.
+        system = system_from_export(
+            _template_payload(
+                {
+                    "c": {"name": "cmd", "port_type": {"general": "input"}},
+                    "i": _cont_in("H2"),
+                    "o": _cont_out("H2"),
+                },
+                sys_name="Rcap_serve",
+                capacities=[
+                    {
+                        "name": "battery",
+                        "flows": "H2",
+                        "volume": 60.0,
+                        "side": "out",
+                        "content_init": {"H2": 30.0},
+                        "serve_rate": 40.0,
+                        "serve_cond": [["cmd"]],
+                    }
+                ],
+            )
+        )
+        cleanup_system.append(system)
+        comp = system.comp["C1"]
+        capacity = comp.capacities["battery"]
+
+        assert capacity.serve_rate == 40.0
+        assert capacity.var_serve_rate["H2"].value() == 40.0
+        # Stored RESOLVED: the operand name is replaced by the flow object.
+        ((operand,),) = capacity.serve_cond
+        assert operand is comp.flows_in["cmd"]
+
+        assert capacity.serve_ceiling("H2") == 0.0
+        comp.flows_in["cmd"].var_fed.setValue(True)
+        assert capacity.serve_ceiling("H2") == 40.0
+
+    def test_an_undeclared_command_leaves_the_capacity_uncommanded(
+        self, cleanup_system
+    ):
+        system = system_from_export(
+            _template_payload(
+                {"i": _cont_in("H2"), "o": _cont_out("H2")},
+                sys_name="Rcap_serve_none",
+                capacities=[
+                    {"name": "tank", "flows": "H2", "volume": 6.0, "side": "out"}
+                ],
+            )
+        )
+        cleanup_system.append(system)
+        capacity = system.comp["C1"].capacities["tank"]
+        assert capacity.serve_cond == []
+        assert capacity.serve_ceiling("H2") == float("inf")
 
     def test_rule_set_is_built_with_its_coefficients(self, cleanup_system):
         system = system_from_export(

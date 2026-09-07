@@ -4,6 +4,96 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 5.1.0 (2026-09-07)
+
+The COD3S Platform bridge carries the two fields 5.0.0 added to a capacity.
+Additive on every side: no model, no knowledge base and no spec written against
+5.0.0 changes behaviour.
+
+### Added
+
+- **`serve_rate` and `serve_cond` on a `capacities` entry** of a COD3S Platform
+  class template, and `serve_cond_inner_mode` beside them. The importer keeps a
+  closed key allowlist, so a knowledge base carrying a commanded battery was
+  REFUSED by name rather than imported with its command dropped -- the loud
+  failure, but a failure all the same: the platform surface could not be built
+  at all.
+- **`_SUPPORTS_CAPACITY_SERVE_COMMAND`**, the capability marker the platform
+  probes before exposing the two fields, the eleventh of the family.
+- `CapacitySpec` carries `serve_rate`, `serve_cond` and `serve_cond_inner_mode`.
+  An undeclared field stays `None` (`()` for the condition) and reaches
+  `add_capacity` as an ABSENCE: the two rate defaults are opposite -- a
+  `fill_rate` of 0 claims nothing, a `serve_rate` of `inf` caps nothing -- so a
+  default invented here would be a declaration nobody wrote.
+
+### One grammar, not two
+
+`serve_cond` is written in the nested operand form `prod_cond` already uses on
+a port, down to the shapes muscadet normalises: a bare operand becomes one
+group of one, and an operand found where a group was expected becomes a group
+of its own. A parse layer accepting only the strictest form would teach a
+second grammar by refusing what the engine accepts.
+
+**`serve_cond_inner_mode` defaults to `"and"` here and not to muscadet's own
+`"or"`**, and that is the point rather than an oversight. The importer has read
+`logic_inner_mode` as `"and"` since the platform's 3.0.0 schema, outer-OR /
+inner-AND, which is what the knowledge-base editor displays. Left to the engine
+default, one nested list would mean a disjunction of conjunctions on a port and
+the converse on a volume. Declared explicitly, `"or"` still selects the other
+reading; declared without a `serve_cond` to qualify, it is refused, exactly as
+`logic_inner_mode` without a `prod_cond` is.
+
+### Refused at the parse layer, naming the class
+
+Refused here rather than left to muscadet, whose `ValueError` names a muscadet
+field on a muscadet class and tells a knowledge-base author nothing about the
+class they wrote:
+
+- a `serve_rate` that is negative or NaN, read by the same predicate as
+  `fill_rate` because the engine validates the two with one predicate;
+- a `serve_cond` operand naming no interface of the class, or naming one of the
+  class's own capacities -- refused as a capacity, since a condition names the
+  FLOW a volume holds and never the volume. Refused whichever order the two
+  capacities are declared in;
+- an operand carrying an unsupported comparison operator, a comparison with no
+  value, a value with no operator, or a `negate` beside a comparison -- the
+  three shape rules `muscadet.rules.validate_operand_shape` enforces. The third
+  was previously left to the engine, which reports it as a *production
+  condition* operand for something the author declared as a discharge command;
+- `serve_cond_inner_mode` outside `and` / `or`, the empty string included. An
+  unset select serialised as `""` reads as *declared* to the "no `serve_cond`
+  to qualify" guard and would have read as *absent* to the default, taking
+  outer-OR / inner-AND without ever meeting the closed set;
+- **a `serve_rate` or a `serve_cond` on a volume nothing draws from**: no held
+  flow is a continuous output of the class, and no rule set consumes one, so
+  neither field would ever be read. `CapacityContinuous` refuses the same shape
+  by name on `ports="in"`; this bridge builds plain `ObjFlow` components, so
+  without the check the model imported clean, wired its command port, and the
+  declaration changed nothing at any point of the run. The two routes out are
+  those `muscadet.ordering.commanded_discharge_outputs` enumerates -- the
+  identity transfer of a same-named output, and a rule set consuming the held
+  flow -- so a pass-through and a hopper releasing into its rules both keep
+  building.
+
+### Accepted, where a rule guard refuses
+
+**A command operand may name a flow a capacity shares its name with.** The two
+vocabularies are one, but the engine resolves them through two functions that
+disagree on this single point: `_resolve_rule_flow` tests the capacities first
+and refuses outright (R29), while `apply_prod_cond` resolves `flows_in` then
+`flows_out` and never looks at a capacity. `add_capacity(name=X, flow=X)` is
+the spelling R49 calls the most natural there is, so mirroring the guard's
+refusal onto a command would refuse a model the engine builds. `_OperandSite`
+records both halves in one place rather than leaving the sites to look
+interchangeable.
+
+### Unchanged, and worth knowing
+
+- **A per-instance override of the two fields does not exist.** As with
+  `fill_rate`, they are declared on the class template. An attribute carrying an
+  unregistered role is logged and dropped by `_build_overrides_index`, so such
+  an override is visible in the log rather than silent, but it does not apply.
+
 ## 5.0.0 (2026-09-07)
 
 The batch of three defects living in the discrete/continuous interoperation:

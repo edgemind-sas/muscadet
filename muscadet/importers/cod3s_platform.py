@@ -86,7 +86,17 @@ import hashlib
 import logging
 import math
 from dataclasses import dataclass, field, replace
-from typing import Any, Dict, Iterator, List, Literal, Optional, Tuple, Union
+from typing import (
+    Any,
+    Dict,
+    Iterator,
+    List,
+    Literal,
+    NamedTuple,
+    Optional,
+    Tuple,
+    Union,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -308,6 +318,27 @@ class CapacityFlowSpec:
 
 
 @dataclass(frozen=True)
+class RuleOperandSpec:
+    """One operand of a condition: a boolean flow state, or a comparison.
+
+    ONE vocabulary, deliberately, and that is why this sits above the capacity
+    rather than beside the rules it is named for: a rule guard and a capacity's
+    discharge command (R49) accept exactly the same shapes, because muscadet
+    resolves both through the same implementation. A second dataclass here
+    would let the two drift while the engine kept them identical.
+    """
+
+    name: str
+    negate: bool = False
+    # ``'in'`` / ``'out'`` force the side the name resolves against. ``None``
+    # keeps muscadet's input-first resolution.
+    port: Optional[str] = None
+    # Comparison operator of a numeric operand; ``None`` for a boolean one.
+    op: Optional[str] = None
+    value: Optional[float] = None
+
+
+@dataclass(frozen=True)
 class CapacitySpec:
     """One capacity declared on a KB class template."""
 
@@ -329,20 +360,26 @@ class CapacitySpec:
     # buffer). ``math.inf`` means "whatever the producer can deliver" and is
     # spelled ``"inf"`` as well as ``Infinity``, JSON having no literal for it.
     fill_rate: Optional[float] = None
-
-
-@dataclass(frozen=True)
-class RuleOperandSpec:
-    """One operand of a rule guard: a boolean flow state, or a comparison."""
-
-    name: str
-    negate: bool = False
-    # ``'in'`` / ``'out'`` force the side the name resolves against. ``None``
-    # keeps muscadet's input-first resolution.
-    port: Optional[str] = None
-    # Comparison operator of a numeric operand; ``None`` for a boolean one.
-    op: Optional[str] = None
-    value: Optional[float] = None
+    # CEILING on what the volume releases, per held flow (R48). NOT the twin of
+    # ``fill_rate``, whatever their adjacency here suggests: that one is a
+    # CLAIM added to the demand, so it makes a tank fill; this one asks for
+    # nothing and only caps what leaves. ``None`` leaves the muscadet default
+    # (``math.inf``, no ceiling), which is what every model had before the
+    # field existed.
+    serve_rate: Optional[float] = None
+    # Condition COMMANDING the discharge (R49), as groups of operands in the
+    # very vocabulary ``prod_cond`` uses on a port: same shapes, same
+    # normalisation, same comparison grammar. EMPTY -- the default -- holds, so
+    # a capacity declaring none is uncommanded.
+    serve_cond: Tuple[Tuple[RuleOperandSpec, ...], ...] = ()
+    # How the two levels of ``serve_cond`` combine, exactly as
+    # ``FlowSpec.logic_inner_mode`` does for a production condition, and
+    # resolved by the parse layer to the SAME default ('and', outer-OR /
+    # inner-AND) rather than left to muscadet's own ('or'). Without that, one
+    # nested list would mean a disjunction of conjunctions on a port and the
+    # converse on a volume, which is precisely the second grammar this section
+    # exists not to teach. ``None`` only when no condition was declared.
+    serve_cond_inner_mode: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -805,6 +842,22 @@ _SUPPORTS_CONTROLLERS = True
 # attribute answers True.
 # Cf. the controller threshold override chantier (2026-09).
 _SUPPORTS_CONTROLLER_THRESHOLD_OVERRIDE = True
+
+# Capability marker (jumeau of _SUPPORTS_CONTROLLER_THRESHOLD_OVERRIDE): this
+# muscadet reads ``serve_rate`` and ``serve_cond`` on a capacity entry (R48,
+# R49) -- the CEILING on what a volume releases and the boolean command that
+# governs it -- and passes both to ``ObjFlow.add_capacity``. Without them a
+# boolean signal cannot start and stop a buffer that gives its flow back under
+# the name it received it: a production condition applies to a produced rate
+# and what leaves a volume is stock, and a recipe renames the flow it carries.
+#
+# The degradation is the mild one of this family, and that is worth stating:
+# ``_check_entry_keys`` refuses an unknown key by name, so an older muscadet
+# REFUSES a KB carrying a commanded battery rather than importing one whose
+# command is decorative. The marker is what lets the platform decline to expose
+# the two fields at all rather than let a study author meet that refusal.
+# Cf. #167 (COD3S Platform) and the H2 showcase battery.
+_SUPPORTS_CAPACITY_SERVE_COMMAND = True
 
 # ---------------------------------------------------------------------------
 # Flow families (2026-08)
@@ -1365,7 +1418,18 @@ def _build_kb_lookup(kb: Dict[str, Any]) -> Dict[str, List[FlowSpec]]:
 #: build a pure buffer where a tank was meant, which no reading of the model
 #: distinguishes from a tank that was never asked to fill.
 _CAPACITY_KEYS = frozenset(
-    {"name", "flows", "flow", "volume", "side", "content_init", "fill_rate"}
+    {
+        "name",
+        "flows",
+        "flow",
+        "volume",
+        "side",
+        "content_init",
+        "fill_rate",
+        "serve_rate",
+        "serve_cond",
+        "serve_cond_inner_mode",
+    }
 )
 
 #: Keys a held-flow entry may carry.
@@ -1377,13 +1441,20 @@ _RULE_SET_KEYS = frozenset({"name", "rules"})
 #: Keys one rule may carry.
 _RULE_KEYS = frozenset({"name", "cond", "cons", "prod"})
 
-#: Keys one guard operand may carry.
+#: Keys one condition operand may carry -- a rule guard's and a capacity's
+#: discharge command's alike, the two vocabularies being one (R49).
 _RULE_OPERAND_KEYS = frozenset({"name", "negate", "port", "op", "value"})
 
-#: Sides a capacity, or a guard operand, may name.
+#: Sides a capacity, or a condition operand, may name.
 _VALID_SIDES = frozenset({"in", "out"})
 
-#: Comparison operators a numeric guard operand may carry. muscadet's own set;
+#: How the two levels of a condition combine. muscadet reads anything that is
+#: not the literal ``"or"`` as ``"and"``, so ``"OR"`` would silently invert the
+#: whole condition rather than fail: the set is closed here for that reason.
+_VALID_INNER_MODES = frozenset({"and", "or"})
+
+#: Comparison operators a numeric condition operand may carry -- a rule
+#: guard's and a capacity's discharge command's alike. muscadet's own set;
 #: restated so an unsupported spelling is refused naming the class rather than
 #: at guard-compilation time.
 _VALID_GUARD_OPS = frozenset({"<", "<=", ">", ">=", "==", "!="})
@@ -1491,6 +1562,239 @@ class _FlowIndex:
         return self.inputs if side == "in" else self.outputs
 
 
+class _OperandSite(NamedTuple):
+    """Where a condition operand is written, and how the engine resolves it.
+
+    ONE operand vocabulary (R49), and it is spelled identically on both sites.
+    What differs is the pair of engine functions that resolve it, and the two
+    do not agree on one point, so this records both halves rather than letting
+    a reader assume the sites are interchangeable:
+
+    * ``label`` -- what a refusal calls the operand. Telling an author their
+      battery carries a bad "guard operand" sends them looking for a rule set
+      they never wrote;
+    * ``flows_first`` -- whether a FLOW of a given name wins over a CAPACITY of
+      that name. ``ObjFlow._resolve_rule_flow`` tests the capacities FIRST and
+      refuses outright (R29: a guard reading a level its own rule fills is the
+      mode-chattering case), while ``ObjFlow.apply_prod_cond`` resolves
+      ``flows_in`` then ``flows_out`` and never looks at a capacity at all.
+      ``add_capacity(name=X, flow=X)`` is the spelling R49 calls the most
+      natural there is, so mirroring the guard's refusal onto a command would
+      refuse a model the engine builds.
+    """
+
+    label: str
+    flows_first: bool
+
+
+#: A rule guard's operands: the engine refuses a capacity name there.
+_GUARD_SITE = _OperandSite(label="guard operand", flows_first=False)
+
+#: A capacity's discharge command: the engine resolves the flows first.
+_COMMAND_SITE = _OperandSite(label="command operand", flows_first=True)
+
+
+def _parse_rule_operand(
+    raw: Any,
+    *,
+    where: str,
+    index: _FlowIndex,
+    capacity_names: set,
+    site: _OperandSite = _GUARD_SITE,
+) -> RuleOperandSpec:
+    """Translate one condition operand, validated against the class's ports."""
+    label = site.label
+    if isinstance(raw, str):
+        raw = {"name": raw}
+    if not isinstance(raw, dict):
+        raise Cod3sPlatformImportError(
+            f"{where}: a {label} is a flow name or a "
+            f"{{'name', 'negate', 'port', 'op', 'value'}} mapping, got "
+            f"{type(raw).__name__}"
+        )
+    _check_entry_keys(raw, _RULE_OPERAND_KEYS, where=f"{where}, {label}")
+
+    name = raw.get("name")
+    if not name:
+        raise Cod3sPlatformImportError(f"{where}: a {label} carries no 'name'")
+
+    port = raw.get("port")
+    if port is not None and port not in _VALID_SIDES:
+        raise Cod3sPlatformImportError(
+            f"{where}, {label} {name!r}: port must be one of "
+            f"{sorted(_VALID_SIDES)}, got {port!r}"
+        )
+
+    _check_declared_flow_name(
+        name,
+        where=f"{where}, {label}",
+        side=port,
+        index=index,
+        capacity_names=capacity_names,
+        flows_first=site.flows_first,
+    )
+
+    op = raw.get("op")
+    value = raw.get("value")
+    if op is not None:
+        if op not in _VALID_GUARD_OPS:
+            raise Cod3sPlatformImportError(
+                f"{where}, {label} {name!r}: unsupported comparison "
+                f"op={op!r} (expected one of {sorted(_VALID_GUARD_OPS)})"
+            )
+        if value is None:
+            raise Cod3sPlatformImportError(
+                f"{where}, {label} {name!r}: a comparison carries the "
+                "'value' it compares to"
+            )
+        if raw.get("negate"):
+            # muscadet's third operand shape rule (``validate_operand_shape``).
+            # Left to the engine it surfaces as a ValueError about a
+            # "production condition operand", for something the author declared
+            # as a discharge command, which is the confusion ``label`` exists
+            # to avoid.
+            raise Cod3sPlatformImportError(
+                f"{where}, {label} {name!r}: 'negate' cannot be combined with "
+                f"a comparison. Negate the COMPARISON instead, by writing the "
+                f"operator it inverts."
+            )
+        value = _coerce_number(value, where=f"{where}, {label} {name!r}: value")
+    elif value is not None:
+        raise Cod3sPlatformImportError(
+            f"{where}, {label} {name!r}: a 'value' without an 'op' "
+            "compares to nothing; declare the operator or drop the value"
+        )
+
+    return RuleOperandSpec(
+        name=name,
+        negate=bool(raw.get("negate", False)),
+        port=port,
+        op=op,
+        value=value,
+    )
+
+
+def _names_a_flow(name: str, side: Optional[str], index: _FlowIndex) -> bool:
+    """True when ``name`` is a flow of the class, on ``side`` when one is given."""
+    return name in (index.names if side is None else index.on_side(side))
+
+
+def _check_declared_flow_name(
+    name: str,
+    *,
+    where: str,
+    side: Optional[str],
+    index: _FlowIndex,
+    capacity_names: set,
+    flows_first: bool = False,
+) -> None:
+    """Refuse a declared name that is not a flow reachable on ``side``.
+
+    Reached from the three places a class-template section names a flow: a
+    rule's ``cons`` / ``prod`` maps, a rule guard's operands, and a capacity's
+    discharge command (R49).
+
+    A name designating a declared CAPACITY is refused as such rather than as an
+    unknown flow: muscadet refuses it too (an interposed capacity replaces the
+    flow it buffers automatically, so a declaration names flows and never
+    capacities), and "flow 'cuve' does not exist" would send the reader looking
+    for a port they never meant to declare.
+
+    ``flows_first`` is the one place the sites diverge, and it mirrors the
+    engine rather than choosing: a discharge command resolves the flows before
+    anything else and never consults the capacities, so a name carried by BOTH
+    a flow and a volume is that flow there and a refusal here would refuse a
+    model the engine builds. See :class:`_OperandSite`.
+    """
+    if name in capacity_names and not (
+        flows_first and _names_a_flow(name, side, index)
+    ):
+        raise Cod3sPlatformImportError(
+            f"{where} references capacity {name!r}, which is not a flow. An "
+            "interposed capacity replaces the flow it buffers automatically, "
+            "so a declaration names the FLOW the capacity holds."
+        )
+
+    if side is None:
+        if name not in index.names:
+            raise Cod3sPlatformImportError(
+                f"{where} references flow {name!r}, which this class does not "
+                f"declare (declared: {sorted(index.names)})"
+            )
+        return
+
+    if name not in index.on_side(side):
+        kind = "input" if side == "in" else "output"
+        other = "output" if side == "in" else "input"
+        detail = f" -- it is declared as an {other} flow" if name in index.names else ""
+        raise Cod3sPlatformImportError(
+            f"{where} references flow {name!r}, which is not an {kind} flow of "
+            f"this class{detail} (its {kind}s: {sorted(index.on_side(side))})"
+        )
+
+
+def _parse_condition_groups(
+    raw: Any,
+    *,
+    where: str,
+    index: _FlowIndex,
+    capacity_names: set,
+    site: _OperandSite,
+) -> Tuple[Tuple[RuleOperandSpec, ...], ...]:
+    """Parse a condition written in the ``prod_cond`` nested-group form.
+
+    The SHAPES accepted are muscadet's own, normalisation included: a bare
+    operand becomes one group of one, and an operand found where a group was
+    expected becomes a group of its own. Reproducing that here rather than
+    tightening it is the point -- a platform writing ``[["cmd"]]`` on a port and
+    on a volume must mean the same thing both times, and a parse layer that
+    accepted only the strictest form would teach a second grammar by refusing
+    what the engine accepts.
+
+    A rule guard does NOT go through this: its ``cond`` is a flat conjunction
+    by muscadet's own definition, not a two-level expression, so the two stop
+    sharing exactly where the engine stops sharing.
+
+    One shape muscadet accepts is left out, and deliberately: a ``set`` of
+    operands. JSON has no literal for one, so a payload cannot carry it, and a
+    set has no order to report a refusal against.
+    """
+    if raw is None:
+        return ()
+
+    if isinstance(raw, (str, dict)):
+        raw = [raw]
+    if not isinstance(raw, (list, tuple)):
+        raise Cod3sPlatformImportError(
+            f"{where}: a condition is a list of {site.label} groups, got "
+            f"{type(raw).__name__}"
+        )
+
+    groups: List[Tuple[RuleOperandSpec, ...]] = []
+    for group in raw:
+        if isinstance(group, (str, dict)):
+            group = [group]
+        elif not isinstance(group, (list, tuple)):
+            raise Cod3sPlatformImportError(
+                f"{where}: an operand group is a list of {site.label}s, got "
+                f"{type(group).__name__}"
+            )
+        groups.append(
+            tuple(
+                _parse_rule_operand(
+                    operand,
+                    where=where,
+                    index=index,
+                    capacity_names=capacity_names,
+                    site=site,
+                )
+                for operand in group
+            )
+        )
+
+    return tuple(groups)
+
+
 def _parse_capacity_flows(
     entry: Dict[str, Any], *, where: str, index: _FlowIndex
 ) -> Tuple[CapacityFlowSpec, ...]:
@@ -1564,10 +1868,47 @@ def _parse_capacity_flows(
     return tuple(held)
 
 
+def _parse_capacity_rate(
+    entry: Dict[str, Any], key: str, *, where: str
+) -> Optional[float]:
+    """Read one of a capacity's two declared rates, or ``None`` if absent.
+
+    ``fill_rate`` and ``serve_rate`` mean opposite things -- a claim the volume
+    makes for itself, and a ceiling on what leaves it -- but they are read and
+    refused on identical grounds, which is also how ``Capacity.check_rate``
+    validates them on the muscadet side. Two copies of the predicate drift, and
+    a rate accepted here and refused there raises a muscadet ValueError naming
+    a muscadet field, which is what this whole layer exists to avoid.
+
+    ``None`` and not a default: an absent key must reach ``add_capacity`` as an
+    absence, the two defaults being opposite (0.0 claims nothing, ``inf`` caps
+    nothing).
+    """
+    if entry.get(key) is None:
+        return None
+
+    value = _coerce_number(entry[key], where=f"{where}: {key}", allow_infinite=True)
+    if value < 0:
+        raise Cod3sPlatformImportError(
+            f"{where}: {key} must be positive or zero, got {value}"
+        )
+    return value
+
+
 def _parse_capacity(
-    entry: Dict[str, Any], *, class_name: str, index: _FlowIndex
+    entry: Dict[str, Any],
+    *,
+    class_name: str,
+    index: _FlowIndex,
+    capacity_names: set,
 ) -> CapacitySpec:
-    """Translate one ``capacities`` entry into a :class:`CapacitySpec`."""
+    """Translate one ``capacities`` entry into a :class:`CapacitySpec`.
+
+    ``capacity_names`` is every capacity the class declares, not the ones
+    parsed so far: a discharge command names a FLOW, and a name it shares with
+    a volume is refused as such whether that volume is declared before or after
+    this one. An order-dependent refusal is the kind a reader cannot reproduce.
+    """
     name = entry.get("name")
     if not name:
         raise Cod3sPlatformImportError(
@@ -1624,14 +1965,41 @@ def _parse_capacity(
                 quantity, where=f"{where}: content_init[{flow_name!r}]"
             )
 
-    fill_rate = None
-    if entry.get("fill_rate") is not None:
-        fill_rate = _coerce_number(
-            entry["fill_rate"], where=f"{where}: fill_rate", allow_infinite=True
+    fill_rate = _parse_capacity_rate(entry, "fill_rate", where=where)
+    serve_rate = _parse_capacity_rate(entry, "serve_rate", where=where)
+
+    serve_cond = _parse_condition_groups(
+        entry.get("serve_cond"),
+        where=f"{where}, serve_cond",
+        index=index,
+        capacity_names=capacity_names,
+        site=_COMMAND_SITE,
+    )
+
+    serve_cond_inner_mode = None
+    declared_mode = entry.get("serve_cond_inner_mode")
+    if declared_mode is not None and not serve_cond:
+        raise Cod3sPlatformImportError(
+            f"{where}: 'serve_cond_inner_mode' with no 'serve_cond' to "
+            "qualify. The mode says how the groups of a condition combine, so "
+            "alone it decides nothing and would be dropped in silence."
         )
-        if fill_rate < 0:
+    if serve_cond:
+        # Resolved HERE and not left to muscadet, whose own default is the
+        # other one: one nested list means one thing on a port and the same
+        # thing on a volume, or the platform has learnt two grammars. Cf.
+        # FlowSpec.logic_inner_mode for why the shared default is 'and'.
+        #
+        # ``is None`` and not a truth test: a platform form serialising an
+        # unset select as "" would otherwise be read as ABSENT here while the
+        # guard above has just read it as DECLARED, so it would take the
+        # default without ever reaching the closed set below -- inverting the
+        # condition of anyone who meant 'or', silently.
+        serve_cond_inner_mode = "and" if declared_mode is None else declared_mode
+        if serve_cond_inner_mode not in _VALID_INNER_MODES:
             raise Cod3sPlatformImportError(
-                f"{where}: fill_rate must be positive or zero, got {fill_rate}"
+                f"{where}: serve_cond_inner_mode must be one of "
+                f"{sorted(_VALID_INNER_MODES)}, got {declared_mode!r}"
             )
 
     return CapacitySpec(
@@ -1641,6 +2009,9 @@ def _parse_capacity(
         side=side,
         content_init=content_init,
         fill_rate=fill_rate,
+        serve_rate=serve_rate,
+        serve_cond=serve_cond,
+        serve_cond_inner_mode=serve_cond_inner_mode,
     )
 
 
@@ -1679,10 +2050,19 @@ def _build_kb_capacities(
                 f"{CONTINUOUS_FAMILY!r} first."
             )
 
+        # Collected off the RAW entries and before any of them is parsed, so a
+        # command naming a volume is refused whichever order they appear in.
+        capacity_names = {entry.get("name") for entry in entries if entry.get("name")}
+
         capacities: List[CapacitySpec] = []
         seen: set = set()
         for entry in entries:
-            capacity = _parse_capacity(entry, class_name=class_name, index=index)
+            capacity = _parse_capacity(
+                entry,
+                class_name=class_name,
+                index=index,
+                capacity_names=capacity_names,
+            )
             if capacity.name in seen:
                 raise Cod3sPlatformImportError(
                     f"Class {class_name!r}: capacity {capacity.name!r} is "
@@ -1694,109 +2074,6 @@ def _build_kb_capacities(
         out[class_name] = tuple(capacities)
 
     return out
-
-
-def _parse_rule_operand(
-    raw: Any, *, where: str, index: _FlowIndex, capacity_names: set
-) -> RuleOperandSpec:
-    """Translate one guard operand, validated against the class's ports."""
-    if isinstance(raw, str):
-        raw = {"name": raw}
-    if not isinstance(raw, dict):
-        raise Cod3sPlatformImportError(
-            f"{where}: a guard operand is a flow name or a "
-            f"{{'name', 'negate', 'port', 'op', 'value'}} mapping, got "
-            f"{type(raw).__name__}"
-        )
-    _check_entry_keys(raw, _RULE_OPERAND_KEYS, where=f"{where}, guard operand")
-
-    name = raw.get("name")
-    if not name:
-        raise Cod3sPlatformImportError(f"{where}: a guard operand carries no 'name'")
-
-    port = raw.get("port")
-    if port is not None and port not in _VALID_SIDES:
-        raise Cod3sPlatformImportError(
-            f"{where}, guard operand {name!r}: port must be one of "
-            f"{sorted(_VALID_SIDES)}, got {port!r}"
-        )
-
-    _check_rule_flow_name(
-        name,
-        where=f"{where}, guard operand",
-        side=port,
-        index=index,
-        capacity_names=capacity_names,
-    )
-
-    op = raw.get("op")
-    value = raw.get("value")
-    if op is not None:
-        if op not in _VALID_GUARD_OPS:
-            raise Cod3sPlatformImportError(
-                f"{where}, guard operand {name!r}: unsupported comparison "
-                f"op={op!r} (expected one of {sorted(_VALID_GUARD_OPS)})"
-            )
-        if value is None:
-            raise Cod3sPlatformImportError(
-                f"{where}, guard operand {name!r}: a comparison carries the "
-                "'value' it compares to"
-            )
-        value = _coerce_number(value, where=f"{where}, guard operand {name!r}: value")
-    elif value is not None:
-        raise Cod3sPlatformImportError(
-            f"{where}, guard operand {name!r}: a 'value' without an 'op' "
-            "compares to nothing; declare the operator or drop the value"
-        )
-
-    return RuleOperandSpec(
-        name=name,
-        negate=bool(raw.get("negate", False)),
-        port=port,
-        op=op,
-        value=value,
-    )
-
-
-def _check_rule_flow_name(
-    name: str,
-    *,
-    where: str,
-    side: Optional[str],
-    index: _FlowIndex,
-    capacity_names: set,
-) -> None:
-    """Refuse a rule name that is not a flow reachable on ``side``.
-
-    A name designating a declared CAPACITY is refused as such rather than as an
-    unknown flow: muscadet refuses it too (an interposed capacity replaces the
-    flow it buffers automatically, so rules name flows and never capacities),
-    and "flow 'cuve' does not exist" would send the reader looking for a port
-    they never meant to declare.
-    """
-    if name in capacity_names:
-        raise Cod3sPlatformImportError(
-            f"{where} references capacity {name!r}, which is not a flow. An "
-            "interposed capacity replaces the flow it buffers automatically, "
-            "so a rule names the FLOW the capacity holds."
-        )
-
-    if side is None:
-        if name not in index.names:
-            raise Cod3sPlatformImportError(
-                f"{where} references flow {name!r}, which this class does not "
-                f"declare (declared: {sorted(index.names)})"
-            )
-        return
-
-    if name not in index.on_side(side):
-        kind = "input" if side == "in" else "output"
-        other = "output" if side == "in" else "input"
-        detail = f" -- it is declared as an {other} flow" if name in index.names else ""
-        raise Cod3sPlatformImportError(
-            f"{where} references flow {name!r}, which is not an {kind} flow of "
-            f"this class{detail} (its {kind}s: {sorted(index.on_side(side))})"
-        )
 
 
 def _parse_rule_coefficients(
@@ -1819,7 +2096,7 @@ def _parse_rule_coefficients(
 
     out: Dict[str, float] = {}
     for name, coefficient in raw.items():
-        _check_rule_flow_name(
+        _check_declared_flow_name(
             name,
             where=f"{where}, {key!r} map",
             side=side,
@@ -1990,7 +2267,76 @@ def _build_kb_rule_sets(
 
         out[class_name] = tuple(rule_sets)
 
+    for class_name, capacities in capacities_lookup.items():
+        _check_discharge_is_reachable(
+            capacities,
+            rule_sets=out.get(class_name) or (),
+            index=_FlowIndex(kb_lookup.get(class_name) or []),
+            class_name=class_name,
+        )
+
     return out
+
+
+def _check_discharge_is_reachable(
+    capacities: Tuple[CapacitySpec, ...],
+    *,
+    rule_sets: Tuple[RuleSetSpec, ...],
+    index: _FlowIndex,
+    class_name: str,
+) -> None:
+    """Refuse a ceiling or a command on a volume nothing can draw from.
+
+    ``muscadet.kb.continuous.CapacityContinuous`` refuses exactly this by name
+    on ``ports="in"``, and this bridge builds plain ``ObjFlow`` components, so
+    without the check here nothing enforces it: measured, such a model imports
+    clean, wires its command port, and the declaration changes nothing at any
+    point of the run. That is the class of silently-dead declaration R-15
+    exists to refuse.
+
+    A discharge is reachable when a held flow leaves the component by one of
+    the two routes the production sweep honours, which are the routes
+    ``muscadet.ordering.commanded_discharge_outputs`` enumerates:
+
+    * the flow is also a continuous OUTPUT of the class, so the identity
+      transfer (R31) carries it across -- this is every ``side="out"`` volume
+      and every pass-through;
+    * a rule set CONSUMES it, so the volume releases into the rules. R48 is
+      explicit that both sides honour the ceiling, a hopper included.
+
+    Runs here rather than in :func:`_parse_capacity` for a dependency reason
+    and not a stylistic one: the rules are parsed after the capacities, because
+    a rule refuses a capacity name and needs the capacities to do it.
+    """
+    consumed = {
+        name for rule_set in rule_sets for rule in rule_set.rules for name in rule.cons
+    }
+
+    for capacity in capacities:
+        declared = [
+            key
+            for key, value in (
+                ("serve_rate", capacity.serve_rate is not None),
+                ("serve_cond", bool(capacity.serve_cond)),
+            )
+            if value
+        ]
+        if not declared:
+            continue
+
+        held = {entry.name for entry in capacity.flows}
+        if held & (set(index.outputs) | consumed):
+            continue
+
+        raise Cod3sPlatformImportError(
+            f"Class {class_name!r}, capacity {capacity.name!r}: "
+            f"{' and '.join(declared)} govern what a volume RELEASES, and "
+            f"nothing draws from this one -- it holds "
+            f"{sorted(held)}, none of which is an output of the class nor "
+            f"consumed by a rule set, so the declaration would never be read. "
+            f"Declare the flow on the output side too, consume it in a rule "
+            f"set, or drop the field."
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -4200,13 +4546,36 @@ def _continuous_out_kwargs(flow: FlowSpec) -> Dict[str, Any]:
 _FLOWS_SECTION = "flows"
 
 
+def _rule_operand_kwargs(operand: RuleOperandSpec) -> Dict[str, Any]:
+    """One condition operand, in muscadet's canonical mapping form.
+
+    Serves a rule guard and a capacity's discharge command alike: the two
+    resolve through one implementation on the muscadet side (R49), so they are
+    emitted by one here.
+    """
+    kwargs: Dict[str, Any] = {"name": operand.name}
+    if operand.negate:
+        kwargs["negate"] = True
+    if operand.port is not None:
+        kwargs["port"] = operand.port
+    if operand.op is not None:
+        kwargs["op"] = operand.op
+        kwargs["value"] = operand.value
+    return kwargs
+
+
 def _capacity_kwargs(capacity: CapacitySpec) -> Dict[str, Any]:
     """Declaration kwargs of one capacity, as ``ObjFlow.add_capacity`` takes them.
 
     ``volume`` becomes ``capacity``: the platform names the quantity, muscadet
     names the thing. Only what was declared is passed -- ``side`` left out lets
-    muscadet resolve it from the sides the held flows are carried on, and
-    ``fill_rate`` left out keeps the pure-buffer default.
+    muscadet resolve it from the sides the held flows are carried on,
+    ``fill_rate`` left out keeps the pure-buffer default, and ``serve_rate``
+    left out keeps the unbounded ceiling.
+
+    The discharge command is emitted in the operand mapping form, through the
+    very function a rule guard's operands go through, so a shape tightened on
+    one side of the vocabulary reaches the other (R49).
     """
     kwargs: Dict[str, Any] = {
         "name": capacity.name,
@@ -4221,19 +4590,14 @@ def _capacity_kwargs(capacity: CapacitySpec) -> Dict[str, Any]:
         kwargs["content_init"] = dict(capacity.content_init)
     if capacity.fill_rate is not None:
         kwargs["fill_rate"] = capacity.fill_rate
-    return kwargs
-
-
-def _rule_operand_kwargs(operand: RuleOperandSpec) -> Dict[str, Any]:
-    """One guard operand, in muscadet's canonical mapping form."""
-    kwargs: Dict[str, Any] = {"name": operand.name}
-    if operand.negate:
-        kwargs["negate"] = True
-    if operand.port is not None:
-        kwargs["port"] = operand.port
-    if operand.op is not None:
-        kwargs["op"] = operand.op
-        kwargs["value"] = operand.value
+    if capacity.serve_rate is not None:
+        kwargs["serve_rate"] = capacity.serve_rate
+    if capacity.serve_cond:
+        kwargs["serve_cond"] = [
+            [_rule_operand_kwargs(operand) for operand in group]
+            for group in capacity.serve_cond
+        ]
+        kwargs["serve_cond_inner_mode"] = capacity.serve_cond_inner_mode
     return kwargs
 
 
