@@ -113,20 +113,31 @@ None of these can touch a 4.4.0 model: each needs `serve_rate` or `serve_cond`.
   signal. Refused with `RateComparisonLoopError` or `RateObservationLoopError`
   depending on how the threshold reaches the rate. All three refusals now name
   the **capacity** the command is declared on, not only the component.
+  *Rewrite*: derive the command from a **capacity level** instead of a rate,
+  or command a volume that produces no part of what the threshold reads, which
+  is what a battery backing a plant on one bus does.
 - **A `serve_rate` or a `serve_cond` on `CapacityContinuous(ports="in")`**, an
   accumulator: it declares no output and no rule, so nothing would ever read
   them. The refusal is on that knowledge-base class; a hand-written component
   declaring an equally inert volume through `add_capacity` is not yet refused.
+  *Rewrite*: declare `ports="both"` to give the volume a way out, or drop the
+  field.
 - **A capacity carries upstream only what it may release.** The demand a volume
   publishes to its producer is capped by its `serve_rate` and its `serve_cond`,
   on top of the `fill_rate` it claims for itself. Without the cap a buffer at
   `fill_rate=0` became an accumulator the moment a ceiling was declared:
   measured, a volume at `serve_rate=40` between a source of 100 and a load of
   100 rose by 60 per unit of time.
+  *Rewrite*: declare the `fill_rate` the buffer really has. A volume that is
+  meant to accumulate says so, rather than accumulating out of a demand it
+  cannot honour.
 - `capacity_breaks_inbound` no longer tears an edge when the volume's discharge
   condition reads the arriving flow: what leaves then depends algebraically on
   what arrives, so the level no longer stands between the two, and the loop is
   refused rather than given an evaluation order.
+  *Rewrite*: command the discharge on a **level** rather than on the flow the
+  volume buffers, which is what puts an integrated state back between the two
+  ends.
 
 ### Still accepted, and worth knowing
 
