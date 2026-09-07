@@ -131,6 +131,29 @@ module's graph -- of the component delivering the rate. The two paths meet only
 in :func:`_walk_signal` and in :meth:`ContinuousFlowGraph.ancestors`, which is
 what lets a node absent from the graph still be tested against it.
 
+A third shape, and why it needs neither a third path nor a wider walk (R47)
+--------------------------------------------------------------------------
+Both paths above follow a verdict from where it is decided to where it lands,
+and both follow it on DISCRETE channels. A verdict can also leave as the rate
+itself -- a continuous output carrying a production condition (R44) -- and then
+neither can see it: the graph holds no edge for the observation half, and the
+walk recognises no channel for the command half.
+
+Widening the walk to return continuous outputs was tried and measured: it does
+return them, and the montage still builds, because the verdict has no discrete
+channel to travel on and the walk ends where it began. What closes it is that
+there is **nothing to travel**: a commanded rate is already carried by the
+graph, so what is left to ask is whether the commanded output reaches the
+producer of the observed rate, and whether that producer's own declaration
+turns what arrives into the rate being read. That is
+:func:`commanded_rate_wiring` and :func:`continuous_input_feeds`, read by
+:func:`find_rate_observation_loops` over what :func:`rate_driven_outputs`
+returns, and it costs no new path, no new marking and no change to what a rule
+guard is reported as driving.
+
+The transported twin needs nothing at all: a command leg and an observed leg
+that are both edges close a plain cycle, which the graph already refuses.
+
 **No observation edge ever enters the flow graph**, and that separation is
 deliberate on both sides. It is why R38 refuses an output flow named
 ``{f}_rate`` beside ``{f}`` (KD19): the collection of output flows must never
@@ -595,6 +618,22 @@ class RateObservationLoopError(ContinuousFlowCycleError):
     first-run cycle catches this one too.
     """
 
+    #: The physics the two observation refusals share, and the way out of both.
+    #: Held once rather than written twice: a modeller reaching either has the
+    #: same thing to fix, and a wording that drifted between them would read as
+    #: two different diagnoses of one offence.
+    RATE_IS_NOT_STATE = (
+        "A DELIVERED RATE is not an integrated state, whatever the measurement "
+        "link it arrived on: the allocation sweep recomputes it at every "
+        "evaluation, so the regimes on either side of the threshold select "
+        "each other within one instant and the model chatters instead of "
+        "settling. A deadband does not damp it either -- a rate JUMPS across "
+        "the band instead of moving through it, crossing both edges at once. "
+        "Observe a CAPACITY LEVEL instead: put a volume between the producer "
+        "and this reading and threshold its level, which is integrated and "
+        "does break the loop."
+    )
+
     def __init__(self, reader, channel, flow, producer, operand, connections):
         #: Component carrying the threshold.
         self.reader = reader
@@ -609,29 +648,81 @@ class RateObservationLoopError(ContinuousFlowCycleError):
 
         cycle = [cnct.source for cnct in connections] + [connections[-1].target]
 
-        super().__init__(
-            cycle,
-            connections,
-            message=(
-                "Continuous flow graph must be acyclic (R30, R43): "
-                f"{' -> '.join(cycle)} closes a loop through a rate "
-                f"observation. Connections closing the loop: "
-                f"{', '.join(str(cnct) for cnct in connections)}. "
-                f"{reader} thresholds the reading {channel} ({operand}) and "
-                f"drives a discrete signal from it, that reading is the rate "
-                f"{flow} delivered by {producer}, and that signal reaches a "
-                f"component producing the very {flow} it reads. A DELIVERED "
-                "RATE is not an integrated state, whatever the measurement "
-                "link it arrived on: the allocation sweep recomputes it at "
-                "every evaluation, so the regimes on either side of the "
-                "threshold select each other within one instant and the model "
-                "chatters instead of settling. A deadband does not damp it "
-                "either -- a rate JUMPS across the band instead of moving "
-                "through it, crossing both edges at once. Observe a CAPACITY "
-                "LEVEL instead: put a volume between the producer and this "
-                "reading and threshold its level, which is integrated and does "
-                "break the loop."
-            ),
+        super().__init__(cycle, connections)
+
+    def default_message(self) -> str:
+        """The refusal, written for a verdict that leaves as a DISCRETE signal.
+
+        Overrides the hook ``ContinuousFlowCycleError.__init__`` already
+        dispatches through, rather than a mechanism of its own, so
+        :attr:`path` and :attr:`wiring` are populated by the time it runs
+        and :class:`CommandedRateLoopError` can say what it alone has to
+        say without restating the physics the two share.
+        """
+        return (
+            "Continuous flow graph must be acyclic (R30, R43): "
+            f"{self.path} closes a loop through a rate "
+            f"observation. Connections closing the loop: {self.wiring}. "
+            f"{self.reader} thresholds the reading {self.channel} "
+            f"({self.operand}) and drives a discrete signal from it, that "
+            f"reading is the rate {self.flow} delivered by {self.producer}, "
+            f"and that signal reaches a component producing the very "
+            f"{self.flow} it reads. " + self.RATE_IS_NOT_STATE
+        )
+
+
+class CommandedRateLoopError(RateObservationLoopError):
+    """A RATE commanded by a threshold on its own observation (R30, R47).
+
+    The third shape of one offence, and the one that closes at ZERO HOPS. Its
+    two siblings both follow a verdict from where it is decided to where it
+    lands: :class:`RateComparisonLoopError` over transport,
+    :class:`RateObservationLoopError` over an observation link. Here the
+    verdict never leaves as a signal at all -- what the threshold decides IS a
+    continuous output, and that output reaches the producer of the very rate
+    the threshold reads.
+
+    So there is nothing to walk, and that is exactly why nothing caught it. A
+    measurement link is never an edge of the continuous graph (KD19), so the
+    graph sees no part of the observation half; and the walk that picks up what
+    the graph drops travels on DISCRETE channels, so it sees no part of the
+    command half. Widening that walk to both families does not help, measured:
+    the continuous output does start coming back, and the verdict still travels
+    on nothing.
+
+    The criterion is deliberately tight -- the commanded output must REACH the
+    observed producer, not merely exist -- because a component thresholding a
+    rate and commanding an output that goes elsewhere closes nothing, and in
+    this module refusing wrongly costs more than missing.
+
+    Kept a :class:`RateObservationLoopError`: the reading, the producer and the
+    physics are that error's, and a caller catching it must catch this too.
+    """
+
+    def __init__(
+        self, reader, channel, flow, producer, commanded, operand, connections
+    ):
+        # Assigned BEFORE the base constructor, which is what formats the
+        # message: ``default_message`` is dispatched from there and reads it.
+        #: The continuous output the threshold commands.
+        self.commanded = commanded
+
+        super().__init__(reader, channel, flow, producer, operand, connections)
+
+    def default_message(self) -> str:
+        return (
+            "Continuous flow graph must be acyclic (R30, R47): "
+            f"{self.path} closes a loop through a commanded rate. "
+            f"Connections closing the loop: {self.wiring}. "
+            f"{self.reader} thresholds the reading {self.channel} "
+            f"({self.operand}) and commands its continuous output "
+            f"{self.commanded} from it; that reading is the rate {self.flow} "
+            f"delivered by {self.producer}, and {self.commanded} reaches "
+            f"{self.producer}. No discrete signal carries the verdict, so "
+            "there was nothing to follow and the loop closes at zero hops: "
+            "neither the continuous graph, which holds no edge for an "
+            "observation link (KD19), nor the walk indexed on discrete "
+            "channels could see any part of it. " + self.RATE_IS_NOT_STATE
         )
 
 
@@ -1046,23 +1137,100 @@ def signal_driven_outputs(comp, seeds):
     output thresholding it -- a hop that used to break the chain, since the
     continuous output was invisible to the fixpoint. What LEAVES a component as
     a followable signal stays discrete: this walk is indexed on discrete
-    channels, the ones the continuous graph drops. A verdict leaving purely as
-    a rate is the continuous graph's business, and its one uncovered case is
-    recorded under "Known gap" below.
+    channels, the ones the continuous graph drops.
 
-    Known gap: a rate gated by a comparison on an OBSERVED quantity, whose
-    verdict leaves as that same rate and is observed back onto itself, closes a
-    loop no graph edge exists for (a measurement link is never an edge, KD19)
-    and no discrete signal carries. Widening the return to both families
-    catches it and also changes what a rule guard drives, which is a contract
-    of its own; it is left to that change.
+    Why the return stays discrete rather than being widened (R47)
+    ------------------------------------------------------------
+    A verdict leaving as a RATE is not this walk's business, and the division
+    of roles is one of competence rather than of convenience. Widening the
+    return was tried and measured: the continuous output does come back, and
+    the montage the widening was meant to refuse still builds, because
+    :func:`discrete_data_channel` answers None on a continuous flow. The
+    verdict travels on nothing, so the walk ends where it began.
+
+    A commanded rate is judged instead by the two things that can judge it.
+    Transported, it is the continuous graph's business already: the command leg
+    and the observed leg are both edges, and the loop is refused as a plain
+    cycle. Observed, there is no path to walk at all -- the commanded output
+    either reaches the observed producer or it does not -- which is
+    :func:`commanded_rate_wiring`, read by
+    :func:`find_rate_observation_loops` over what
+    :func:`rate_driven_outputs` returns.
+
+    Keeping the two questions apart is also what holds a contract still: what a
+    rule guard or a threshold DRIVES is read by other units and pinned by their
+    own tests, and it is not the same question as what a threshold COMMANDS.
+    """
+    return driven_outputs(comp, seeds, continuous=False)
+
+
+def rate_driven_outputs(comp, seeds):
+    """CONTINUOUS outputs of ``comp`` whose production derives from ``seeds``.
+
+    The other half of :func:`signal_driven_outputs`, over the same fixpoint and
+    the same taint: what a threshold COMMANDS rather than what it DRIVES. A
+    seeded output is in its own answer, which is the whole of the degenerate
+    case -- a rate commanded by a threshold on that very rate is commanded at
+    zero hops.
+    """
+    return driven_outputs(comp, seeds, continuous=True)
+
+
+def driven_outputs(comp, seeds, *, continuous):
+    """Outputs of one family whose state is tainted by ``seeds``.
+
+    ``continuous`` is keyword-only: it selects a family rather than tuning a
+    behaviour, and the two named wrappers above are what a caller is meant to
+    reach for.
+    """
+    tainted = tainted_output_states(comp, seeds)
+
+    return outputs_of_family(comp, tainted, continuous=continuous)
+
+
+def outputs_of_family(comp, tainted, *, continuous):
+    """The tainted outputs of one family, from a taint already computed."""
+    return [
+        name
+        for name, flow in (getattr(comp, "flows_out", None) or {}).items()
+        if isinstance(flow, FlowContinuous) == continuous
+        and (state_var_name(flow) or f"{name}_fed_out") in tainted
+    ]
+
+
+def clamped_production_endpoints(name, flow):
+    """The variables a MODE clamps to change what that output produces.
+
+    The mode hop of the fixpoint, and the two families spell it differently: a
+    discrete output is switched off through its availability gate, a continuous
+    one is SCALED, through the shared ``{flow}_out_rate`` (KD10) or through the
+    per-mode ``{mode}_derating_{flow}`` variables (R18).
+
+    The continuous half was missing, and it was not a detail. A rate commanded
+    by a DERATING rather than by a production condition never entered the taint,
+    so the loop R47 exists for still built when the verdict reached the output
+    through a mode: measured on a threshold driving an alarm that a mode watches
+    in order to cut the very rate the threshold reads.
+    """
+    if not isinstance(flow, FlowContinuous):
+        return {f"{name}_fed_available_out"}
+
+    endpoints = {flow.rate_var_name()}
+    endpoints.update(
+        flow.derating_var_name(mode) for mode in getattr(flow, "derating", None) or {}
+    )
+
+    return endpoints
+
+
+def tainted_output_states(comp, seeds):
+    """The fixpoint itself: every state basename ``seeds`` reaches inside ``comp``.
+
+    Both families are propagated through and both are returned; the caller
+    picks the family it is asking about. See :func:`signal_driven_outputs` for
+    what the two hops are and why a deadband needs the second.
     """
     all_flows_out = getattr(comp, "flows_out", None) or {}
-    flows_out = {
-        name: flow
-        for name, flow in all_flows_out.items()
-        if not isinstance(flow, FlowContinuous)
-    }
 
     tainted = set(seeds)
     modes = getattr(comp, "mode_signals", None) or {}
@@ -1092,15 +1260,13 @@ def signal_driven_outputs(comp, seeds):
                 if state_var_name(source) is not None
             }
 
-            if f"{name}_fed_available_out" in tainted or not tainted.isdisjoint(reads):
+            clamped = clamped_production_endpoints(name, flow)
+
+            if not tainted.isdisjoint(clamped) or not tainted.isdisjoint(reads):
                 tainted.add(state)
                 changed = True
 
-    return [
-        name
-        for name, flow in flows_out.items()
-        if (state_var_name(flow) or f"{name}_fed_out") in tainted
-    ]
+    return tainted
 
 
 def rule_guard_comparison_seeds(comp, flow_in):
@@ -1609,11 +1775,22 @@ def reading_driven_signals(comp, channel_name):
     Returns
     -------
     tuple
-        ``(output names, thresholds rendered)``. Both empty when this component
-        derives no signal from that reading.
+        ``(discrete output names, continuous output names, thresholds
+        rendered)``. All three empty when this component derives nothing from
+        that reading. The two families come out of ONE run of the fixpoint,
+        which is what :func:`tainted_output_states` was split out for: they are
+        two readings of one propagation, not two propagations.
     """
     thresholds = measurement_thresholds(comp, channel_name)
-    outputs = measurement_driven_outputs(comp, channel_name) if thresholds else []
+    outputs = []
+    rates = []
+
+    if thresholds:
+        tainted = tainted_output_states(
+            comp, measurement_threshold_seeds(comp, channel_name)
+        )
+        outputs = outputs_of_family(comp, tainted, continuous=False)
+        rates = outputs_of_family(comp, tainted, continuous=True)
 
     emit = getattr(comp, "controls_emit", None)
     published = published_measurements(comp)
@@ -1632,15 +1809,15 @@ def reading_driven_signals(comp, channel_name):
         outputs.append(name)
         thresholds.extend(ctrl_node_thresholds(node, channel_name))
 
-    return outputs, thresholds
+    return outputs, rates, thresholds
 
 
-def measurement_driven_outputs(comp, channel_name):
-    """Outputs of ``comp`` carrying a threshold on that reading.
+def measurement_threshold_seeds(comp, channel_name):
+    """States a threshold of ``comp`` on that reading decides, either family.
 
-    The measurement counterpart of :func:`comparison_driven_outputs`, seeded
-    the same way, over both families since R44, and followed by the same
-    fixpoint.
+    The seeding half, held apart from the two walks reading it so that asking
+    what a threshold DRIVES and what it COMMANDS starts from one place and one
+    reading of the declaration.
     """
     channel = measurement_channels(comp).get(channel_name)
     seeds = set()
@@ -1652,7 +1829,32 @@ def measurement_driven_outputs(comp, channel_name):
         ):
             seeds.add(state_var_name(flow) or f"{name}_fed_out")
 
+    return seeds
+
+
+def measurement_driven_outputs(comp, channel_name):
+    """Discrete outputs of ``comp`` carrying a threshold on that reading.
+
+    The measurement counterpart of :func:`comparison_driven_outputs`, seeded
+    the same way, over both families since R44, and followed by the same
+    fixpoint.
+    """
+    seeds = measurement_threshold_seeds(comp, channel_name)
+
     return signal_driven_outputs(comp, seeds) if seeds else []
+
+
+def measurement_driven_rates(comp, channel_name):
+    """CONTINUOUS outputs of ``comp`` a threshold on that reading commands (R47).
+
+    The command counterpart of :func:`measurement_driven_outputs`, on the same
+    seeds. What it returns is not followed anywhere: a rate leaving a component
+    is carried by the continuous graph, so the only question left is whether it
+    reaches the producer of the observed rate (:func:`commanded_rate_wiring`).
+    """
+    seeds = measurement_threshold_seeds(comp, channel_name)
+
+    return rate_driven_outputs(comp, seeds) if seeds else []
 
 
 def channel_behind_box(comp, box_name):
@@ -1784,6 +1986,120 @@ def mark_algebraic_readings(components, by_engine_name, connections_of):
     return marked
 
 
+def continuous_input_feeds(comp, flow_in, flow_out):
+    """True when what arrives on ``flow_in`` can change what leaves on ``flow_out``.
+
+    The arrival-end predicate, and the exact counterpart of
+    :func:`gates_production_on` on the other walk: reaching a component is not
+    closing a loop, what closes it is that the component's production depends
+    on what arrived. Structural like every test in this module, so it asks
+    whether a dependency is DECLARED and never what it is currently worth.
+
+    Three ways a declaration creates one, and a loop through any of them is the
+    same loop:
+
+    * a **rule set** consuming ``flow_in`` and producing ``flow_out``. Two
+      independent sets on one component do not couple, which is the case this
+      predicate exists for: a plant burning ``fuel`` into ``z`` while making
+      ``q`` out of something else does not make ``q`` depend on ``fuel``;
+    * an **identity transfer** (R31), where the two are one flow transiting the
+      component;
+    * a **transfer pair** naming both, which moves a quantity between them.
+
+    Without this, an unqualified "the command lands on an ancestor" test
+    refuses a model whose commanded output provably cannot move the observed
+    rate -- measured on an input no rule consumes at all, and on a producer
+    running two independent rule sets. In a module where refusing wrongly costs
+    more than missing, that is the outcome to avoid first.
+    """
+    if flow_in == flow_out:
+        return True
+
+    for rule_set in (getattr(comp, "rule_sets", None) or {}).values():
+        if flow_in in rule_set.consumed_flows and flow_out in rule_set.produced_flows:
+            return True
+
+    for pair in (getattr(comp, "transfers", None) or {}).values():
+        flows = getattr(pair, "flows", None) or []
+
+        if flow_in in flows and flow_out in flows:
+            return True
+
+    return False
+
+
+def commanded_rate_wiring(graph, components, reader, commanded, producer, flow):
+    """How ``reader``'s commanded output reaches the observed rate, or None (R47).
+
+    The whole of the zero-hop recognition, and the tight half of its criterion.
+    A rate leaving a component is carried by the continuous graph, so there is
+    no signal to follow here: either the commanded output can change what
+    ``producer`` delivers on ``flow``, or it cannot.
+
+    Two ways it can, and the first is the degenerate one the defect was
+    measured on:
+
+    * the commanded output IS the observed one, so the value of this instant
+      decides the value of this instant. **Zero hops**, and no connection
+      closes it that the observation path has not already named -- hence the
+      empty list, which is a found loop and not a missing one;
+    * it is **delivered straight into the producer**, onto an input that
+      producer's declaration turns into the observed output
+      (:func:`continuous_input_feeds`), over a connection no capacity breaks.
+      One hop: the supply the observed rate is made of.
+
+    Three things it refuses to conclude, and each is deliberate.
+
+    **Reaching an ANCESTOR of the producer is not enough**, though ``ancestors``
+    is transitively closed and the arithmetic would work. What is missing is
+    the arrival-end test at every intermediate node: the quantity has to keep
+    being passed on, hop after hop, and this module holds no walk that checks
+    it. Asserting the chain on the strength of its first edge alone refuses
+    models that close nothing, so the second way stops at the producer and a
+    longer chain is a MISS. That is the cheap error here, and the honest one.
+
+    **A state-broken connection carries nothing within the instant.** A
+    capacity on the producer's input side integrates what arrives before any
+    rule reads it (R-14, :func:`capacity_breaks_inbound`), so the commanded
+    rate of this instant cannot move the observed rate of this instant. The
+    error's own message advises putting a volume in the way; refusing a model
+    that already has one would be answering a question with itself.
+
+    **A SIBLING output of the same rule set is not a third way**, which is what
+    makes the first way ask for the commanded output to BE the observed one.
+    Gating one output of a two-output rule leaves the other untouched, because
+    ``get_uptake_factor`` is the MAXIMUM over the rule's outputs and not their
+    minimum (R-13). Measured on a rule making ``q`` and ``r`` out of ``a`` at
+    8.0: cutting ``r`` to zero leaves ``q`` at 8.0 and the draw at 8.0, and
+    only cutting BOTH takes the three to zero, where the observed output is
+    gated as well and the first way already holds.
+
+    Returns
+    -------
+    list or None
+        The connections closing the loop, empty at zero hops; None when the
+        commanded output does not reach the observed rate.
+    """
+    if reader == producer and commanded == flow:
+        return []
+
+    target = components.get(producer)
+
+    if target is None or not continuous_input_feeds(target, commanded, flow):
+        return None
+
+    for cnct in graph.connections:
+        if (
+            cnct.source == reader
+            and cnct.flow == commanded
+            and cnct.target == producer
+            and not cnct.state_broken
+        ):
+            return [cnct]
+
+    return None
+
+
 def find_rate_observation_loops(system, graph):
     """Every instantaneous loop closed by a threshold on an OBSERVED rate (R43).
 
@@ -1836,11 +2152,28 @@ def find_rate_observation_loops(system, graph):
     the over-approximation itself. Tightening it is one change, in
     :meth:`ContinuousFlowGraph.ancestors`, for both.
 
+    The verdict does not have to LEAVE (R47)
+    ----------------------------------------
+    A threshold on a marked reading is followed two ways, because a verdict can
+    be carried two ways. As a **discrete signal**, walked by
+    :func:`_walk_signal` until it lands on an ancestor of the producer, which
+    is the R43 path above. Or as the **rate itself**, when what the threshold
+    gates is a continuous output (R44), or a mode derating one: there is then
+    nothing to walk, and what is left to ask is whether that output reaches the
+    observed producer
+    (:func:`commanded_rate_wiring`), and whether the producer's own declaration
+    turns what arrives into the observed rate
+    (:func:`continuous_input_feeds`). EVERY commanded-rate loop of the model is
+    reported after every signal one, and not merely after the ones closing on
+    the same producer, so a montage closing both keeps the diagnostic naming
+    its signal.
+
     Returns
     -------
     list of RateObservationLoopError
-        One per (reader, channel, producer) triple, in declaration order. Empty
-        for a model that closes no such loop.
+        One per (reader, channel, producer, verdict) tuple, in declaration
+        order, the commanded-rate ones being :class:`CommandedRateLoopError`.
+        Empty for a model that closes no such loop.
     """
     components = getattr(system, "comp", None) or {}
 
@@ -1855,7 +2188,16 @@ def find_rate_observation_loops(system, graph):
 
     marked = mark_algebraic_readings(components, by_engine_name, connections_of)
 
-    loops = []
+    # The two verdicts are collected apart and concatenated at the end, so the
+    # precedence below holds over the WHOLE model and not merely within one
+    # producer: ``compute_equation_order`` raises the first, and a loop a signal
+    # can be followed through keeps the message written for it.
+    signal_loops = []
+    commanded_loops = []
+
+    # ``ancestors`` rebuilds its incoming map on every call, so it is asked once
+    # per producer rather than once per (producer, flow) pair.
+    upstream_of = {}
 
     for key, comp in components.items():
         for channel_name in measurement_channels(comp):
@@ -1864,36 +2206,58 @@ def find_rate_observation_loops(system, graph):
             if not reached:
                 continue
 
-            outputs, thresholds = reading_driven_signals(comp, channel_name)
+            outputs, commanded, thresholds = reading_driven_signals(comp, channel_name)
 
-            if not outputs:
+            if not outputs and not commanded:
                 continue
 
             operand = ", ".join(thresholds) or channel_name
 
             for (producer, flow_name), path in reached.items():
-                walked = _walk_signal(
-                    key,
-                    outputs,
-                    graph.ancestors(producer),
-                    components,
-                    by_engine_name,
-                    connections_of,
-                )
+                if outputs:
+                    if producer not in upstream_of:
+                        upstream_of[producer] = graph.ancestors(producer)
 
-                if walked is not None:
-                    loops.append(
-                        RateObservationLoopError(
-                            key,
-                            channel_name,
-                            flow_name,
-                            producer,
-                            operand,
-                            path + walked,
-                        )
+                    walked = _walk_signal(
+                        key,
+                        outputs,
+                        upstream_of[producer],
+                        components,
+                        by_engine_name,
+                        connections_of,
                     )
 
-    return loops
+                    if walked is not None:
+                        signal_loops.append(
+                            RateObservationLoopError(
+                                key,
+                                channel_name,
+                                flow_name,
+                                producer,
+                                operand,
+                                path + walked,
+                            )
+                        )
+
+                for name in commanded:
+                    wiring = commanded_rate_wiring(
+                        graph, components, key, name, producer, flow_name
+                    )
+
+                    if wiring is not None:
+                        commanded_loops.append(
+                            CommandedRateLoopError(
+                                key,
+                                channel_name,
+                                flow_name,
+                                producer,
+                                name,
+                                operand,
+                                path + wiring,
+                            )
+                        )
+
+    return signal_loops + commanded_loops
 
 
 # ----------------------------------------------------------------------
@@ -2214,7 +2578,9 @@ def compute_equation_order(system):
         instantaneous loop the graph does not carry
         (:class:`RateComparisonLoopError`), or when a threshold on an OBSERVED
         rate closes one the graph cannot even see
-        (:class:`RateObservationLoopError`, R43).
+        (:class:`RateObservationLoopError`, R43) -- whether its verdict leaves
+        as a discrete signal or as the commanded rate itself
+        (:class:`CommandedRateLoopError`, R47).
     ControllerSignalCycleError
         When a chain of controller republications closes on itself (R45). A
         subclass of the above, so one ``except`` still covers every first-run

@@ -721,9 +721,11 @@ def test_a_continuous_output_seeds_the_observation_walk():
     one integration step per stop for ever.
 
     The seed is what this asserts, and it is the half that was missing here.
-    The other half, following a verdict that leaves purely as a RATE, is the
-    known gap recorded on ``signal_driven_outputs``: closing it also changes
-    what a rule guard drives, so it belongs to that change and not this one.
+    The other half, a verdict that leaves purely as a RATE, was closed by R47
+    and closed BESIDE this walk rather than through it: there is no signal to
+    follow, so ``find_rate_observation_loops`` asks whether the commanded
+    output reaches the observed producer. What a rule guard drives is therefore
+    unchanged, which is what the test above still pins.
     """
     system = muscadet.System(name="CpcSeedObs")
     try:
