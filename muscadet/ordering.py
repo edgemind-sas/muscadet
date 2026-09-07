@@ -550,6 +550,21 @@ class ContinuousFlowCycleError(ValueError):
         )
 
 
+def capacity_clause(capacities: typing.Sequence[str], what: str) -> str:
+    """The sentence a refusal names the capacities carrying a command with.
+
+    Empty when none does, so a loop closed the way it always was reads exactly
+    as it always did: the clause is ADDED to a message, never woven into it.
+    """
+    if not capacities:
+        return ""
+
+    names = ", ".join(repr(name) for name in capacities)
+    plural = "capacity" if len(capacities) == 1 else "capacities"
+
+    return f" The {what} is declared on the {plural} {names} (serve_cond, R49)."
+
+
 class RateComparisonLoopError(ContinuousFlowCycleError):
     """A discrete signal thresholded on a RATE, wired back upstream (R30).
 
@@ -566,13 +581,16 @@ class RateComparisonLoopError(ContinuousFlowCycleError):
     cycle catches this one too.
     """
 
-    def __init__(self, reader, flow, operand, connections):
+    def __init__(self, reader, flow, operand, connections, capacities=()):
         #: Component carrying the comparison.
         self.reader = reader
         #: Continuous input flow it compares.
         self.flow = flow
         #: The comparison, rendered as it was declared.
         self.operand = operand
+        #: Capacities of the ARRIVING component whose discharge condition the
+        #: signal gates, empty when it gates a rule, an output or a mode (R50).
+        self.capacities = list(capacities)
 
         cycle = [cnct.source for cnct in connections] + [connections[-1].target]
 
@@ -596,6 +614,7 @@ class RateComparisonLoopError(ContinuousFlowCycleError):
                 "once. Gate production on a quantity through a sensor reading "
                 "a CAPACITY LEVEL over a measurement link: a level is "
                 "integrated, so it does break the loop."
+                + capacity_clause(self.capacities, "command it arrives at")
             ),
         )
 
@@ -700,12 +719,23 @@ class CommandedRateLoopError(RateObservationLoopError):
     """
 
     def __init__(
-        self, reader, channel, flow, producer, commanded, operand, connections
+        self,
+        reader,
+        channel,
+        flow,
+        producer,
+        commanded,
+        operand,
+        connections,
+        capacities=(),
     ):
         # Assigned BEFORE the base constructor, which is what formats the
         # message: ``default_message`` is dispatched from there and reads it.
         #: The continuous output the threshold commands.
         self.commanded = commanded
+        #: Capacities whose discharge condition commands it, empty when the
+        #: command is a production condition on the output itself (R50).
+        self.capacities = list(capacities)
 
         super().__init__(reader, channel, flow, producer, operand, connections)
 
@@ -722,7 +752,9 @@ class CommandedRateLoopError(RateObservationLoopError):
             "there was nothing to follow and the loop closes at zero hops: "
             "neither the continuous graph, which holds no edge for an "
             "observation link (KD19), nor the walk indexed on discrete "
-            "channels could see any part of it. " + self.RATE_IS_NOT_STATE
+            "channels could see any part of it. "
+            + self.RATE_IS_NOT_STATE
+            + capacity_clause(self.capacities, "command")
         )
 
 
@@ -1063,6 +1095,107 @@ def state_var_name(flow):
     return None if var is None else var.basename()
 
 
+def serve_cond_operands(capacity):
+    """``(source, comparison)`` for every operand of a discharge condition (R50).
+
+    The capacity counterpart of :func:`prod_cond_operands`, over the three
+    fields R49 stores a resolved condition in. Held apart from it because a
+    capacity is not a flow and spells them differently, and identical in shape
+    because the vocabulary is one.
+    """
+    compare_matrix = getattr(capacity, "serve_cond_compare", None) or []
+
+    for i, group in enumerate(getattr(capacity, "serve_cond", None) or []):
+        for j, source in enumerate(group):
+            yield source, _prod_cond_matrix_entry(compare_matrix, i, j)
+
+
+def commanded_discharge_outputs(comp, capacity):
+    """The continuous outputs a capacity's discharge command decides (R50).
+
+    What a discharge drives depends on how what it releases leaves the
+    component, and all three answers are the ones the production sweep honours:
+
+    * a held flow that is also a continuous **output** is driven directly. On
+      the ``out`` side that is the whole of it: the held flows ARE the outputs.
+      On the ``in`` side it is the IDENTITY TRANSFER (R31), and leaving it out
+      was measured wrong -- a rule-less pass-through buffered on the way in
+      produced no seed at all, so the loop it closed went unreported;
+    * on the ``in`` side, what the RULES make of the released quantity. The
+      same rule :func:`rule_guard_comparison_seeds` follows, for the same
+      reason: what carries a verdict onward is everything the consuming set
+      produces.
+
+    Returns
+    -------
+    set of str
+        Variable basenames, empty when nothing the capacity commands leaves the
+        component.
+    """
+    flows_out = getattr(comp, "flows_out", None) or {}
+    held = capacity.flow_names
+    seeds = set()
+
+    def seed(name):
+        flow = flows_out.get(name)
+
+        if flow is not None:
+            seeds.add(state_var_name(flow) or f"{name}_fed_out")
+
+    # Walked in DECLARATION order, as everything in this module is (KTD3), even
+    # though the answer is a set: what is iterated here decides nothing today
+    # and iterating a set would make that an accident rather than a choice.
+    for name in held:
+        seed(name)
+
+    if capacity.side == "out":
+        return seeds
+
+    for rule_set in (getattr(comp, "rule_sets", None) or {}).values():
+        if set(held).isdisjoint(rule_set.consumed_flows):
+            continue
+
+        for name in rule_set.produced_flows:
+            seed(name)
+
+    return seeds
+
+
+def capacities_reading(comp, source):
+    """Names of the capacities whose discharge condition READS ``source`` (R50).
+
+    What a refusal has to name beside the wiring and the operand: a component
+    may carry several volumes, and the condition lives on ONE of them. Without
+    it a modeller is told which component closes the loop and left to find the
+    declaration.
+    """
+    return [
+        capacity.name
+        for capacity in (getattr(comp, "capacities", None) or {}).values()
+        if any(operand is source for operand, _ in serve_cond_operands(capacity))
+    ]
+
+
+def capacities_commanding(comp, flow_name):
+    """Names of the capacities whose discharge command DECIDES ``flow_name``.
+
+    The other end of the same question: :func:`capacities_reading` names the
+    volume a loop arrives at, this one the volume a commanded rate leaves.
+    """
+    flow = (getattr(comp, "flows_out", None) or {}).get(flow_name)
+
+    if flow is None:
+        return []
+
+    state = state_var_name(flow) or f"{flow_name}_fed_out"
+
+    return [
+        capacity.name
+        for capacity in (getattr(comp, "capacities", None) or {}).values()
+        if capacity.serve_cond and state in commanded_discharge_outputs(comp, capacity)
+    ]
+
+
 def compared_continuous_inputs(comp):
     """The continuous INPUTS this component compares against a threshold.
 
@@ -1101,6 +1234,22 @@ def compared_continuous_inputs(comp):
 
     for flow in (getattr(comp, "flows_out", None) or {}).values():
         for source, compare in prod_cond_operands(flow):
+            name = getattr(source, "name", None)
+
+            if compare is None or not isinstance(source, FlowContinuous):
+                continue
+
+            if flows_in.get(name) is source:
+                compared.setdefault(
+                    name, f"{name} {compare['op']} {compare['value']:g}"
+                )
+
+    # A capacity's DISCHARGE condition is a third place the same comparison can
+    # live (R49, R50), and a capacity is not a flow, so the two loops above
+    # walk past it. Read here rather than in a path of its own: the offence is
+    # the comparison, whatever declaration carries it.
+    for capacity in (getattr(comp, "capacities", None) or {}).values():
+        for source, compare in serve_cond_operands(capacity):
             name = getattr(source, "name", None)
 
             if compare is None or not isinstance(source, FlowContinuous):
@@ -1344,6 +1493,13 @@ def comparison_driven_outputs(comp, flow_name):
 
     seeds |= rule_guard_comparison_seeds(comp, flow_in)
 
+    for capacity in (getattr(comp, "capacities", None) or {}).values():
+        if any(
+            compare is not None and source is flow_in
+            for source, compare in serve_cond_operands(capacity)
+        ):
+            seeds |= commanded_discharge_outputs(comp, capacity)
+
     return signal_driven_outputs(comp, seeds) if seeds else []
 
 
@@ -1358,7 +1514,7 @@ def inbound_driven_outputs(comp, flow_name):
 def gates_production_on(comp, flow_name):
     """True when ``comp``'s own production can depend on that discrete input.
 
-    Three ways, and a loop closed through any of them is the same loop:
+    Four ways, and a loop closed through any of them is the same loop:
 
     * a **rule guard** naming it -- the declared way a boolean signal selects a
       continuous regime (R21);
@@ -1366,15 +1522,25 @@ def gates_production_on(comp, flow_name):
       declared way a boolean signal commands a continuous actuator. The gate is
       a factor of the production, so a signal derived from that very production
       closes the loop as surely as a guard does;
+    * a **capacity's discharge condition** naming it (R49, R50) -- the declared
+      way a boolean signal commands a STOCK. What leaves a volume is not
+      production, which is the whole reason that condition exists, and it is
+      also why this clause had to be written separately: the loop is identical
+      and the declaration carrying it is not;
     * a **mode automaton** watching it, since a mode is what a derating hangs
       on and a derating scales what an output produces.
 
-    The second was added with the condition itself, and its absence would have
-    been silent in the worst way: the walk reaches the component, asks whether
-    its production depends on the signal, is told no, and the model builds and
-    chatters at a period set by the integration step instead of being refused.
+    The last two were each added with the mechanism they read, and each absence
+    was silent in the same worst way: the walk reaches the component, asks
+    whether its production depends on the signal, is told no, and the model
+    builds and chatters at a period set by the integration step instead of
+    being refused. Measured for the discharge clause on one montage written two
+    ways, a rate thresholded into a signal wired back to the volume delivering
+    it: gated on the OUTPUT it was refused, gated on the CAPACITY it built, so
+    moving the gate from one to the other lost the diagnostic without changing
+    the model.
 
-    Requiring one of the three is what keeps a legitimate model building: a
+    Requiring one of the four is what keeps a legitimate model building: a
     discrete signal that merely happens to travel between two components which
     also exchange a continuous flow closes no loop, and refusing one would be
     worse than missing one.
@@ -1394,6 +1560,18 @@ def gates_production_on(comp, flow_name):
             continue
 
         if any(source is flow_in for source, _ in prod_cond_operands(flow)):
+            return True
+
+    for capacity in (getattr(comp, "capacities", None) or {}).values():
+        if not any(source is flow_in for source, _ in serve_cond_operands(capacity)):
+            continue
+
+        # Naming the signal is not enough: what the volume releases has to
+        # LEAVE, or the command reaches no production and refusing would be the
+        # expensive error. The two ends of this route therefore ask one
+        # question -- a hand-declared volume releasing into neither an output
+        # nor a rule commands nothing, whatever its condition says.
+        if commanded_discharge_outputs(comp, capacity):
             return True
 
     state = state_var_name(flow_in)
@@ -1455,8 +1633,27 @@ def find_rate_comparison_loops(system, graph):
                 )
 
                 if path is not None:
+                    # The signal ARRIVES at the last connection's target, and
+                    # that is the component whose declaration gates on it.
+                    arrival = components.get(path[-1].target)
+                    gated = (
+                        (getattr(arrival, "flows_in", None) or {}).get(path[-1].flow)
+                        if arrival is not None
+                        else None
+                    )
+
                     loops.append(
-                        RateComparisonLoopError(key, flow_name, operand, [cnct] + path)
+                        RateComparisonLoopError(
+                            key,
+                            flow_name,
+                            operand,
+                            [cnct] + path,
+                            capacities=(
+                                []
+                                if gated is None
+                                else capacities_reading(arrival, gated)
+                            ),
+                        )
                     )
 
     return loops
@@ -1712,6 +1909,15 @@ def measurement_thresholds(comp, channel_name):
             if compare is not None and source is channel:
                 found.append(f"{channel_name} {compare['op']} {compare['value']:g}")
 
+    # A capacity's DISCHARGE condition thresholds a reading in the same
+    # vocabulary (R49, R50), and a capacity is not a flow, so the loop above
+    # walks past it. Read here for the same reason the seeds read it: the
+    # offence is the comparison, whatever declaration carries it.
+    for capacity in (getattr(comp, "capacities", None) or {}).values():
+        for source, compare in serve_cond_operands(capacity):
+            if compare is not None and source is channel:
+                found.append(f"{channel_name} {compare['op']} {compare['value']:g}")
+
     return found
 
 
@@ -1828,6 +2034,13 @@ def measurement_threshold_seeds(comp, channel_name):
             for source, compare in prod_cond_operands(flow)
         ):
             seeds.add(state_var_name(flow) or f"{name}_fed_out")
+
+    for capacity in (getattr(comp, "capacities", None) or {}).values():
+        if any(
+            compare is not None and source is channel
+            for source, compare in serve_cond_operands(capacity)
+        ):
+            seeds |= commanded_discharge_outputs(comp, capacity)
 
     return seeds
 
@@ -2254,6 +2467,7 @@ def find_rate_observation_loops(system, graph):
                                 name,
                                 operand,
                                 path + wiring,
+                                capacities=capacities_commanding(comp, name),
                             )
                         )
 
