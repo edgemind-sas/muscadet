@@ -126,6 +126,7 @@ from colored import attr, fg
 import cod3s
 
 from .common import entity_label, fresh_instant_occ_law
+from .flow import add_cond_threshold_automata, cond_readers, prod_cond_holds
 from .flow_continuous import (
     FlowContinuousOut,
     rate_alias,
@@ -450,6 +451,51 @@ class Capacity(cod3s.ObjCOD3S):
             "the wrong reading."
         ),
     )
+
+    serve_cond: list = pydantic.Field(
+        default_factory=list,
+        description=(
+            "Condition commanding what this capacity releases (R49), in the "
+            "operand vocabulary a production condition uses (R22, R44): the "
+            "same shapes, the same conjunctive-normal form, the same "
+            "comparison grammar, resolved by the same implementation. What "
+            "differs is only what the verdict does. EMPTY -- the default -- "
+            "holds, so a capacity declaring none is uncommanded and every "
+            "existing model is untouched. Stored RESOLVED once the component "
+            "has read it: the operand names are replaced by the flow (or "
+            "measurement channel) objects, and the negation and the comparison "
+            "are lifted into the two matrices below."
+        ),
+    )
+
+    serve_cond_negate: list = pydantic.Field(
+        default_factory=list,
+        description=(
+            "Per-operand negation matrix of 'serve_cond', aligned "
+            "index-for-index with it. Empty unless an operand is negated."
+        ),
+    )
+
+    serve_cond_compare: list = pydantic.Field(
+        default_factory=list,
+        description=(
+            "Per-operand comparison matrix of 'serve_cond', aligned "
+            "index-for-index with it. Empty unless an operand compares."
+        ),
+    )
+
+    serve_cond_inner_mode: str = pydantic.Field(
+        "or",
+        description=(
+            "How 'serve_cond' reads its two levels, exactly as "
+            "'var_prod_cond_inner_mode' does for a production condition: 'or' "
+            "is a conjunction of disjunctions, 'and' the other way round."
+        ),
+    )
+
+    #: Memoised readers of :attr:`serve_cond`, built on first use. Private
+    #: because a list of closures is the very thing no spec can carry.
+    _serve_cond_readers: typing.Any = pydantic.PrivateAttr(default=None)
 
     # -- Backend handles. Never serialised: the declaration above is enough to
     # -- rebuild them, and they hold PyCATSHOO objects.
@@ -1201,7 +1247,16 @@ class Capacity(cod3s.ObjCOD3S):
         as :meth:`flow_entry` refuses it: returning a plausible number for a
         flow this capacity does not hold is how a typo in an inspection script
         survives.
+
+        **A discharge command composes with the ceiling by BRANCHING** (R49),
+        and the alternative is not a near miss: ``serve_rate`` defaults to
+        ``math.inf`` and ``inf * 0`` is NaN, which propagates into every level
+        downstream of the volume rather than stopping it, with nothing raised
+        anywhere. A command that does not hold answers zero outright.
         """
+        if not self.serve_holds():
+            return 0.0
+
         if flow_name is not None:
             self.flow_entry(flow_name)
             var = self.var_serve_rate.get(flow_name)
@@ -1212,6 +1267,43 @@ class Capacity(cod3s.ObjCOD3S):
             return float(self.serve_rate) * len(self.flows)
 
         return sum(float(var.value()) for var in self.var_serve_rate.values())
+
+    def serve_holds(self) -> bool:
+        """True when the discharge command lets this capacity release (R49).
+
+        An EMPTY condition holds, exactly as an empty production condition
+        does: a capacity declaring none is uncommanded, and the gate costs a
+        single truth test to a model that never asks for one.
+
+        Read live rather than mirrored into a variable refreshed between steps,
+        for the reason a production condition is (R12, R22): the operands
+        include comparisons against continuous quantities, and a mirror would
+        lag one step behind the value being watched.
+        """
+        if not self.serve_cond:
+            return True
+
+        if self._serve_cond_readers is None:
+            self._serve_cond_readers = cond_readers(
+                self.serve_cond, self.serve_cond_negate, self.serve_cond_compare
+            )
+
+        return prod_cond_holds(self._serve_cond_readers, self.serve_cond_inner_mode)
+
+    def add_serve_cond_automata(self, comp):
+        """Watch every continuous threshold the discharge command carries (R49).
+
+        The same watched two-state automaton a production condition's
+        comparison gets, from the same implementation: a level moving inside an
+        integration step announces no change of its own, so a reserve floor
+        nothing watched would be crossed late by up to one step.
+
+        No sensitive method is passed: nothing mirrors this verdict, the two
+        bounds read it live where they need it.
+        """
+        return add_cond_threshold_automata(
+            comp, self.serve_cond, self.serve_cond_compare, self.name
+        )
 
     def serves_from_stock(self, flow_name: typing.Optional[str] = None) -> bool:
         """True when the volume can serve out of what it HOLDS, not only transit.

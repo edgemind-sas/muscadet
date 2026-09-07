@@ -861,6 +861,7 @@ The parameters are:
 - `side` — `"in"` places the whole capacity upstream of the component's rules, `"out"` downstream. Left out, it is resolved from the held flows and defaults to `"in"` for a flow carried by both sides. Every held flow must resolve to the same side.
 - `fill_rate` — what the volume claims **for itself** while it has room, on top of the demand crossing it. The default `0` is a pure pass-through buffer: it asks for exactly what passes through it, and therefore never stocks up. `math.inf` means "whatever the producer can deliver" — a tank connected to a pump fills at the pump's rate. The claim is the volume's own, so it does **not** depend on anything being connected downstream: a tank at the end of a chain, its own output wired to nothing, fills at its producer's rate exactly as one in the middle of it does.
 - `serve_rate`: a **ceiling** on what the volume releases, per held flow. The default `math.inf` is no ceiling at all, which is what every model had before the field existed. It is *not* the twin of `fill_rate`, and reading the two as a pair is the mistake to avoid: `fill_rate` is a **claim**, what the volume asks for itself over and above the demand crossing it, so it makes a tank fill; `serve_rate` asks for nothing and only caps what leaves. The name is taken from the quantity it bounds rather than made symmetric, for that reason. A battery rated at 40 kW is `serve_rate=40`, whatever its stock and whatever it is asked for. The ceiling bounds the delivery **and** the capability the volume publishes, so a consumer downstream sizes itself against what it will actually get.
+- `serve_cond`: a **command** on the discharge, written in the operand vocabulary a production condition uses: the same shapes, the same conjunctive-normal form, the same comparison grammar. An empty condition holds, so a capacity declaring none is uncommanded. This is the half a production condition cannot reach: that one gates what a component *produces*, and what leaves a volume is *stock*, so a control signal wired to a battery gated its charge and never its discharge.
 - `content_init` — the initial raw quantity per held flow; an omitted flow starts empty. Validated at declaration: each quantity must be positive or zero, and the **weighted** total must fit in the volume. A tank declared at five times its own capacity used to build, start `full`, throttle its producer from t=0, and report a bound violation its own empty/full automaton could not raise — being already past it. The bound is on the weighted sum because several constituents share one volume: `{"a": 40, "b": 40}` at weights 1 and 2 occupies 120 of a volume of 100, though neither exceeds it alone.
 
 The bounds are what a capacity is for, and they are watched by the solver so they are reached exactly:
@@ -878,6 +879,30 @@ battery.add_atm2states(
     effects_12=[("store_serve_rate_elec", 10.0)],   # 40 kW rated, 10 kW left
 )
 ```
+
+A command composes with the ceiling by **branching**, never by product: `serve_rate` defaults to `math.inf`, and `inf * 0` is NaN, which would poison every level downstream of the volume rather than stopping it. False gives zero, true gives the ceiling. A commanded halt stops the **discharge** and not the volume, so charging stays available and the capability announces zero, which is what keeps a consumer downstream from sizing itself as though the battery were pouring:
+
+```python
+class Battery(muscadet.ObjFlow):
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+
+        self.add_flow_in(name="supply", logic="and")     # the command port
+        self.add_flow_continuous_in(name="elec", var_demand_default=100.0)
+        self.add_flow_continuous_out(name="elec")
+        self.add_capacity(
+            name="store",
+            flow="elec",
+            side="out",
+            capacity=1000.0,
+            content_init={"elec": 500.0},
+            serve_rate=40.0,          # 40 kW rated
+            serve_cond=["supply"],    # and only when told to
+            fill_rate=12.0,           # charges at 12 kW whatever it is told
+        )
+```
+
+The operands name what the component already carries, so a boolean command port is declared by whoever declares the component: a subclass as above, or a spec. `CapacityContinuous` carries the key and not the port. A comparison needs no extra port at all, and a **capacity level read over a measurement link** is the sanctioned shape: `serve_cond=[{"name": "reserve", "op": ">=", "value": 100.0}]` gives a volume a reserve floor, watched by the solver so the floor is reached exactly rather than overshot by one integration step. A level is integrated; the same threshold on a *rate* is what the loop detectors refuse.
 
 The ceiling caps what **leaves**, whatever the state of the volume and whichever side it sits on. An empty capacity is a pass-through and still passes on at most its rating; a capacity declared `side="in"` releases into its component's rules under the same ceiling, so a hopper at `serve_rate=40` feeds a mill 40 whatever the mill would otherwise draw.
 

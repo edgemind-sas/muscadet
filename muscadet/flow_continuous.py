@@ -1661,8 +1661,11 @@ class FlowContinuousOut(FlowContinuous):
         serve its whole content" (cf. ``capability.py``). Shared with a derating
         at 0, and reached far more often here: nobody writes a derating to mean
         "close the valve", which is exactly what a control port on a continuous
-        output means. To stop the delivery too, gate what DRAWS from the
-        capacity, not only what fills it.
+        output means. To stop the delivery too, command the volume itself:
+        ``Capacity.serve_cond`` (R49) takes the very operands this condition
+        takes and gates what the volume RELEASES, which is the half a
+        production condition cannot reach because what leaves a capacity is
+        stock rather than production.
 
         **The capability and demand sweeps ignore it**, as they already ignore
         the deratings and the profile: they answer what this output could

@@ -344,6 +344,15 @@ PROD_COND_FIELDS = (
     "var_prod_cond_compare",
 )
 
+#: The same three fields on a CAPACITY, where the vocabulary commands what the
+#: volume RELEASES rather than what a flow produces (R49). Stored resolved for
+#: the same reason, and walked back by the same function.
+SERVE_COND_FIELDS = (
+    "serve_cond",
+    "serve_cond_negate",
+    "serve_cond_compare",
+)
+
 
 def _matrix_at(matrix, row, column):
     """One cell of a parallel matrix that may be empty or short.
@@ -357,8 +366,8 @@ def _matrix_at(matrix, row, column):
         return None
 
 
-def _prod_cond_spec(comp, flow):
-    """The DECLARATION form of a discrete output's production condition.
+def _prod_cond_spec(comp, groups, negates, compares):
+    """The DECLARATION form of a resolved condition.
 
     ``postprocess_flow_specs`` RESOLVES a condition as it is declared: the
     operand names are replaced by the flow (or measurement channel) objects
@@ -377,10 +386,14 @@ def _prod_cond_spec(comp, flow):
     sides would otherwise come back resolved to the other side. It is
     deliberately NOT written for a measurement channel: that branch of the
     resolution is only reachable with no ``port`` at all.
+
+    Takes the three matrices rather than the object holding them: a flow spells
+    them ``var_prod_cond*`` and a capacity ``serve_cond*`` (R49), and one
+    walk-back serves both.
     """
-    groups = getattr(flow, "var_prod_cond", None) or []
-    negates = getattr(flow, "var_prod_cond_negate", None) or []
-    compares = getattr(flow, "var_prod_cond_compare", None) or []
+    groups = groups or []
+    negates = negates or []
+    compares = compares or []
 
     spec = []
     for row, group in enumerate(groups):
@@ -410,8 +423,15 @@ def _prod_cond_spec(comp, flow):
     return spec
 
 
-def _declaration_fields(obj, where):
+def _declaration_fields(obj, where, skip=()):
     """The declaration fields of one pydantic declaration object.
+
+    ``skip`` names fields the CALLER rebuilds itself and must therefore not be
+    refused here. A capacity's ``serve_cond`` is the case it exists for: stored
+    resolved, it holds flow objects no mapping can carry, and unlike the flow
+    side's ``var_prod_cond`` it carries no ``var_`` prefix to fall through the
+    runtime-handle branch on. Naming it explicitly is what that prefix does by
+    accident, and says so.
 
     Drops the runtime handles (see :data:`RUNTIME_FIELD_PREFIXES`), serialises a
     declared profile or transfer equation through its registry, and REFUSES
@@ -472,6 +492,8 @@ def _declaration_fields(obj, where):
             dumped[key] = live.model_dump()
 
     for key, value in dumped.items():
+        if key in skip:
+            continue
         classify(key, value)
 
     # The dump shows no excluded field at all, so a declaration carrying
@@ -786,7 +808,12 @@ def component_spec(comp):
             # copy beside a rebuilt condition is worse than none.
             for field in PROD_COND_FIELDS:
                 fields.pop(field, None)
-            prod_cond = _prod_cond_spec(comp, flow)
+            prod_cond = _prod_cond_spec(
+                comp,
+                getattr(flow, "var_prod_cond", None),
+                getattr(flow, "var_prod_cond_negate", None),
+                getattr(flow, "var_prod_cond_compare", None),
+            )
             if prod_cond:
                 fields["var_prod_cond"] = prod_cond
 
@@ -804,7 +831,28 @@ def component_spec(comp):
             out.append(fields)
         return out
 
-    capacities = dump_all(comp.capacities, "capacity")
+    capacities = []
+
+    for capacity_name, capacity in comp.capacities.items():
+        # A discharge command is stored RESOLVED, exactly as a production
+        # condition is, so it is rebuilt rather than dumped and the two
+        # matrices derived from it are skipped: the rebuild recomputes them,
+        # and a stale copy beside a rebuilt condition is worse than none.
+        entry = _declaration_fields(
+            capacity, f"{where}, capacity {capacity_name}", skip=SERVE_COND_FIELDS
+        )
+        entry.pop("cls", None)
+
+        serve_cond = _prod_cond_spec(
+            comp,
+            getattr(capacity, "serve_cond", None),
+            getattr(capacity, "serve_cond_negate", None),
+            getattr(capacity, "serve_cond_compare", None),
+        )
+        if serve_cond:
+            entry["serve_cond"] = serve_cond
+
+        capacities.append(entry)
 
     for entry in capacities:
         # A discharge ceiling of ``inf`` says nothing, and writing it would put

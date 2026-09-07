@@ -132,15 +132,33 @@ PROD_COND_INNER_MODE_DESCRIPTION = (
 
 
 def prod_cond_readers(flow):
-    """One zero-arg reader per ``var_prod_cond`` operand, in CNF shape.
+    """One zero-arg reader per ``var_prod_cond`` operand of a FLOW, in CNF shape.
 
-    Resolving what each operand reads ONCE, here, is what keeps the extended
-    evaluation a plain ``all(any(...))`` over callables: the comparator of a
-    comparison operand is looked up at wiring time, not on every evaluation.
+    The flow-side spelling of :func:`cond_readers`, kept as the name every
+    caller already uses.
+    """
+    return cond_readers(
+        getattr(flow, "var_prod_cond", None),
+        getattr(flow, "var_prod_cond_negate", None),
+        getattr(flow, "var_prod_cond_compare", None),
+    )
+
+
+def cond_readers(condition, negate_matrix=None, compare_matrix=None):
+    """One zero-arg reader per operand of a resolved condition, in CNF shape.
+
+    Resolving what each operand reads ONCE, here, is what keeps the evaluation
+    a plain ``all(any(...))`` over callables: the comparator of a comparison
+    operand is looked up at wiring time, not on every evaluation.
 
     The readers close over the resolved operand objects and read their
     variables lazily, so a flow whose variables are declared after this runs is
     still read correctly.
+
+    Takes the three matrices rather than an object carrying them, because the
+    same vocabulary now gates two different things: what a flow PRODUCES (R22,
+    R44) and what a capacity RELEASES (R49). One implementation, two field
+    names, and nothing in here knows which of the two it is serving.
     """
     # Local import, and NOT a cycle break: ``rules`` imports nothing from
     # muscadet, so a module-level import would work. It is deferred because
@@ -149,11 +167,11 @@ def prod_cond_readers(flow):
     # condition (R22) compare a quantity the same way.
     from .rules import comparator as get_comparator
 
-    negate_matrix = getattr(flow, "var_prod_cond_negate", None) or []
-    compare_matrix = getattr(flow, "var_prod_cond_compare", None) or []
+    negate_matrix = negate_matrix or []
+    compare_matrix = compare_matrix or []
 
     readers = []
-    for i, flow_outer in enumerate(getattr(flow, "var_prod_cond", None) or []):
+    for i, flow_outer in enumerate(condition or []):
         row = []
         for j, source in enumerate(flow_outer):
             compare = _prod_cond_matrix_entry(compare_matrix, i, j)
@@ -218,7 +236,28 @@ def add_prod_cond_threshold_automata(flow, comp):
     list
         The automata built, empty when the condition carries no comparison.
     """
-    compare_matrix = getattr(flow, "var_prod_cond_compare", None) or []
+    return add_cond_threshold_automata(
+        comp,
+        getattr(flow, "var_prod_cond", None),
+        getattr(flow, "var_prod_cond_compare", None),
+        flow.name,
+        sm_name=getattr(flow, "sm_prod_available_name", None),
+        sm_fun=getattr(flow, "sm_prod_available_fun", None),
+    )
+
+
+def add_cond_threshold_automata(
+    comp, condition, compare_matrix, base_name, sm_name=None, sm_fun=None
+):
+    """Watch every continuous threshold a resolved condition carries.
+
+    The body of :func:`add_prod_cond_threshold_automata`, taken as values so
+    that a capacity's discharge condition (R49) is watched by the very same
+    code as a flow's production condition (R22, R44). ``base_name`` names the
+    automata and their states; ``sm_name`` / ``sm_fun`` are the optional
+    sensitive method a discrete output re-runs its condition through.
+    """
+    compare_matrix = compare_matrix or []
 
     if not compare_matrix:
         return []
@@ -228,7 +267,7 @@ def add_prod_cond_threshold_automata(flow, comp):
     system = comp.system()
     automata = []
 
-    for i, flow_outer in enumerate(getattr(flow, "var_prod_cond", None) or []):
+    for i, flow_outer in enumerate(condition or []):
         for j, source in enumerate(flow_outer):
             compare = _prod_cond_matrix_entry(compare_matrix, i, j)
             if compare is None:
@@ -242,7 +281,7 @@ def add_prod_cond_threshold_automata(flow, comp):
             compare_fun = get_comparator(compare["op"])
             threshold = float(compare["value"])
 
-            base = f"{flow.name}_cond_{i}_{j}"
+            base = f"{base_name}_cond_{i}_{j}"
             st_below = f"{base}_below"
             st_above = f"{base}_above"
             trans_up = f"{base}_cross_up"
@@ -286,11 +325,11 @@ def add_prod_cond_threshold_automata(flow, comp):
 
             # A discrete output re-runs its production condition through this
             # sensitive method; a continuous one declares none and reads its
-            # gate inside the production sweep, so the hook is optional by
-            # construction rather than by family test.
-            sm_fun = getattr(flow, "sm_prod_available_fun", None)
+            # gate inside the production sweep, and a capacity reads its own
+            # inside the two bounds, so the hook is optional by construction
+            # rather than by family test.
             if sm_fun is not None:
-                aut._bkd.addSensitiveMethod(flow.sm_prod_available_name, sm_fun)
+                aut._bkd.addSensitiveMethod(sm_name, sm_fun)
 
             system.pdmp_add_watched_automaton(aut)
 

@@ -1311,6 +1311,7 @@ class ObjFlow(cod3s.PycComponent):
         )
 
         self.resolve_capacity(capacity_obj, side_declared=side)
+        self.resolve_serve_cond(capacity_obj)
 
         capacity_obj.add_variables(self)
         capacity_obj.add_mb(self)
@@ -1321,6 +1322,32 @@ class ObjFlow(cod3s.PycComponent):
         self.register_capacity(capacity_obj)
 
         return capacity_obj
+
+    def resolve_serve_cond(self, capacity):
+        """Resolve a capacity's discharge command, if it declared one (R49).
+
+        Routed through :meth:`apply_prod_cond`, the very function a production
+        condition goes through, so the two vocabularies cannot drift: same
+        operand shapes, same input-first resolution, same ``port``
+        disambiguation, same refusal naming the flow that does not exist. What
+        that function reads and writes is a MAPPING rather than a flow, which
+        is what makes it reusable here without a line of its own.
+
+        Called after :meth:`resolve_capacity` and therefore after the flows and
+        the measurement channels are declared, which is the order
+        ``muscadet.declare.DECLARATION_SECTIONS`` writes down for the same
+        reason: an operand names something that has to exist first.
+        """
+        if not capacity.serve_cond:
+            return capacity
+
+        resolved = self.apply_prod_cond({"var_prod_cond": capacity.serve_cond})
+
+        capacity.serve_cond = resolved["var_prod_cond"]
+        capacity.serve_cond_negate = resolved.get("var_prod_cond_negate", [])
+        capacity.serve_cond_compare = resolved.get("var_prod_cond_compare", [])
+
+        return capacity
 
     def resolve_capacity(self, capacity, side_declared=None):
         """
@@ -1447,6 +1474,10 @@ class ObjFlow(cod3s.PycComponent):
         for flow_name in capacity.flow_names:
             system.pdmp_add_explicit_variable(capacity.var_inflow[flow_name])
             system.pdmp_add_explicit_variable(capacity.var_outflow[flow_name])
+
+        # Registered here rather than beside the empty/full automaton, because
+        # a watched transition needs the system and this is where it is read.
+        capacity.add_serve_cond_automata(self)
 
         if not self._capacity_equation_registered:
             system.pdmp_add_equation_method(

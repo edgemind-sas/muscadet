@@ -433,6 +433,14 @@ class CapacityContinuous(ContinuousComponent):
         implies.
     demand : float, optional
         Demand claimed on every input, for an accumulator. Defaults to 0.
+    serve_cond : list, optional
+        Condition commanding the DISCHARGE, in the operand vocabulary a
+        production condition uses: boolean operands, negations and comparisons
+        alike. The operands name things this component already carries, so a
+        BOOLEAN command port is declared by whoever declares the component --
+        a subclass, or a spec (``muscadet.declare``) -- and named here. A
+        comparison on a capacity LEVEL read over a measurement link needs no
+        extra port and is the sanctioned way to give a volume a reserve floor.
     serve_rate : float, optional
         CEILING on what the volume releases, per held flow. Defaults to
         ``math.inf``, no ceiling. Not the twin of ``fill_rate``: that one is a
@@ -463,6 +471,7 @@ class CapacityContinuous(ContinuousComponent):
         "demand",
         "fill_rate",
         "serve_rate",
+        "serve_cond",
         "content_init",
         "capacity_name",
     ) + ALLOCATION_KEYS
@@ -477,13 +486,24 @@ class CapacityContinuous(ContinuousComponent):
             )
 
         serve_rate = float(kwargs.get("serve_rate", math.inf))
+        serve_cond = kwargs.get("serve_cond")
 
-        if ports == "in" and math.isfinite(serve_rate):
+        commanded = [
+            key
+            for key, value in (
+                ("serve_rate", math.isfinite(serve_rate)),
+                ("serve_cond", bool(serve_cond)),
+            )
+            if value
+        ]
+
+        if ports == "in" and commanded:
             raise ValueError(
-                "serve_rate caps what a capacity RELEASES, and an accumulator "
-                "(ports='in') releases nothing: it declares no output and no "
-                "rule, so nothing would ever read the ceiling. Declare "
-                "ports='both' to give the volume a way out, or drop serve_rate"
+                "serve_rate and serve_cond govern what a capacity RELEASES. "
+                "An accumulator (ports='in') releases nothing: it declares no "
+                "output and no rule, so nothing would ever read them. Declare "
+                "ports='both' to give the volume a way out, or drop "
+                f"{' and '.join(commanded)}"
             )
 
         entries = flow_declarations(
@@ -513,6 +533,7 @@ class CapacityContinuous(ContinuousComponent):
             content_init=kwargs.get("content_init"),
             fill_rate=float(kwargs.get("fill_rate", 0.0)),
             serve_rate=serve_rate,
+            serve_cond=list(serve_cond) if serve_cond else [],
         )
 
 
