@@ -1286,6 +1286,52 @@ Such an alarm may be read anywhere **except back upstream of the flow it watches
 
 The refusal does not depend on *how* either end of the loop is written. The comparison may sit in a discrete production condition as above **or in a rule guard** (`cond="q >= 5"`), and what the returning signal gates may be a rule guard **or a mode** — one declared on the component with `add_atm2states` / `add_exp_failure_mode`, or a standalone `ObjFailureMode*` declared outside it and derating the very output it is gated by. All four combinations close the same instantaneous loop and all four are refused. The residual is a mode whose condition is a Python **callable**: nothing can be derived from a function body, so such a mode stays invisible to the analysis.
 
+**Nor does it depend on the verdict leaving as a signal.** A *continuous* output carries a production condition too, so a threshold may command a rate outright, and a mode derating that output does the same thing by another route. Wire that rate back into the producer of the quantity the threshold reads and the same instantaneous loop closes with nothing discrete anywhere on it, which is why neither the flow graph (an observation link is never an edge of it) nor the walk over discrete channels used to see any part of it:
+
+```python
+class Throttle(muscadet.ObjFlow):
+    """Its own delivered rate, observed back, decides whether it produces."""
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+
+        self.add_measurement_in(name="echo")
+        self.add_flow_continuous_out(
+            name="q",
+            var_fed_default=10.0,
+            var_prod_cond=[{"name": "echo", "op": "<", "value": 5.0}],
+        )
+
+
+plant.add_component(name="SRC", cls="Throttle")
+plant.add_component(name="SINK", cls="ConsumerContinuous", flow="q", demand=1e6)
+plant.add_component(
+    name="PROBE",
+    cls="ObjCtrl",
+    controls_in=[{"name": "q", "kind": "rate"}],
+    controls_out=[
+        {"name": "echo", "kind": "value",
+         "emit": {"op": "republish", "input": "q", "gain": 1.0}},
+    ],
+)
+
+plant.connect_flow(source="SRC", target="SINK", flow_name="q")
+plant.connect("SRC", "q_rate_out", "PROBE", "q_rate_in")
+plant.connect("PROBE", "echo_level_out", "SRC", "echo_level_in")
+
+plant.isimu_start()
+# muscadet.CommandedRateLoopError: Continuous flow graph must be acyclic
+# (R30, R47): SRC -> PROBE -> SRC closes a loop through a commanded rate.
+# Connections closing the loop: SRC.q_rate_out -> PROBE.q_rate_in,
+# PROBE.echo_level_out -> SRC.echo_level_in. SRC thresholds the reading echo
+# (echo < 5) and commands its continuous output q from it; that reading is the
+# rate q delivered by SRC, and q reaches SRC. [...]
+```
+
+`CommandedRateLoopError` is a `muscadet.ContinuousFlowCycleError` like every other first-run refusal, so one `except muscadet.ContinuousFlowCycleError` still covers it, and it carries the commanded output on `.commanded` beside the `.cycle` and `.connections` of its siblings.
+
+The criterion is tight at **both ends**, because a wrongful refusal costs more here than a missed loop. At the leaving end, the commanded output must reach the producer of the observed rate: an output delivered somewhere else keeps building, and so does a **sibling** output of the same rule set, a rule's outputs not throttling one another (the uptake factor is the maximum over them). At the arriving end, the producer's own declaration must turn what arrives into the observed output: an input no rule consumes, an input feeding a different rule set, and an input a **capacity** integrates all keep building, the last because a volume is exactly what breaks the loop. Reaching therefore covers zero hops, where the commanded output *is* the observed one, and one hop into the producer itself; a longer chain is a deliberate miss, since asserting it would need a walk that re-tests every intermediate component. Observing a **capacity level** rather than a rate stays the way out, here as for the two refusals above.
+
 The same operand thresholds a level read over a **measurement link** — a read-only channel through which a component observes another component's capacity. It carries no quantity and enters no allocation:
 
 ```python
