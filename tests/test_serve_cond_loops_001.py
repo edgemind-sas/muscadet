@@ -221,6 +221,26 @@ class SclProductionGate(muscadet.ObjFlow):
         )
 
 
+class SclObservationGate(muscadet.ObjFlow):
+    """Thresholds an OBSERVED rate and drives a DISCRETE signal from it.
+
+    The third refusal class of the family, and the one whose arrival end also
+    lands on a discharge condition: the verdict travels as a signal, so the
+    walk reaches the volume rather than recognising it at zero hops.
+    """
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        self.add_measurement_in(name="q", kind="rate")
+        self.add_flow(
+            dict(
+                cls="FlowDiscreteOut",
+                name="supply",
+                var_prod_cond=[{"name": "q", "op": "<", "value": SCL_THRESHOLD}],
+            )
+        )
+
+
 class SclInertStore(muscadet.ObjFlow):
     """A commanded volume whose released quantity reaches nothing.
 
@@ -398,6 +418,31 @@ def run_reserve_floor_scenario(obs):
         system.deleteSys()
 
 
+def run_observation_gate_scenario(obs):
+    """An observation loop whose ARRIVAL end is a discharge condition.
+
+    The verdict leaves as a discrete signal, so this is the R43 class rather
+    than the zero-hop one, and its message has to name the volume too. All
+    three refusals of the family reach a discharge condition, and naming the
+    capacity on two of the three would be the kind of hole that survives.
+    """
+    system = muscadet.System(name="SclObservationGate")
+    try:
+        system.add_component(name="BAT", cls="SclCommandedStore")
+        system.add_component(
+            name="LOAD", cls="ConsumerContinuous", flow="q", demand=SCL_DEMAND
+        )
+        system.add_component(name="SENS", cls="SclObservationGate")
+
+        system.connect_flow(source="BAT", target="LOAD", flow_name="q")
+        system.connect("BAT", "q_rate_out", "SENS", "q_rate_in")
+        system.connect_flow(source="SENS", target="BAT", flow_name="supply")
+
+        start_and_record(system, obs, "obsgate")
+    finally:
+        system.deleteSys()
+
+
 def run_showcase_shape_scenario(obs):
     """The H2 showcase's own shape: a battery helping a plant on one bus.
 
@@ -491,6 +536,7 @@ def the_run():
     run_transported_threshold_scenario(obs)
     run_observed_threshold_scenario(obs)
     run_reserve_floor_scenario(obs)
+    run_observation_gate_scenario(obs)
     run_showcase_shape_scenario(obs)
     run_inert_volume_scenario(obs)
     run_command_elsewhere_scenario(obs)
@@ -547,6 +593,27 @@ def test_the_refusal_names_the_wiring_the_capacity_and_the_operand(the_run):
 
     assert "capacity 'store'" in observed
     assert the_run["observed_error"].capacities == ["store"]
+
+
+def test_every_refusal_of_the_family_names_the_capacity(the_run):
+    """Three refusal classes reach a discharge condition, and all three say so.
+
+    The zero-hop one recognises the command without walking; this one walks a
+    discrete signal to it; the transported one walks it over the flow graph.
+    Naming the volume on two of the three is the kind of hole that survives a
+    reading, so the third is asserted here rather than assumed.
+    """
+    error = the_run["obsgate_error"]
+
+    assert (
+        error is not None
+    ), "an observed rate commanding its own producer must not start"
+    assert isinstance(error, ordering.RateObservationLoopError)
+    assert not isinstance(
+        error, muscadet.CommandedRateLoopError
+    ), "the verdict leaves as a SIGNAL here, so this is the walked class"
+    assert error.capacities == ["store"]
+    assert "capacity 'store'" in str(error)
 
 
 def test_a_loop_closed_without_a_capacity_reads_as_it_always_did(the_run):

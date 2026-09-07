@@ -653,7 +653,13 @@ class RateObservationLoopError(ContinuousFlowCycleError):
         "does break the loop."
     )
 
-    def __init__(self, reader, channel, flow, producer, operand, connections):
+    def __init__(
+        self, reader, channel, flow, producer, operand, connections, capacities=()
+    ):
+        #: Capacities whose discharge condition takes part, empty when none
+        #: does (R50). Assigned FIRST, and a subclass forwards its own rather
+        #: than assigning before ``super()``: this line would clobber it.
+        self.capacities = list(capacities)
         #: Component carrying the threshold.
         self.reader = reader
         #: Its measurement channel the threshold reads.
@@ -686,7 +692,9 @@ class RateObservationLoopError(ContinuousFlowCycleError):
             f"({self.operand}) and drives a discrete signal from it, that "
             f"reading is the rate {self.flow} delivered by {self.producer}, "
             f"and that signal reaches a component producing the very "
-            f"{self.flow} it reads. " + self.RATE_IS_NOT_STATE
+            f"{self.flow} it reads. "
+            + self.RATE_IS_NOT_STATE
+            + capacity_clause(self.capacities, "command it arrives at")
         )
 
 
@@ -733,11 +741,12 @@ class CommandedRateLoopError(RateObservationLoopError):
         # message: ``default_message`` is dispatched from there and reads it.
         #: The continuous output the threshold commands.
         self.commanded = commanded
-        #: Capacities whose discharge condition commands it, empty when the
-        #: command is a production condition on the output itself (R50).
-        self.capacities = list(capacities)
 
-        super().__init__(reader, channel, flow, producer, operand, connections)
+        # Forwarded rather than assigned here: the base constructor assigns
+        # ``capacities`` too, and would overwrite an assignment made before it.
+        super().__init__(
+            reader, channel, flow, producer, operand, connections, capacities
+        )
 
     def default_message(self) -> str:
         return (
@@ -2441,6 +2450,15 @@ def find_rate_observation_loops(system, graph):
                     )
 
                     if walked is not None:
+                        arrival = components.get(walked[-1].target)
+                        gated = (
+                            (getattr(arrival, "flows_in", None) or {}).get(
+                                walked[-1].flow
+                            )
+                            if arrival is not None
+                            else None
+                        )
+
                         signal_loops.append(
                             RateObservationLoopError(
                                 key,
@@ -2449,6 +2467,11 @@ def find_rate_observation_loops(system, graph):
                                 producer,
                                 operand,
                                 path + walked,
+                                capacities=(
+                                    []
+                                    if gated is None
+                                    else capacities_reading(arrival, gated)
+                                ),
                             )
                         )
 
