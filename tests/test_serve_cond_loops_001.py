@@ -241,6 +241,82 @@ class SclObservationGate(muscadet.ObjFlow):
         )
 
 
+class SclSelfGatedStore(muscadet.ObjFlow):
+    """A discharge commanded by a reading of the rate it itself serves.
+
+    The tightest loop the vocabulary can express: the condition names the
+    OUTPUT the discharge feeds, so nothing is transported and nothing is
+    observed. It crosses no connection at all, which is why no walk saw it.
+    """
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        self.add_flow_continuous_out(name="q", var_fed_default=SCL_DEMAND)
+        self.add_capacity(
+            name="store",
+            flow="q",
+            side="out",
+            capacity=SCL_VOLUME,
+            content_init={"q": SCL_INIT},
+            serve_cond=[
+                {"name": "q", "port": "out", "op": "<", "value": SCL_THRESHOLD}
+            ],
+        )
+
+
+class SclRelayStore(muscadet.ObjFlow):
+    """A commanded volume whose output another condition then thresholds.
+
+    The capacity as a HOP: the signal arrives, commands the discharge, and the
+    discrete output thresholding what that discharge delivers carries it on.
+    A fixpoint blind to the middle hop stops here.
+    """
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        self.add_flow_in(name="supply", logic="and")
+        self.add_flow_continuous_out(name="p", var_fed_default=SCL_DEMAND)
+        self.add_capacity(
+            name="buf",
+            flow="p",
+            side="out",
+            capacity=SCL_VOLUME,
+            content_init={"p": SCL_INIT},
+            serve_cond=["supply"],
+        )
+        self.add_flow(
+            dict(
+                cls="FlowDiscreteOut",
+                name="supply",
+                var_prod_cond=[{"name": "p", "port": "out", "op": "<", "value": 1.0}],
+            )
+        )
+
+
+class SclNamesakeStore(muscadet.ObjFlow):
+    """One name on both sides, in DIFFERENT families.
+
+    A continuous input ``q`` buffered on the way in, and an unrelated DISCRETE
+    status output also called ``q``. The identity transfer needs both sides
+    continuous, so the discharge drives nothing here and refusing would be the
+    expensive error.
+    """
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        self.add_flow_in(name="sig", logic="and")
+        self.add_flow_continuous_in(name="q", var_demand_default=SCL_DEMAND)
+        self.add_flow(dict(cls="FlowDiscreteOut", name="q", var_prod_default=True))
+        self.add_capacity(
+            name="buf",
+            flow="q",
+            side="in",
+            capacity=SCL_VOLUME,
+            content_init={"q": SCL_INIT},
+            serve_cond=["sig"],
+        )
+
+
 class SclInertStore(muscadet.ObjFlow):
     """A commanded volume whose released quantity reaches nothing.
 
@@ -443,6 +519,88 @@ def run_observation_gate_scenario(obs):
         system.deleteSys()
 
 
+def run_self_gated_scenario(obs):
+    """The loop that crosses no connection at all."""
+    system = muscadet.System(name="SclSelfGated")
+    try:
+        system.add_component(name="BAT", cls="SclSelfGatedStore")
+        system.add_component(
+            name="LOAD", cls="ConsumerContinuous", flow="q", demand=SCL_DEMAND
+        )
+        system.connect_flow(source="BAT", target="LOAD", flow_name="q")
+
+        start_and_record(system, obs, "selfgated")
+    finally:
+        system.deleteSys()
+
+
+def run_relay_scenario(obs):
+    """A signal RELAYED through a discharge, on to a threshold on its output."""
+    system = muscadet.System(name="SclRelay")
+    try:
+        system.add_component(name="SRC", cls="SclCommandedStore")
+        system.add_component(name="SENS", cls="SclRateGate")
+        system.add_component(name="MID", cls="SclRelayStore")
+        system.add_component(
+            name="PSINK", cls="ConsumerContinuous", flow="p", demand=SCL_DEMAND
+        )
+
+        system.connect_flow(source="SRC", target="SENS", flow_name="q")
+        system.connect_flow(source="SENS", target="MID", flow_name="supply")
+        system.connect_flow(source="MID", target="PSINK", flow_name="p")
+        system.connect_flow(source="MID", target="SRC", flow_name="supply")
+
+        obs["relay_hop"] = ordering.inbound_driven_outputs(system.comp["MID"], "supply")
+
+        start_and_record(system, obs, "relay")
+    finally:
+        system.deleteSys()
+
+
+def run_namesake_scenario(obs):
+    """One name on both sides in different families: nothing is driven."""
+    system = muscadet.System(name="SclNamesake")
+    try:
+        system.add_component(name="MIX", cls="SclNamesakeStore")
+
+        obs["namesake_drives"] = ordering.commanded_discharge_outputs(
+            system.comp["MIX"], system.comp["MIX"].capacities["buf"]
+        )
+        obs["namesake_gates"] = ordering.gates_production_on(system.comp["MIX"], "sig")
+    finally:
+        system.deleteSys()
+
+
+def run_tear_scenario(obs):
+    """A volume whose discharge condition reads the flow it buffers.
+
+    ``capacity_breaks_inbound`` used to answer True on the sole ground that a
+    capacity held the flow, so the edge was TORN and a genuinely algebraic loop
+    got an evaluation order instead of a refusal.
+    """
+    system = muscadet.System(name="SclTear")
+    try:
+        system.add_component(
+            name="SRC", cls="SourceContinuous", flow="q", rate=SCL_DEMAND
+        )
+        system.add_component(name="BUF", cls="SclMeteredStore")
+        system.add_component(
+            name="LOAD", cls="ConsumerContinuous", flow="q", demand=SCL_DEMAND
+        )
+        system.connect_flow(source="SRC", target="BUF", flow_name="q")
+        system.connect_flow(source="BUF", target="LOAD", flow_name="q")
+
+        obs["tear_breaks"] = ordering.capacity_breaks_inbound(system.comp["BUF"], "q")
+        obs["tear_broken_edges"] = [
+            (cnct.source, cnct.target, cnct.flow)
+            for cnct in ordering.build_continuous_flow_graph(
+                system
+            ).state_broken_connections
+        ]
+    finally:
+        system.deleteSys()
+
+
 def run_showcase_shape_scenario(obs):
     """The H2 showcase's own shape: a battery helping a plant on one bus.
 
@@ -537,6 +695,10 @@ def the_run():
     run_observed_threshold_scenario(obs)
     run_reserve_floor_scenario(obs)
     run_observation_gate_scenario(obs)
+    run_self_gated_scenario(obs)
+    run_relay_scenario(obs)
+    run_namesake_scenario(obs)
+    run_tear_scenario(obs)
     run_showcase_shape_scenario(obs)
     run_inert_volume_scenario(obs)
     run_command_elsewhere_scenario(obs)
@@ -689,6 +851,68 @@ def test_a_discharge_thresholded_on_an_observed_rate_is_refused(the_run):
 # ----------------------------------------------------------------------
 
 
+def test_a_discharge_reading_the_rate_it_serves_is_refused(the_run):
+    """The tightest loop the vocabulary can express, and it crosses no wire.
+
+    Its two siblings both need a route: one reaches the rate through an
+    observation link, the other through transport. Here the condition names the
+    OUTPUT the discharge feeds, so the loop closes inside one component. Both
+    seeds were structurally blind to it -- one filters on the INPUTS, the other
+    needs a channel -- and the model built, its discharge chattering at the
+    period of the integration step.
+    """
+    error = the_run["selfgated_error"]
+
+    assert error is not None, "a discharge gated on the rate it serves must not start"
+    assert isinstance(error, muscadet.CommandedRateSelfLoopError)
+    assert the_run["selfgated_started"] is False
+
+    message = str(error)
+    assert "capacity 'store'" in message
+    assert f"q < {SCL_THRESHOLD:g}" in message
+    assert "no connection at all" in message
+    assert error.connections == [], "there is no wiring: that is the point"
+
+
+def test_a_signal_relayed_through_a_discharge_travels_on(the_run):
+    """A capacity is a HOP of the taint fixpoint, not only a seed and a gate.
+
+    The commit that taught the two SEEDS and the GATE about a discharge left
+    the fixpoint alone, so a signal commanding a volume whose output another
+    condition then thresholds stopped there: the walk reached the component,
+    found nothing driven, and dropped a loop that closes one hop further on.
+    """
+    assert the_run["relay_hop"] == [
+        "supply"
+    ], "the signal must reach the discrete output through the discharge"
+    assert the_run["relay_started"] is False
+    assert isinstance(the_run["relay_error"], muscadet.ContinuousFlowCycleError)
+
+
+def test_a_discharge_condition_on_the_buffered_flow_unbreaks_the_tear(the_run):
+    """R-14's tear rests on the level standing between arrival and departure.
+
+    A condition reading the arriving flow makes what LEAVES depend on what
+    ARRIVES within the instant, so the level no longer stands between them.
+    Tearing the edge anyway hands a genuinely algebraic loop an evaluation
+    order instead of a refusal.
+    """
+    assert the_run["tear_breaks"] is False
+    assert the_run["tear_broken_edges"] == []
+
+
+def test_a_namesake_in_the_other_family_drives_nothing(the_run):
+    """The identity transfer needs BOTH sides continuous.
+
+    A component may carry one name on both sides in different families. Seeding
+    a discrete status output because a continuous input of the same name is
+    buffered makes the walk follow a signal with nothing to do with the
+    discharge, and refuse a model that closes nothing.
+    """
+    assert the_run["namesake_drives"] == set()
+    assert the_run["namesake_gates"] is False
+
+
 def test_a_reserve_floor_on_an_integrated_level_builds(the_run):
     """The sanctioned montage, and the reason the shape is not forbidden.
 
@@ -755,5 +979,19 @@ def test_a_volume_releasing_into_nothing_gates_no_production(the_run):
 
 
 def test_delete(the_run):
-    the_run["system"].deleteSys()
-    cod3s.terminate_session()
+    """Closes the session WHATEVER happened above.
+
+    The last scenario leaves its system alive for the tests to read, so this
+    is what deletes it; guarded because a scenario that raised earlier never
+    put it there, and a ``KeyError`` here would leave the session open. The
+    suite runs near a PyCATSHOO ceiling (``tests/conftest.py``), where a leaked
+    engine reference makes UNRELATED later modules fail with an argument-less
+    exception naming nothing.
+    """
+    system = the_run.get("system")
+
+    try:
+        if system is not None:
+            system.deleteSys()
+    finally:
+        cod3s.terminate_session()

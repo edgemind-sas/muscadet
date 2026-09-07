@@ -28,6 +28,7 @@ from .ordering import (
     ContinuousFlowCycleError,
     ControllerSignalCycleError,
     CommandedRateLoopError,
+    CommandedRateSelfLoopError,
     RateComparisonLoopError,
     RateObservationLoopError,
 )

@@ -246,6 +246,7 @@ import typing
 # comparison matrix has exactly one correct handling of a missing entry, and two
 # copies of it would be two chances to disagree about what an empty matrix means.
 from .capability import register_capability_variables
+from .evaluation import rule_named_flows
 from .flow import _prod_cond_matrix_entry
 from .flow_continuous import FlowContinuous, rate_observation_box
 
@@ -375,7 +376,13 @@ def capacity_breaks_inbound(comp, flow_name):
     two ways every algebraic path out of that input crosses a level are
 
     * a capacity holding ``flow_name`` on the **input** side -- what arrives is
-      integrated before any rule reads it (KTD13, hop 1);
+      integrated before any rule reads it (KTD13, hop 1). **Unless its
+      discharge condition READS that flow** (R49, R50): ``serve_holds`` takes
+      its quantity live, so what leaves the volume then depends algebraically
+      on what arrives and the level is no longer between the two. Without this
+      clause the edge was torn on the sole ground that a volume held the flow,
+      and a genuinely algebraic loop got an evaluation order instead of a
+      refusal;
     * a capacity holding **every** continuous output of ``comp`` on the
       ``out`` side -- what the rules produce enters a volume and what leaves is
       served from it, so nothing carries the arriving quantity onward. This is
@@ -408,14 +415,33 @@ def capacity_breaks_inbound(comp, flow_name):
     if not callable(get_capacity):
         return False
 
-    if get_capacity(flow_name, "in") is not None:
-        return True
+    inbound = get_capacity(flow_name, "in")
+
+    if inbound is not None:
+        return not discharge_reads(comp, inbound, flow_name)
 
     outputs = getattr(comp, "flows_continuous_out", None) or {}
 
     return bool(outputs) and all(
         get_capacity(name, "out") is not None for name in outputs
     )
+
+
+def discharge_reads(comp, capacity, flow_name):
+    """True when ``capacity``'s discharge condition reads ``flow_name`` (R50).
+
+    What breaks a :func:`capacity_breaks_inbound` tear. A condition naming the
+    arriving flow makes what LEAVES the volume depend on what ARRIVES within
+    the instant -- ``serve_holds`` reads the quantity live, exactly as R12
+    requires of any comparison -- so the level no longer stands between the
+    two and the edge is a plain algebraic dependency again.
+    """
+    flow = (getattr(comp, "flows_in", None) or {}).get(flow_name)
+
+    if flow is None:
+        return False
+
+    return any(source is flow for source, _ in serve_cond_operands(capacity))
 
 
 def component_is_continuous(comp):
@@ -482,17 +508,28 @@ class SignalConnection(typing.NamedTuple):
     """One DISCRETE data connection, named the way the modeller wired it.
 
     Same shape and same rendering as :class:`ContinuousConnection`, because the
-    two families share the ``{flow}_out`` / ``{flow}_in`` naming convention: a
-    loop closed through a discrete signal is reported with its continuous and
-    its discrete connections side by side, in the order they close it.
+    two families usually share the ``{flow}_out`` / ``{flow}_in`` naming
+    convention: a loop closed through a discrete signal is reported with its
+    continuous and its discrete connections side by side, in the order they
+    close it.
+
+    ``inbound`` is the name the SIGNAL ARRIVES UNDER, which is not always the
+    one it left under: ``System.connect`` takes an interface name on each side,
+    so ``connect("GATE", "alarm_out", "BAT", "supply_in")`` is legal. Kept
+    beside ``flow`` for the same reason :class:`ObservationConnection` keeps
+    both of its box names, and defaulted so a connection built by hand -- in a
+    test, in an inspection -- renders as it always did.
     """
 
     source: str
     target: str
     flow: str
+    inbound: typing.Optional[str] = None
 
     def __str__(self) -> str:
-        return f"{self.source}.{self.flow}_out -> {self.target}.{self.flow}_in"
+        arrives = self.inbound or self.flow
+
+        return f"{self.source}.{self.flow}_out -> {self.target}.{arrives}_in"
 
 
 class ObservationConnection(typing.NamedTuple):
@@ -764,6 +801,54 @@ class CommandedRateLoopError(RateObservationLoopError):
             "channels could see any part of it. "
             + self.RATE_IS_NOT_STATE
             + capacity_clause(self.capacities, "command")
+        )
+
+
+class CommandedRateSelfLoopError(ContinuousFlowCycleError):
+    """A discharge commanded by a reading of the very rate it serves (R50).
+
+    The tightest loop this vocabulary can express, and the one no other
+    detector covers. Its two siblings both need a route: R47 reaches the rate
+    through an observation link, R30 through transport. Here the condition
+    names the OUTPUT FLOW ITSELF, so the loop closes inside one component and
+    crosses no connection at all: ``serve_holds`` reads what the production
+    sweep is about to write from ``serve_limit``, which ``serve_holds`` decides.
+
+    That is why neither seed saw it. ``compared_continuous_inputs`` filters on
+    the component's INPUTS and ``measurement_thresholds`` needs a channel, so a
+    condition naming an output was recorded by nobody and the model built, its
+    discharge chattering between serving and not serving at the period of the
+    integration step.
+
+    Reported with no connection, because there is none: a wiring is exactly
+    what this shape does not have.
+    """
+
+    def __init__(self, reader, capacity, flow, operand):
+        #: Component carrying both the volume and the output it reads.
+        self.reader = reader
+        #: The volume whose discharge condition closes it.
+        self.capacity = capacity
+        #: The continuous output the condition reads AND the discharge feeds.
+        self.flow = flow
+        #: The operand, rendered as it was declared.
+        self.operand = operand
+
+        super().__init__(
+            [reader],
+            [],
+            message=(
+                "Continuous flow graph must be acyclic (R30, R50): "
+                f"{reader} closes a loop inside itself. The capacity "
+                f"{capacity!r} commands its discharge on {operand}, and "
+                f"{flow} is the output that discharge feeds: what the "
+                "condition reads is what it decides, within one instant and "
+                "over no connection at all. No wiring closes this loop, which "
+                "is why no walk reports it. Command the discharge on something "
+                "the volume does not itself produce -- a boolean signal, or a "
+                "CAPACITY LEVEL read over a measurement link, a level being "
+                "integrated and therefore carried between instants."
+            ),
         )
 
 
@@ -1143,6 +1228,7 @@ def commanded_discharge_outputs(comp, capacity):
     """
     flows_out = getattr(comp, "flows_out", None) or {}
     held = capacity.flow_names
+    named = rule_named_flows(comp)
     seeds = set()
 
     def seed(name):
@@ -1151,19 +1237,38 @@ def commanded_discharge_outputs(comp, capacity):
         if flow is not None:
             seeds.add(state_var_name(flow) or f"{name}_fed_out")
 
+    def transits(name):
+        """True when the IDENTITY TRANSFER carries this held flow out (R31).
+
+        Two preconditions, and both were missing. The output must be
+        CONTINUOUS: a component may carry one name on both sides in different
+        families, and seeding a discrete status output because a continuous
+        input of the same name is buffered makes the walk follow a signal that
+        has nothing to do with the discharge -- a wrongful refusal, the error
+        this module ranks worst. And the flow must be in the R-16 RESIDUE: a
+        held flow a rule set consumes is drawn by that rule, so the same-named
+        output receives nothing from a transfer and its taint carries nothing.
+        """
+        return isinstance(flows_out.get(name), FlowContinuous) and name not in named
+
     # Walked in DECLARATION order, as everything in this module is (KTD3), even
     # though the answer is a set: what is iterated here decides nothing today
     # and iterating a set would make that an accident rather than a choice.
     for name in held:
-        seed(name)
+        if transits(name):
+            seed(name)
 
     if capacity.side == "out":
         return seeds
 
+    held_set = set(held)
+
     for rule_set in (getattr(comp, "rule_sets", None) or {}).values():
-        if set(held).isdisjoint(rule_set.consumed_flows):
+        if held_set.isdisjoint(rule_set.consumed_flows):
             continue
 
+        # No family test here, deliberately: a ``prod`` map legitimately names
+        # a DISCRETE output, and a rule really does decide it.
         for name in rule_set.produced_flows:
             seed(name)
 
@@ -1182,18 +1287,31 @@ def capacities_reading(comp, source):
         capacity.name
         for capacity in (getattr(comp, "capacities", None) or {}).values()
         if any(operand is source for operand, _ in serve_cond_operands(capacity))
+        # Reading the signal is not commanding: an INERT volume, releasing into
+        # neither an output nor a rule, reads it and decides nothing, and
+        # ``gates_production_on`` has already answered False on that clause.
+        # Naming it would point the modeller at a declaration with no part in
+        # the loop, and contradict this class's own docstring.
+        and commanded_discharge_outputs(comp, capacity)
     ]
 
 
-def capacities_commanding(comp, flow_name):
-    """Names of the capacities whose discharge command DECIDES ``flow_name``.
+def capacities_commanding(comp, source, flow_name):
+    """Capacities whose condition READS ``source`` and DECIDES ``flow_name``.
 
     The other end of the same question: :func:`capacities_reading` names the
     volume a loop arrives at, this one the volume a commanded rate leaves.
+
+    **Both halves are needed**, and the first was missing. Deciding the output
+    is not enough: a component may threshold the reading in a production
+    condition ON THE OUTPUT while an unrelated volume, commanded by something
+    else entirely, sits behind that same output. Naming it then sends the
+    modeller to a declaration with no part in the loop, while the real command
+    goes unnamed.
     """
     flow = (getattr(comp, "flows_out", None) or {}).get(flow_name)
 
-    if flow is None:
+    if flow is None or source is None:
         return []
 
     state = state_var_name(flow) or f"{flow_name}_fed_out"
@@ -1201,7 +1319,8 @@ def capacities_commanding(comp, flow_name):
     return [
         capacity.name
         for capacity in (getattr(comp, "capacities", None) or {}).values()
-        if capacity.serve_cond and state in commanded_discharge_outputs(comp, capacity)
+        if any(operand is source for operand, _ in serve_cond_operands(capacity))
+        and state in commanded_discharge_outputs(comp, capacity)
     ]
 
 
@@ -1423,6 +1542,27 @@ def tainted_output_states(comp, seeds):
             if not tainted.isdisjoint(clamped) or not tainted.isdisjoint(reads):
                 tainted.add(state)
                 changed = True
+
+        # A capacity's discharge condition is the THIRD hop, and it was the
+        # one place the vocabulary lived that this fixpoint did not read.
+        # Seeding and gating on a capacity is not enough: a signal RELAYED
+        # through a discharge -- commanding a volume whose output another
+        # condition then thresholds -- was not propagated inside the component,
+        # so the walk stopped there and a multi-hop loop went unreported.
+        for capacity in (getattr(comp, "capacities", None) or {}).values():
+            reads = {
+                state_var_name(source)
+                for source, _ in serve_cond_operands(capacity)
+                if state_var_name(source) is not None
+            }
+
+            if tainted.isdisjoint(reads):
+                continue
+
+            for state in commanded_discharge_outputs(comp, capacity):
+                if state not in tainted:
+                    tainted.add(state)
+                    changed = True
 
     return tainted
 
@@ -1646,7 +1786,9 @@ def find_rate_comparison_loops(system, graph):
                     # that is the component whose declaration gates on it.
                     arrival = components.get(path[-1].target)
                     gated = (
-                        (getattr(arrival, "flows_in", None) or {}).get(path[-1].flow)
+                        (getattr(arrival, "flows_in", None) or {}).get(
+                            path[-1].inbound or path[-1].flow
+                        )
                         if arrival is not None
                         else None
                     )
@@ -1694,7 +1836,9 @@ def _walk_signal(reader, outputs, upstream, components, by_engine_name, connecti
             if inbound is None:
                 continue
 
-            walked = path + [SignalConnection(source_key, target_key, flow_name)]
+            walked = path + [
+                SignalConnection(source_key, target_key, flow_name, inbound)
+            ]
 
             if target_key in upstream and gates_production_on(target_comp, inbound):
                 return walked
@@ -2322,6 +2466,52 @@ def commanded_rate_wiring(graph, components, reader, commanded, producer, flow):
     return None
 
 
+def find_self_commanded_discharges(system):
+    """Every discharge commanded by a reading of a rate it itself serves (R50).
+
+    Needs no graph and no walk: the loop closes inside one component, so what
+    is asked is whether a discharge condition names an OUTPUT that same
+    discharge feeds. Both operand shapes count -- a comparison and a bare
+    boolean read alike -- because the offence is reading the rate you serve,
+    not the way the reading is written.
+
+    Returns
+    -------
+    list of CommandedRateSelfLoopError
+        In declaration order, empty for a model closing no such loop.
+    """
+    loops = []
+
+    for key, comp in (getattr(system, "comp", None) or {}).items():
+        flows_out = getattr(comp, "flows_out", None) or {}
+
+        for capacity in (getattr(comp, "capacities", None) or {}).values():
+            driven = commanded_discharge_outputs(comp, capacity)
+
+            for source, compare in serve_cond_operands(capacity):
+                name = getattr(source, "name", None)
+
+                if flows_out.get(name) is not source:
+                    continue
+
+                state = state_var_name(source) or f"{name}_fed_out"
+
+                if state not in driven:
+                    continue
+
+                operand = (
+                    f"{name} {compare['op']} {compare['value']:g}"
+                    if compare is not None
+                    else name
+                )
+
+                loops.append(
+                    CommandedRateSelfLoopError(key, capacity.name, name, operand)
+                )
+
+    return loops
+
+
 def find_rate_observation_loops(system, graph):
     """Every instantaneous loop closed by a threshold on an OBSERVED rate (R43).
 
@@ -2453,7 +2643,7 @@ def find_rate_observation_loops(system, graph):
                         arrival = components.get(walked[-1].target)
                         gated = (
                             (getattr(arrival, "flows_in", None) or {}).get(
-                                walked[-1].flow
+                                walked[-1].inbound or walked[-1].flow
                             )
                             if arrival is not None
                             else None
@@ -2490,7 +2680,11 @@ def find_rate_observation_loops(system, graph):
                                 name,
                                 operand,
                                 path + wiring,
-                                capacities=capacities_commanding(comp, name),
+                                capacities=capacities_commanding(
+                                    comp,
+                                    measurement_channels(comp).get(channel_name),
+                                    name,
+                                ),
                             )
                         )
 
@@ -2868,6 +3062,15 @@ def compute_equation_order(system):
 
     if observations:
         raise observations[0]
+
+    # After the two walks, so a model closing a loop one of them CAN see keeps
+    # the diagnostic written for it. This one needs neither the graph nor a
+    # walk: it refuses a discharge commanded by a reading of the rate it itself
+    # serves, which closes inside one component and over no connection (R50).
+    self_loops = find_self_commanded_discharges(system)
+
+    if self_loops:
+        raise self_loops[0]
 
     # Last of the three, so a model closing a loop BOTH walks can see keeps the
     # diagnostic written for it: this one refuses the shape they terminate on
