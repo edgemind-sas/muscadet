@@ -59,6 +59,7 @@ Examples
 """
 
 import inspect
+import math
 
 import pydantic
 
@@ -803,6 +804,17 @@ def component_spec(comp):
             out.append(fields)
         return out
 
+    capacities = dump_all(comp.capacities, "capacity")
+
+    for entry in capacities:
+        # A discharge ceiling of ``inf`` says nothing, and writing it would put
+        # the JSON literal ``Infinity`` into EVERY capacity spec, including
+        # those of models declared before the field existed (R48). ``fill_rate``
+        # is the counter-example and stays: its default is 0.0, so an infinite
+        # one is something a modeller wrote.
+        if entry.get("serve_rate") == math.inf:
+            entry.pop("serve_rate")
+
     transfers = []
     for pair_name, pair in comp.transfers.items():
         transfers.append(
@@ -823,7 +835,7 @@ def component_spec(comp):
             "cls": "ObjFlow",
             SOURCE_CLS_KEY: type(comp).__name__,
             "flows": flows,
-            "capacities": dump_all(comp.capacities, "capacity"),
+            "capacities": capacities,
             "measurements_in": dump_all(comp.measurements_in, "measurement in"),
             "measurements_out": dump_all(comp.measurements_out, "measurement out"),
             "rules": dump_all(comp.rule_sets, "rule set"),

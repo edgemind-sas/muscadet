@@ -860,13 +860,32 @@ The parameters are:
 - `capacity` — the volume the held flows **share**, a single strictly positive scalar.
 - `side` — `"in"` places the whole capacity upstream of the component's rules, `"out"` downstream. Left out, it is resolved from the held flows and defaults to `"in"` for a flow carried by both sides. Every held flow must resolve to the same side.
 - `fill_rate` — what the volume claims **for itself** while it has room, on top of the demand crossing it. The default `0` is a pure pass-through buffer: it asks for exactly what passes through it, and therefore never stocks up. `math.inf` means "whatever the producer can deliver" — a tank connected to a pump fills at the pump's rate. The claim is the volume's own, so it does **not** depend on anything being connected downstream: a tank at the end of a chain, its own output wired to nothing, fills at its producer's rate exactly as one in the middle of it does.
+- `serve_rate`: a **ceiling** on what the volume releases, per held flow. The default `math.inf` is no ceiling at all, which is what every model had before the field existed. It is *not* the twin of `fill_rate`, and reading the two as a pair is the mistake to avoid: `fill_rate` is a **claim**, what the volume asks for itself over and above the demand crossing it, so it makes a tank fill; `serve_rate` asks for nothing and only caps what leaves. The name is taken from the quantity it bounds rather than made symmetric, for that reason. A battery rated at 40 kW is `serve_rate=40`, whatever its stock and whatever it is asked for. The ceiling bounds the delivery **and** the capability the volume publishes, so a consumer downstream sizes itself against what it will actually get.
 - `content_init` — the initial raw quantity per held flow; an omitted flow starts empty. Validated at declaration: each quantity must be positive or zero, and the **weighted** total must fit in the volume. A tank declared at five times its own capacity used to build, start `full`, throttle its producer from t=0, and report a bound violation its own empty/full automaton could not raise — being already past it. The bound is on the weighted sum because several constituents share one volume: `{"a": 40, "b": 40}` at weights 1 and 2 occupies 120 of a volume of 100, though neither exceeds it alone.
 
 The bounds are what a capacity is for, and they are watched by the solver so they are reached exactly:
 
 - a **full** capacity accepts only what leaves it, so the demand it publishes upstream collapses and its producer delivers less;
 - an **empty** one serves only what currently transits through it;
-- a **stocked** one answers a consumer asking without bound out of its stock — "deliver whatever you can" is what it holds, not what it produces — and never serves more than what it holds plus what transits it.
+- a **stocked** one answers a consumer asking without bound out of its stock — "deliver whatever you can" is what it holds, not what it produces — and never serves more than what it holds plus what transits it, nor more than its `serve_rate`.
+
+`{capacity}_serve_rate_{flow}` is a public variable created at the declared ceiling, the endpoint a failure mode clamps by name to throttle a discharge, exactly as `{flow}_out_rate` is for a continuous output. MUSCADET never writes it:
+
+```python
+battery.add_atm2states(
+    name="derate",
+    occ_law_12={"cls": "exp", "rate": 1e-4},
+    effects_12=[("store_serve_rate_elec", 10.0)],   # 40 kW rated, 10 kW left
+)
+```
+
+The ceiling caps what **leaves**, whatever the state of the volume and whichever side it sits on. An empty capacity is a pass-through and still passes on at most its rating; a capacity declared `side="in"` releases into its component's rules under the same ceiling, so a hopper at `serve_rate=40` feeds a mill 40 whatever the mill would otherwise draw.
+
+Three things it is **not**, each of which a first cut got wrong and each now pinned by a test:
+
+- **not a floor.** An empty tank at `serve_rate=40` fed at 20 passes 20 on, and a consumer asking without bound still gets only what arrives. Declaring a maximum never raises a rate.
+- **not a cap on what arrives.** The volume asks its producer for what it can actually pass on, so a `fill_rate=0` buffer stays the pure pass-through it is documented to be instead of piling up the difference. A battery that should charge says so with a `fill_rate`; the ceiling alone does not make it charge.
+- **not readable by a volume with no way out.** `CapacityContinuous(ports="in")` is an accumulator: it declares no output and no rule, so nothing would ever consult the ceiling. Declaring one there is refused by name rather than silently ignored.
 
 **Weights and composition.** Several constituents may share one volume. Each carries a `weight`, the volume one unit of it occupies:
 

@@ -147,6 +147,7 @@ FULL_DECLARATIONS = {
         side="out",
         demand=0.0,
         fill_rate=0.0,
+        serve_rate=float("inf"),
         content_init={"q": 1.0},
         capacity_name="vessel",
         allocation="proportional",

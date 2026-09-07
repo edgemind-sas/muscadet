@@ -1342,6 +1342,16 @@ def get_input_transferred(comp, flow_name):
     is a downstream that asked for nothing in particular, not a downstream
     asking for everything, so it must not drain a tank.
 
+    **That fallback is chosen on the DEMAND, not on the resulting number**
+    (R48). It used to test ``math.isinf`` on the bound itself, which read
+    "unbounded" off a capacity that had nothing to say; a declared discharge
+    ceiling makes that bound finite while the demand is still unbounded, so
+    the test inverted and a ceiling became a floor. Measured, a stocked
+    pass-through fed at 5 by a source, behind a consumer asking without
+    bound: declaring a MAXIMUM of 40 took the transfer from 5 to 40 and
+    started draining a volume the model had been conserving. What arrives is
+    still what moves; the ceiling only caps it.
+
     Parameters
     ----------
     flow_name : str
@@ -1354,8 +1364,8 @@ def get_input_transferred(comp, flow_name):
     """
     available = comp.get_input_available(flow_name)
 
-    if math.isinf(available):
-        return comp.get_input_delivered(flow_name)
+    if math.isinf(comp.get_input_required_demand(flow_name)):
+        return max(min(comp.get_input_delivered(flow_name), available), 0.0)
 
     return max(available, 0.0)
 
@@ -1853,6 +1863,13 @@ def get_output_request(comp, flow, rate):
     something, what currently transits once empty (R7).
     :meth:`draw_from_capacity` is where that meets the volume actually held.
 
+    **A declared discharge ceiling caps both branches** (R48,
+    :meth:`~muscadet.capacity.Capacity.serve_ceiling`), and it has to be
+    applied twice because the two branches reach the volume differently: the
+    finite one bounds a rate by a rate here, the unbounded one goes through
+    ``serve_limit``, which carries the ceiling on its stocked branch. Composed
+    by ``min`` and never by product, ``inf * 0`` being NaN.
+
     Reuses the bound :meth:`get_output_demand` already read this evaluation
     rather than asking the flow again. The two readings cannot differ:
     ``muscadet.ordering.register_equation_order`` allocates the WHOLE demand
@@ -1869,10 +1886,15 @@ def get_output_request(comp, flow, rate):
     if demand is None:
         demand = comp.get_output_consumer_demand(flow)
 
-    if not math.isinf(demand):
-        return max(float(demand), 0.0)
-
     capacity = comp.get_capacity_of_flow(flow.name, "out")
+
+    if not math.isinf(demand):
+        request = max(float(demand), 0.0)
+
+        if capacity is None:
+            return request
+
+        return min(request, capacity.serve_ceiling(flow.name))
 
     return rate if capacity is None else capacity.serve_limit(flow.name)
 

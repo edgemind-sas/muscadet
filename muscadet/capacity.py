@@ -40,6 +40,7 @@ Variable                       Kind       Meaning
 ``c_ratio_f``  (``t_double``)  explicit   share of ``f`` in what is held: ``qty_f / qty``
 ``c_inflow_f`` (``t_double``)  input      rate at which ``f`` currently ENTERS the capacity
 ``c_outflow_f``(``t_double``)  input      rate at which ``f`` currently LEAVES the capacity
+``c_serve_rate_f``              input      CEILING on what ``f`` may leave at (R48)
 =============================  =========  ==============================================
 
 Per KTD11 the capacity owns one ODE variable per held flow plus a total, and one
@@ -54,6 +55,14 @@ withdrawal at. The declared volume never enters it -- it bounds the content, it
 does not scale it -- so the ratio is a quotient of two moving quantities rather
 than a reading against a fixed scale, which is exactly what ``c_fill`` already
 is and why the two are different numbers.
+
+``c_serve_rate_f`` is the odd one out and deliberately so: it is the only
+capacity variable muscadet never writes. Created at the declared ``serve_rate``
+(``math.inf`` unless one was given), public and writable, it is the endpoint a
+failure mode clamps by name to throttle a discharge, exactly as
+``{flow}_out_rate`` is for a continuous output (KD10). It is therefore absent
+from ``muscadet.derating.solver_owned_endpoints``, where every other variable of
+this table sits.
 
 ``c_inflow_f`` / ``c_outflow_f`` are the capacity's two hooks onto the four hops
 of KTD13: the sweeps that compute demand and allocation (U8/U10) write them, and
@@ -427,6 +436,21 @@ class Capacity(cod3s.ObjCOD3S):
         ),
     )
 
+    serve_rate: float = pydantic.Field(
+        math.inf,
+        description=(
+            "CEILING on the rate this capacity releases, on EACH held flow "
+            "(R48). math.inf -- the default -- is no ceiling at all, which is "
+            "what every model had before the field existed. NOT the twin of "
+            "fill_rate: that one is a CLAIM, what the volume asks for itself "
+            "over and above the demand passing through it, so it makes a tank "
+            "fill; this one asks for nothing and only caps what leaves. The "
+            "name is taken from serve_limit, the quantity it bounds, rather "
+            "than made symmetric with fill_rate, which would invite exactly "
+            "the wrong reading."
+        ),
+    )
+
     # -- Backend handles. Never serialised: the declaration above is enough to
     # -- rebuild them, and they hold PyCATSHOO objects.
     var_qty: typing.Dict[str, typing.Any] = pydantic.Field(
@@ -462,6 +486,18 @@ class Capacity(cod3s.ObjCOD3S):
         exclude=True,
         repr=False,
         description="Per-flow rate leaving the capacity, written by the sweeps",
+    )
+
+    var_serve_rate: typing.Dict[str, typing.Any] = pydantic.Field(
+        default_factory=dict,
+        exclude=True,
+        repr=False,
+        description=(
+            "Per-flow discharge CEILING, public and writable, created at "
+            "serve_rate. The endpoint of KD10 on a capacity: muscadet never "
+            "writes it, so anything targeting a component variable by name "
+            "throttles the discharge with no muscadet-specific call."
+        ),
     )
 
     var_qty_total: typing.Any = pydantic.Field(
@@ -536,12 +572,21 @@ class Capacity(cod3s.ObjCOD3S):
             )
         return value
 
-    @pydantic.field_validator("fill_rate")
+    @pydantic.field_validator("fill_rate", "serve_rate")
     @classmethod
-    def check_fill_rate(cls, value, info):
+    def check_rate(cls, value, info):
+        """One predicate for ``fill_rate`` and ``serve_rate`` (R48).
+
+        The two mean opposite things -- a claim and a ceiling -- but they are
+        refused on the same grounds, so the check is written once and names
+        whichever field it was called for. Two copies drift: a fix to the NaN
+        idiom or to the wording in one silently leaves the other behind.
+        """
         if value < 0 or value != value:  # negative or NaN
+            label = (info.field_name or "rate").replace("_", " ")
+
             raise ValueError(
-                f"{entity_label('Capacity', info)}: fill rate must be positive "
+                f"{entity_label('Capacity', info)}: {label} must be positive "
                 f"or zero, got {value}"
             )
         return value
@@ -688,6 +733,15 @@ class Capacity(cod3s.ObjCOD3S):
             )
             self.var_outflow[entry.name] = comp.addVariable(
                 f"{self.name}_outflow_{entry.name}", pyc.TVarType.t_double, 0.0
+            )
+            # Public and never written by muscadet, so it is NOT declared
+            # explicit to the PDMP: only a ``setValue`` during the differential
+            # resolution needs that, and the only writer is a failure mode,
+            # which acts from a transition's reset map.
+            self.var_serve_rate[entry.name] = comp.addVariable(
+                f"{self.name}_serve_rate_{entry.name}",
+                pyc.TVarType.t_double,
+                float(self.serve_rate),
             )
 
             fill_total += fill_init
@@ -1123,11 +1177,73 @@ class Capacity(cod3s.ObjCOD3S):
         """
         self.var_qty_total.setValue(sum(var.value() for var in self.var_qty.values()))
 
+    def serve_ceiling(self, flow_name: typing.Optional[str] = None) -> float:
+        """The declared ceiling on what this capacity releases (R48).
+
+        Read from the public variable, so a failure mode that clamped it by
+        name is honoured; falls back to the declaration before
+        :meth:`add_variables` has run, which is what lets a capacity be
+        inspected outside a built system.
+
+        ``math.inf`` when nothing was declared, which is why every caller
+        composes it by ``min`` and never by product: ``inf * 0`` is NaN, and a
+        NaN here poisons every level downstream of the volume.
+
+        **Without a flow name it SUMS the per-flow ceilings**, which is what
+        every other total accessor of this class does (:meth:`get_quantity`,
+        :meth:`get_inflow`, :meth:`get_outflow`): the ceiling is declared per
+        held flow, so the volume as a whole may release their total. Answering
+        with the tightest of them instead would make :meth:`serve_limit` return
+        a minimum on one branch and a sum on the other, so a reading taken
+        across a bound crossing would change kind rather than value.
+
+        An unheld flow is REFUSED rather than answered with the declaration,
+        as :meth:`flow_entry` refuses it: returning a plausible number for a
+        flow this capacity does not hold is how a typo in an inspection script
+        survives.
+        """
+        if flow_name is not None:
+            self.flow_entry(flow_name)
+            var = self.var_serve_rate.get(flow_name)
+
+            return float(self.serve_rate) if var is None else float(var.value())
+
+        if not self.var_serve_rate:
+            return float(self.serve_rate) * len(self.flows)
+
+        return sum(float(var.value()) for var in self.var_serve_rate.values())
+
+    def serves_from_stock(self, flow_name: typing.Optional[str] = None) -> bool:
+        """True when the volume can serve out of what it HOLDS, not only transit.
+
+        The predicate :meth:`serve_limit` branches on, named so that the
+        capability sweep can ask the same question. It used to read the answer
+        off ``math.isinf(serve_limit(...))``, which stopped working the day a
+        stocked volume could report a finite ceiling instead of ``inf``: an
+        answer of 40 would have been mistaken for the empty branch.
+        """
+        if flow_name is not None and self.get_quantity(flow_name) <= 0.0:
+            return False
+
+        return not self.is_empty
+
     def serve_limit(self, flow_name=None) -> float:
         """What the capacity can serve onward.
 
         Unbounded while it holds something; once empty, limited to what
-        currently transits through it -- what enters it right now (R7).
+        currently transits through it -- what enters it right now (R7) -- and
+        in both cases never above the declared ceiling (R48,
+        :meth:`serve_ceiling`).
+
+        **The ceiling applies to BOTH branches**, and the alternative was
+        written first and measured wrong. Restricting it to the stocked branch
+        left an empty volume passing on more than its rating whenever the
+        demand was unbounded, while the capability sweep announced the rating:
+        measured, an empty capacity at ``serve_rate=40`` fed at 100 delivered
+        100 to a consumer asking without bound and published a capability of
+        40. A rating that a state of charge can suspend is not a rating. With
+        no ceiling declared this is ``min(x, math.inf)`` and every existing
+        model is untouched.
 
         Bounded **per constituent as well as per capacity**. The empty/full
         automaton watches the TOTAL weighted fill, so a volume holding 0 of one
@@ -1147,13 +1263,10 @@ class Capacity(cod3s.ObjCOD3S):
         constituent is served in proportion to what is left of it and decays
         towards zero instead of crossing it.
         """
-        if flow_name is not None and self.get_quantity(flow_name) <= 0.0:
-            return self.get_inflow(flow_name)
+        if not self.serves_from_stock(flow_name):
+            return min(self.get_inflow(flow_name), self.serve_ceiling(flow_name))
 
-        if not self.is_empty:
-            return math.inf
-
-        return self.get_inflow(flow_name)
+        return self.serve_ceiling(flow_name)
 
     def accept_limit(self, flow_name=None) -> float:
         """What the capacity can accept.
@@ -1197,6 +1310,16 @@ class Capacity(cod3s.ObjCOD3S):
           accept bound cuts the demand down to what currently leaves it, so the
           producer feeding a capacity at its volume delivers less (AE11).
 
+        **The demand carried through is capped by the discharge ceiling** (R48),
+        and that follows the rule R-20 already wrote down for the input side: a
+        volume does not fill out of a demand it cannot honour, it accumulates
+        what its ``fill_rate`` claims for itself and nothing else. Without the
+        cap a buffer at the documented default ``fill_rate=0`` -- "a pure
+        pass-through buffer, it never stocks up" -- became an accumulator the
+        moment a ceiling was declared: measured, a volume at ``serve_rate=40``
+        between a source of 100 and a load of 100 rose by 60 per unit of time.
+        A model that wants the charging says so with a ``fill_rate``.
+
         Parameters
         ----------
         demand : float
@@ -1211,7 +1334,9 @@ class Capacity(cod3s.ObjCOD3S):
         float
             The demand to carry further upstream, possibly ``math.inf``.
         """
-        return min(demand + self.fill_claim(flow_name), self.accept_limit(flow_name))
+        carried = min(float(demand), self.serve_ceiling(flow_name))
+
+        return min(carried + self.fill_claim(flow_name), self.accept_limit(flow_name))
 
     # ------------------------------------------------------------------
     # Extraction (R35)

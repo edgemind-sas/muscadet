@@ -31,6 +31,7 @@ Every one of them is composition over the declaration API: no component here
 writes an equation, reads a level in Python or subclasses a flow.
 """
 
+import math
 import re
 
 import muscadet
@@ -432,6 +433,12 @@ class CapacityContinuous(ContinuousComponent):
         implies.
     demand : float, optional
         Demand claimed on every input, for an accumulator. Defaults to 0.
+    serve_rate : float, optional
+        CEILING on what the volume releases, per held flow. Defaults to
+        ``math.inf``, no ceiling. Not the twin of ``fill_rate``: that one is a
+        claim the volume makes for itself, this one only caps what leaves.
+        ``{capacity_name}_serve_rate_{flow}`` is the public variable a failure
+        mode clamps by name to throttle the discharge.
     fill_rate : float, optional
         Rate the volume claims for ITSELF while it has room, on top of the
         demand crossing it (R36). Defaults to 0 -- a pure buffer, which asks
@@ -455,6 +462,7 @@ class CapacityContinuous(ContinuousComponent):
         "side",
         "demand",
         "fill_rate",
+        "serve_rate",
         "content_init",
         "capacity_name",
     ) + ALLOCATION_KEYS
@@ -466,6 +474,16 @@ class CapacityContinuous(ContinuousComponent):
         if ports not in CAPACITY_PORTS:
             raise ValueError(
                 f"Unknown capacity ports '{ports}': use 'both', 'in' or 'out'"
+            )
+
+        serve_rate = float(kwargs.get("serve_rate", math.inf))
+
+        if ports == "in" and math.isfinite(serve_rate):
+            raise ValueError(
+                "serve_rate caps what a capacity RELEASES, and an accumulator "
+                "(ports='in') releases nothing: it declares no output and no "
+                "rule, so nothing would ever read the ceiling. Declare "
+                "ports='both' to give the volume a way out, or drop serve_rate"
             )
 
         entries = flow_declarations(
@@ -494,6 +512,7 @@ class CapacityContinuous(ContinuousComponent):
             side=kwargs.get("side", CAPACITY_PORTS[ports]),
             content_init=kwargs.get("content_init"),
             fill_rate=float(kwargs.get("fill_rate", 0.0)),
+            serve_rate=serve_rate,
         )
 
 

@@ -334,17 +334,26 @@ def output_capability(comp, flow_name, produced):
     stocked volume is not what the rules could make -- a reservoir whose
     declared production is zero can still serve its whole content.
 
-    Two cases, and they are the two ``serve_limit`` already distinguishes:
+    Two cases, and they are the two
+    :meth:`~muscadet.capacity.Capacity.serves_from_stock` distinguishes:
 
-    - **stocked** -- ``serve_limit`` is unbounded, and so is the capability. It
-      is the same statement the demand sweep answers an unbounded request with,
-      and :func:`muscadet.evaluation.draw_from_capacity` is where it meets the
+    - **stocked** -- what could leave is ``serve_limit``: unbounded unless a
+      discharge ceiling was declared (R48), and then that ceiling. It is the
+      same statement the demand sweep answers an unbounded request with, and
+      :func:`muscadet.evaluation.draw_from_capacity` is where it meets the
       quantity actually held;
     - **empty** -- the volume degrades to a pass-through and only what transits
-      can leave. What will transit is what the rules are about to produce, which
-      is ``produced``. Deliberately not ``serve_limit``'s own answer there: that
-      reads ``{c}_inflow_{f}``, which still holds what the PREVIOUS production
-      sweep wrote, and this sweep has a current figure to hand.
+      can leave, capped by the ceiling like anything else it releases. What will
+      transit is what the rules are about to produce, which is ``produced``.
+      Deliberately not ``serve_limit``'s own answer there: that reads
+      ``{c}_inflow_{f}``, which still holds what the PREVIOUS production sweep
+      wrote, and this sweep has a current figure to hand.
+
+    The branch is chosen by asking the volume rather than by testing
+    ``math.isinf(serve_limit(...))``, which stopped telling the two apart the
+    day a stocked volume could answer with a finite ceiling (R-20's rule is
+    that a bound is computed by the function production honours, so a ceiling
+    the delivery obeys is a ceiling the capability announces).
 
     Parameters
     ----------
@@ -363,9 +372,12 @@ def output_capability(comp, flow_name, produced):
     if capacity is None:
         return produced
 
-    limit = capacity.serve_limit(flow_name)
+    if capacity.serves_from_stock(flow_name):
+        # ``serve_limit`` answers exactly this on that branch, and would re-run
+        # the predicate to find out: the answer is already known here.
+        return capacity.serve_ceiling(flow_name)
 
-    return limit if math.isinf(limit) else produced
+    return min(produced, capacity.serve_ceiling(flow_name))
 
 
 def get_input_capability(comp, flow_name):
@@ -388,9 +400,11 @@ def get_input_capability(comp, flow_name):
       RATE and letting it clamp a continuous demand at 1 would be a category
       error, and one that no model asked for;
     - an input a **capacity** buffers reports what that capacity can serve:
-      unbounded while it holds something, and what could transit once empty --
-      which is the capability arriving on the connections, since an empty
-      volume is a pass-through;
+      while it holds something, that is ``serve_limit`` -- unbounded unless a
+      discharge ceiling was declared (R48), and then that ceiling -- and once
+      empty it is what could transit, which is the capability arriving on the
+      connections, since an empty volume is a pass-through. The ceiling caps
+      that branch too;
     - otherwise, the sum of what the producers publish
       (:meth:`~muscadet.flow_continuous.FlowContinuousIn.incoming_capability`),
       or ``var_in_default`` with nothing connected.
@@ -413,9 +427,10 @@ def get_input_capability(comp, flow_name):
     capacity = comp.get_capacity_of_flow(flow_name, "in")
 
     if capacity is not None:
-        limit = capacity.serve_limit(flow_name)
-        if math.isinf(limit):
-            return limit
+        if capacity.serves_from_stock(flow_name):
+            return capacity.serve_ceiling(flow_name)
+
+        return min(flow.incoming_capability(), capacity.serve_ceiling(flow_name))
 
     return flow.incoming_capability()
 

@@ -200,10 +200,14 @@ def solver_owned_endpoints(comp):
 
     for capacity in comp.capacities.values():
         held = ", ".join(repr(name) for name in capacity.flow_names)
+        ceilings = ", ".join(
+            f"{capacity.name}_serve_rate_{name}" for name in capacity.flow_names
+        )
         advice = (
             f"a capacity's levels and transit rates are integrated by the "
-            f"solver: derate the output it buffers ({held}), or gate what "
-            "crosses it with a rule guard"
+            f"solver: to throttle what it RELEASES clamp its discharge ceiling "
+            f"({ceilings}, R48); otherwise derate the output it buffers "
+            f"({held}), or gate what crosses it with a rule guard"
         )
         variables = (
             list(capacity.var_qty.values())
