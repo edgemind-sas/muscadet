@@ -60,6 +60,7 @@ Examples
 
 import inspect
 import math
+import re
 
 import pydantic
 
@@ -918,3 +919,291 @@ def component_spec(comp):
         spec["create_default_out_automata"] = True
 
     return spec
+
+
+# ---------------------------------------------------------------------------
+# The SYSTEM scale: what a component declaration cannot carry
+# ---------------------------------------------------------------------------
+
+#: Version of the system declaration format, semver. An optional field added
+#: is a patch, a required field or a new kind is a minor, a removal or a
+#: changed meaning is a major. A reader refuses a major it does not know
+#: rather than guessing, because the whole point of this document is that two
+#: engines read the SAME thing.
+SYSTEM_SPEC_VERSION = "1.0.0"
+
+#: What an indicator declaration carries. Read back concretely rather than as
+#: the pattern the modeller typed: ``add_indicator`` takes regexes and expands
+#: them, so a declaration holding the pattern would re-expand against whatever
+#: components happen to exist at rebuild time, which is not the same system.
+_INDICATOR_COMMON_KEYS = (
+    "name",
+    "label",
+    "description",
+    "unit",
+    "measure",
+    "stats",
+    "component",
+    "operator",
+    "value_test",
+)
+
+#: The three things cod3s knows how to observe, each naming its subject with a
+#: DIFFERENT key and built by a different method. So a declaration states its
+#: ``kind``: without it, a variable and a state are indistinguishable mappings
+#: and the rebuild would have to guess which method to call.
+_INDICATOR_KINDS = {
+    "PycVarIndicator": ("var", "add_indicator_var", ()),
+    "PycSTIndicator": ("state", "add_indicator_state", ()),
+    "PycAttrIndicator": ("attr_name", "add_indicator", ("attr_type",)),
+}
+
+
+class SystemSpecError(ValueError):
+    """A system declaration that cannot be read or cannot be built."""
+
+
+def _anchor(name):
+    """``add_indicator`` matches on a regex: anchor so one name means one match.
+
+    Unanchored, ``occ`` also matches ``not_occ`` and the rebuilt system gains an
+    indicator the original never had. Same anchoring the COD3S Platform
+    translator applies, and for the same reason.
+    """
+    return f"^{re.escape(str(name))}$"
+
+
+def system_connections(system):
+    """Every wired connection of ``system``, as data.
+
+    Read from ``get_cnct_info()``, which is the engine's own view of what is
+    wired, rather than from a log of what the modeller called: a system built
+    by any route reads back the same way.
+
+    Each entry carries the two message boxes, and ``flow`` when the pair
+    follows the ``{flow}_out`` / ``{flow}_in`` convention. That name is not
+    decoration: rebuilding through :meth:`System.connect_flow` re-runs the
+    family check that refuses a discrete output feeding a continuous input,
+    which the raw ``connect`` route does not.
+    """
+    components = getattr(system, "comp", None) or {}
+    by_engine_name = {}
+    for key, comp in components.items():
+        by_engine_name[getattr(comp, "name", key)] = key
+        by_engine_name.setdefault(key, key)
+
+    out = []
+    for key, comp in components.items():
+        info = comp.get_cnct_info() or {}
+        for source_box, box_info in info.items():
+            if not str(source_box).endswith("_out"):
+                continue
+            for target in (box_info or {}).get("targets", []) or []:
+                target_key = by_engine_name.get(target.get("obj"), target.get("obj"))
+                target_box = target.get("cnct")
+                entry = {
+                    "source": key,
+                    "source_box": source_box,
+                    "target": target_key,
+                    "target_box": target_box,
+                }
+                flow = str(source_box)[: -len("_out")]
+                if str(target_box) == f"{flow}_in":
+                    entry["flow"] = flow
+                out.append(entry)
+    return sorted(
+        out, key=lambda e: (e["source"], e["source_box"], e["target"], e["target_box"])
+    )
+
+
+def system_indicators(system):
+    """Every indicator of ``system``, as data, concretely named."""
+    out = []
+    for indic in (getattr(system, "indicators", None) or {}).values():
+        kind = type(indic).__name__
+        if kind not in _INDICATOR_KINDS:
+            raise SystemSpecError(
+                f"indicator {getattr(indic, 'name', indic)!r} is a {kind}, which this "
+                f"declaration cannot carry (known: {sorted(_INDICATOR_KINDS)})"
+            )
+        subject_key, _builder, extra = _INDICATOR_KINDS[kind]
+        try:
+            dumped = indic.model_dump()
+        except AttributeError as err:  # pragma: no cover - cod3s always pydantic
+            raise SystemSpecError(
+                f"indicator {indic!r} cannot be read as data"
+            ) from err
+        keys = _INDICATOR_COMMON_KEYS + (subject_key,) + extra
+        spec = {k: dumped[k] for k in keys if dumped.get(k) is not None}
+        spec["kind"] = kind
+        out.append(spec)
+    return sorted(out, key=lambda s: str(s.get("name") or ""))
+
+
+def system_spec(system):
+    """Read a live system back as a declaration held in DATA.
+
+    The counterpart of :func:`build_system`, and the system-scale sibling of
+    :func:`component_spec`. What it adds over reading each component is the
+    part no component knows: how they are wired, and what is observed.
+
+    Deliberately NOT included: targets and simulation parameters. Those are the
+    configuration of a RUN, handed to ``simulate()``, not the description of a
+    system. Two systems carrying the same declaration are the same system,
+    whatever one intends to compute on them. The COD3S Platform already draws
+    this line, between its model export and its study.
+
+    Raises
+    ------
+    ComponentSpecError
+        Through :func:`component_spec`, when a component holds something no
+        mapping can carry -- a Python callable, typically.
+    """
+    return {
+        "version": SYSTEM_SPEC_VERSION,
+        "name": (
+            getattr(system, "name", lambda: None)()
+            if callable(getattr(system, "name", None))
+            else getattr(system, "name", None)
+        ),
+        "components": {
+            name: component_spec(comp) for name, comp in (system.comp or {}).items()
+        },
+        "connections": system_connections(system),
+        "indicators": system_indicators(system),
+    }
+
+
+def check_system_spec(spec):
+    """Validate a system declaration without building anything.
+
+    Sorting a batch before paying the engine cost, and the reason the version
+    is checked HERE: a document from a future major is refused with its own
+    number in the message, rather than half-built into a system whose shape
+    nobody can explain.
+    """
+    if not isinstance(spec, dict):
+        raise SystemSpecError(
+            f"a system declaration is a mapping, got {type(spec).__name__}"
+        )
+
+    version = spec.get("version")
+    if version is None:
+        raise SystemSpecError("a system declaration carries a 'version'")
+    major = str(version).split(".")[0]
+    if major != SYSTEM_SPEC_VERSION.split(".")[0]:
+        raise SystemSpecError(
+            f"system declaration version {version!r} is not readable by this "
+            f"muscadet, which reads {SYSTEM_SPEC_VERSION.split('.')[0]}.x"
+        )
+
+    components = spec.get("components")
+    if not isinstance(components, dict):
+        raise SystemSpecError(
+            "'components' is a mapping of name to component declaration"
+        )
+    for name, comp_spec in components.items():
+        check_spec(comp_spec)
+
+    for entry in spec.get("connections") or []:
+        missing = [
+            k
+            for k in ("source", "source_box", "target", "target_box")
+            if not entry.get(k)
+        ]
+        if missing:
+            raise SystemSpecError(f"connection {entry!r}: missing {missing}")
+        for side in ("source", "target"):
+            if entry[side] not in components:
+                raise SystemSpecError(
+                    f"connection {entry!r}: {side} {entry[side]!r} is not a declared component"
+                )
+
+    for entry in spec.get("indicators") or []:
+        kind = entry.get("kind")
+        if kind not in _INDICATOR_KINDS:
+            raise SystemSpecError(
+                f"indicator {entry!r}: 'kind' must be one of {sorted(_INDICATOR_KINDS)}, got {kind!r}"
+            )
+        subject_key = _INDICATOR_KINDS[kind][0]
+        missing = [k for k in ("component", subject_key) if not entry.get(k)]
+        if missing:
+            raise SystemSpecError(f"indicator {entry!r}: missing {missing}")
+
+
+def build_system(spec, system=None):
+    """Build a whole system from a declaration held in data.
+
+    Components first, then the wiring, then what is observed: the order is not
+    a preference. A connection needs both ends to exist, and an indicator
+    resolves against components that are already there.
+
+    Parameters
+    ----------
+    spec : dict
+        A declaration produced by :func:`system_spec`, or written by hand.
+    system : muscadet.System, optional
+        An existing system to fill. Given one, the caller owns its creation --
+        which matters because PyCATSHOO forbids more than one system per
+        process, so a caller comparing two declarations cannot let this
+        function create either of them.
+
+    Returns
+    -------
+    muscadet.System
+    """
+    check_system_spec(spec)
+
+    if system is None:
+        from muscadet.system import System
+
+        system = System(name=spec.get("name") or "system")
+
+    for name, comp_spec in spec["components"].items():
+        build_component(system, {**comp_spec, "name": comp_spec.get("name", name)})
+
+    for entry in spec.get("connections") or []:
+        flow = entry.get("flow")
+        if flow:
+            # Through ``connect_flow`` when the convention allows: it re-runs
+            # the family check that refuses a discrete output feeding a
+            # continuous input, which the raw route accepts in silence.
+            system.connect_flow(
+                source=entry["source"], target=entry["target"], flow_name=flow
+            )
+        else:
+            system.connect(
+                entry["source"],
+                entry["source_box"],
+                entry["target"],
+                entry["target_box"],
+            )
+
+    for entry in spec.get("indicators") or []:
+        indic = dict(entry)
+        subject_key, builder, _extra = _INDICATOR_KINDS[indic.pop("kind")]
+        # The three builders DERIVE the name, the label and the description
+        # from what they are HANDED, not from what the indicator turns out to
+        # be: an already-derived name handed back gets derived a second time
+        # (``Local_tank_qty_H2`` becomes ``Local_tank_qty_H2_tank_qty_H2_value``).
+        # They are read back for a reader, and imposed here, because the
+        # declaration is what says how an indicator is called.
+        imposed = {
+            k: indic.pop(k) for k in ("name", "label", "description") if k in indic
+        }
+        indic["component"] = _anchor(indic["component"])
+        indic[subject_key] = _anchor(indic[subject_key])
+        created = getattr(system, builder)(**indic) or []
+        if imposed.get("name"):
+            if len(created) != 1:
+                raise SystemSpecError(
+                    f"indicator {imposed['name']!r} resolved to {len(created)} indicators; "
+                    "a declaration names exactly one"
+                )
+            built = created[0]
+            system.indicators.pop(built.name, None)
+            for key, value in imposed.items():
+                setattr(built, key, value)
+            system.indicators[built.name] = built
+
+    return system
