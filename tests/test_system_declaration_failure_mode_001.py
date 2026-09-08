@@ -219,6 +219,19 @@ system.add_component(
     not_occ_law={"cls": "delay", "time": 3},
     occ_effects={"f_fed_available_out": False},
 )
+# ``targets=None`` is the SELF-HOSTED shape, and it is not ``targets=[]``: one
+# automaton on the component itself, under a name of its own. The engine
+# normalises the None to an empty list right after reading it, so the document
+# reads the distinction from the mode's own flag, and ``aut_name`` -- which the
+# engine does not keep at all -- from the automaton that got built.
+system.add_component(
+    cls="ObjMode2S",
+    mode_name="selfhosted",
+    targets=None,
+    aut_name="ev",
+    occ_law={"cls": "delay", "time": 5},
+    not_occ_law={"cls": "delay", "time": 7},
+)
 
 declared = json.loads(json.dumps(system_spec(system)))
 system.deleteSys()
@@ -239,6 +252,8 @@ print("RESULT " + json.dumps({
     "identical": comparable(declared["components"]) == comparable(rebuilt["components"]),
     "declared": declared["components"]["A__engine"],
     "rebuilt": rebuilt["components"]["A__engine"],
+    "self_hosted": declared["components"]["selfhosted"],
+    "self_hosted_automata": sorted(rebuilt_system.comp["selfhosted"].automata_d),
 }))
 """
 
@@ -332,6 +347,12 @@ def test_the_generic_engine_round_trips_with_its_declared_laws():
     object and no ObjMode2S could cross at all."""
     result = run_probe(_MODE2S_ROUND_TRIP)
     assert result["declared"]["occ_law"] == {"cls": "exp", "rate": 0.1}
+    # The self-hosted shape crosses whole: ``targets`` stays null rather than
+    # collapsing to the empty list the engine normalises it into, and the
+    # automaton comes back under the name it was given and not the mode's.
+    assert result["self_hosted"]["targets"] is None
+    assert result["self_hosted"]["aut_name"] == "ev"
+    assert result["self_hosted_automata"] == ["ev"]
     assert result["identical"], result
 
 
