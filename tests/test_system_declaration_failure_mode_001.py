@@ -224,6 +224,19 @@ system.add_component(
 # normalises the None to an empty list right after reading it, so the document
 # reads the distinction from the mode's own flag, and ``aut_name`` -- which the
 # engine does not keep at all -- from the automaton that got built.
+# The platform's own shape for a multi-clause indicator, and the one whose
+# comparison is only recoverable through the operator singletons.
+system.add_component(
+    name="_ind_two_clauses",
+    cls="ObjEvent",
+    cond=[
+        [{"attr": "f_fed_out", "obj": "A", "value": True}],
+        [{"attr": "f_fed_out", "obj": "A", "value": False}],
+    ],
+    outer_logic="all",
+    cond_operator="!=",
+    tempo_occ=2,
+)
 system.add_component(
     cls="ObjMode2S",
     mode_name="selfhosted",
@@ -253,6 +266,7 @@ print("RESULT " + json.dumps({
     "declared": declared["components"]["A__engine"],
     "rebuilt": rebuilt["components"]["A__engine"],
     "self_hosted": declared["components"]["selfhosted"],
+    "event": declared["components"]["_ind_two_clauses"],
     "self_hosted_automata": sorted(rebuilt_system.comp["selfhosted"].automata_d),
 }))
 """
@@ -353,6 +367,9 @@ def test_the_generic_engine_round_trips_with_its_declared_laws():
     assert result["self_hosted"]["targets"] is None
     assert result["self_hosted"]["aut_name"] == "ev"
     assert result["self_hosted_automata"] == ["ev"]
+    # A comparison that is NOT the default comes back by its spelling, which
+    # is the whole reason an event has a declaration form rather than a refusal.
+    assert result["event"]["cond_operator"] == "!="
     assert result["identical"], result
 
 
@@ -431,6 +448,22 @@ def the_run():
         occ_effects={"f_fed_available_out": False},
     )
 
+    # An event: a second façade over the same engine, self-hosted, watching the
+    # system rather than naming targets. The COD3S Platform synthesises one per
+    # study event AND one per indicator whose formula has more than one clause,
+    # which is why it is here rather than in the refusals: it is an ordinary
+    # part of the corpus, not an exotic corner.
+    system.add_component(
+        name="_ind_two_clauses",
+        cls="ObjEvent",
+        cond=[
+            [{"attr": "f_fed_out", "obj": "A", "value": True}],
+            [{"attr": "f_fed_out", "obj": "B", "value": True}],
+        ],
+        outer_logic="all",
+        tempo_occ=2,
+    )
+
     spec = system_spec(system)
 
     undeclarable = {
@@ -448,10 +481,17 @@ def the_run():
             failure_effects={"f_fed_available_out": False},
             trans_name_prefix_fun=_naming,
         ),
-        "event": system.add_component(
-            name="EV",
-            cls="ObjEvent",
-            cond=[[{"attr": "f_fed_out", "obj": "A", "value": True}]],
+        "degradation": system.add_component(
+            cls="ObjDegMode",
+            fm_name="deg",
+            targets=["C"],
+            states=[
+                {
+                    "name": "degraded",
+                    "occ_law": {"cls": "exp", "rate": 0.1},
+                    "effects": {"f_fed_available_out": False},
+                }
+            ],
         ),
         "tuple_keyed_metadata": system.add_component(
             name="TUPLES",
@@ -489,6 +529,7 @@ def test_a_standalone_mode_gets_its_own_entry(the_run):
         "A__single",
         "ABC__common",
         "C__engine",
+        "_ind_two_clauses",
     }
     assert components["A__single"][COMPONENT_KIND_KEY] == COMPONENT_KIND_FAILURE_MODE
     assert components["A"].get(COMPONENT_KIND_KEY, "flow") == "flow"
@@ -598,14 +639,29 @@ def test_a_live_object_inside_a_mode_is_refused_by_its_field(the_run):
         component_spec(the_run["undeclarable"]["naming_function"])
 
 
-def test_an_event_is_refused_rather_than_written_in_a_spelling_it_ignores(the_run):
-    """``cod3s.ObjEvent`` IS an ``ObjMode2S`` and takes none of its fields: its
-    constructor reads a ``cond`` and a ``cond_operator``, and it keeps the
-    compiled operator rather than the spelling, so a built event cannot be read
-    back whole. Refused by name, rather than declared without its comparison.
+def test_an_event_declares_its_condition_and_its_comparison(the_run):
+    """The one field that looked unreadable, and is not.
+
+    ``ObjEvent`` keeps the COMPILED comparison and drops its spelling, which
+    reads as a mode that cannot be written out. But the six functions it
+    compiles to are ``operator`` module singletons, so identity gives the
+    spelling back exactly -- and the same goes for the two tempos, which the
+    façade turns into delay laws and which are read from there.
     """
-    with pytest.raises(ComponentSpecError, match="ObjEvent"):
-        component_spec(the_run["undeclarable"]["event"])
+    spec = the_run["spec"]["components"]["_ind_two_clauses"]
+    assert spec["cls"] == "ObjEvent"
+    assert spec["name"] == "_ind_two_clauses"
+    assert spec["cond"] == [
+        [{"attr": "f_fed_out", "obj": "A", "value": True}],
+        [{"attr": "f_fed_out", "obj": "B", "value": True}],
+    ]
+    assert spec["outer_logic"] == "all"
+    assert spec["tempo_occ"] == 2.0
+    # Everything left at its default says nothing, the comparison included:
+    # the platform never departs from `==` / True, so an ordinary event
+    # declares its condition and little else.
+    for silent in ("cond_operator", "cond_value", "inner_logic", "tempo_not_occ"):
+        assert silent not in spec, spec
 
 
 def test_a_mapping_keyed_by_anything_but_a_string_is_refused(the_run):
@@ -619,6 +675,14 @@ def test_a_mapping_keyed_by_anything_but_a_string_is_refused(the_run):
     """
     with pytest.raises(ComponentSpecError, match="instance_overrides"):
         component_spec(the_run["undeclarable"]["tuple_keyed_metadata"])
+
+
+def test_a_multi_state_mode_is_refused_by_name(the_run):
+    """``cod3s.ObjDegMode`` is not an ``ObjMode2S``: it holds a list of states
+    rather than two, so none of the three vocabularies fits it. Pinned so that
+    the day it gets a form, this test is what says so."""
+    with pytest.raises(ComponentSpecError, match="ObjDegMode"):
+        component_spec(the_run["undeclarable"]["degradation"])
 
 
 def test_a_mode_naming_a_class_that_is_not_one_is_refused(the_run):

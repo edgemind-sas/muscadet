@@ -60,6 +60,7 @@ Examples
 
 import inspect
 import math
+import operator
 import re
 
 import cod3s
@@ -196,31 +197,38 @@ COMPONENT_KINDS = (COMPONENT_KIND_FLOW, COMPONENT_KIND_FAILURE_MODE)
 #: by name would accept ``"sum"`` and produce wrong truth logic.
 MODE_LOGIC = {"all": all, "any": any}
 
-#: The two condition-logic fields, their attribute, and their default. Kept
-#: apart from a vocabulary's ``fields`` because they are the only two read
-#: through :data:`MODE_LOGIC` rather than as data, and both vocabularies spell
-#: them the same way.
-MODE_LOGIC_FIELDS = (
-    ("cond_inner_logic", "cond_inner_logic", all),
-    ("cond_outer_logic", "cond_outer_logic", any),
-)
+#: What a document carries instead of the comparison an event was built with.
+#: ``ObjEvent`` keeps the COMPILED operator and not its spelling, but the
+#: functions it compiles to are ``operator`` module singletons, so the spelling
+#: comes back exactly -- which is what lets an event be declared at all rather
+#: than refused for a comparison nobody can read.
+MODE_OPERATORS = {
+    "==": operator.eq,
+    "!=": operator.ne,
+    "<": operator.lt,
+    "<=": operator.le,
+    ">": operator.gt,
+    ">=": operator.ge,
+}
 
 
 class ModeVocabulary(pydantic.BaseModel):
     """How one FAMILY of mode classes spells its declaration.
 
-    There are two, and the split is not muscadet's doing. ``cod3s.ObjMode2S``
-    is the engine, and it takes ``occ_*`` / ``not_occ_*``; ``cod3s.ObjFM`` is
-    the backward-compatible façade over it and takes ``failure_*`` /
-    ``repair_*``, storing them in the engine's fields through aliases. Both are
-    live classes a study builds today -- the COD3S Platform emits ``ObjMode2S``
-    natively, and every muscadet model in the wild uses the ``ObjFM`` spelling
-    -- so a document has to carry either.
+    There are three, and the split is not muscadet's doing. ``cod3s.ObjMode2S``
+    is the engine and takes ``occ_*`` / ``not_occ_*``; ``cod3s.ObjFM`` is the
+    backward-compatible façade over it and takes ``failure_*`` / ``repair_*``,
+    storing them in the engine's fields through aliases; ``cod3s.ObjEvent`` is
+    a second façade over the same engine and takes a ``cond`` with its
+    comparison. All three are live classes a study builds today -- the COD3S
+    Platform emits ``ObjMode2S`` for its modes and synthesises an ``ObjEvent``
+    per multi-clause indicator, and every muscadet model in the wild uses the
+    ``ObjFM`` spelling -- so a document has to carry any of them.
 
     **A declaration is spelled the way its own constructor takes it**, which is
     why the vocabulary follows the CLASS rather than being normalised to one of
-    the two. Splatting the entry into ``cls(**entry)`` is then the whole of the
-    build: there is no translation layer to get subtly wrong, and a key a
+    the three. Splatting the entry into ``cls(**entry)`` is then the whole of
+    the build: there is no translation layer to get subtly wrong, and a key a
     constructor does not take is refused by name before anything is built.
     """
 
@@ -259,6 +267,16 @@ class ModeVocabulary(pydantic.BaseModel):
     #: Empty for the façade family, whose law is carried by the class itself.
     law_fields: tuple = ()
 
+    #: ``(spec key, attribute, default)`` for the fields carrying one of the
+    #: two truth functions of :data:`MODE_LOGIC`. Per vocabulary rather than
+    #: shared: the engine calls them ``cond_inner_logic`` / ``cond_outer_logic``
+    #: and ``ObjEvent`` calls them ``inner_logic`` / ``outer_logic``, and a key
+    #: a constructor does not take is a key nothing builds.
+    logic_fields: tuple = (
+        ("cond_inner_logic", "cond_inner_logic", all),
+        ("cond_outer_logic", "cond_outer_logic", any),
+    )
+
     @property
     def keys(self):
         """Every key a declaration in this vocabulary may carry.
@@ -271,7 +289,7 @@ class ModeVocabulary(pydantic.BaseModel):
         return frozenset(
             ("name", "cls", COMPONENT_KIND_KEY, "label", "description", "metadata")
             + tuple(key for key, _ in self.fields)
-            + tuple(key for key, _, _ in MODE_LOGIC_FIELDS)
+            + tuple(key for key, _, _ in self.logic_fields)
             + ("drop_inactive_automata",)
         )
 
@@ -377,18 +395,56 @@ MODE_VOCABULARY = ModeVocabulary(
     law_fields=("occ_law", "not_occ_law"),
 )
 
+#: ``cod3s.ObjEvent``: a two-state event, self-hosted, whose condition is a
+#: structured tree compared to a value. A second façade over the same engine,
+#: and a shape the COD3S Platform synthesises without anyone asking for it --
+#: one per study event, and one per INDICATOR whose formula has more than one
+#: clause, which is an ordinary thing to write.
+#:
+#: Every field of it is read back from somewhere: the condition and its value
+#: from the compilation inputs the façade keeps, the two tempos from the delay
+#: laws it turns them into, the comparison from :data:`MODE_OPERATORS`. The
+#: only one that looked unreadable is the comparison, and it is not.
+EVENT_VOCABULARY = ModeVocabulary(
+    name_key="name",
+    fields=(
+        # ``name`` is a constructor argument here and not a derived component
+        # name: an event is self-hosted, so it IS what it is called.
+        ("name", None),
+        ("cond", "_event_cond_raw"),
+        ("cond_operator", None),
+        ("cond_value", "_event_cond_value"),
+        ("tempo_occ", None),
+        ("tempo_not_occ", None),
+        ("event_aut_name", "event_aut_name"),
+        ("occ_state_name", "occ_state_name"),
+        ("not_occ_state_name", "not_occ_state_name"),
+    ),
+    defaults={
+        "cond_operator": "==",
+        "cond_value": True,
+        "tempo_occ": 0.0,
+        "tempo_not_occ": 0.0,
+        "event_aut_name": "ev",
+        "occ_state_name": "occ",
+        "not_occ_state_name": "not_occ",
+    },
+    order_vectors=(),
+    logic_fields=(
+        ("inner_logic", "_event_inner_logic", all),
+        ("outer_logic", "_event_outer_logic", any),
+    ),
+)
+
 #: Which vocabulary a mode class speaks, MOST SPECIFIC FIRST. ``cod3s.ObjFM``
 #: is an ``ObjMode2S``, so the order is what decides, and reversing it would
 #: quietly write every muscadet mode in the engine's spelling.
 #:
-#: ``cod3s.ObjEvent`` is an ``ObjMode2S`` too and is deliberately absent: its
-#: constructor takes a ``cond``, an ``inner_logic`` and a ``cond_operator``
-#: rather than the engine fields, and it keeps the COMPILED operator instead of
-#: the spelling -- so a built event cannot be read back at all, and the honest
-#: answer is the refusal :func:`component_spec` gives, not a declaration
-#: missing its comparison. Same for ``cod3s.ObjDegMode``, which is a
-#: multi-state mode and not an ``ObjMode2S`` in the first place.
+#: ``cod3s.ObjDegMode`` is deliberately absent: it is a multi-state mode and
+#: not an ``ObjMode2S`` in the first place, so it has neither of these shapes
+#: and gets the refusal :func:`component_spec` gives.
 MODE_VOCABULARIES = (
+    (cod3s.ObjEvent, EVENT_VOCABULARY),
     (cod3s.ObjFM, FAILURE_MODE_VOCABULARY),
     (cod3s.ObjMode2S, MODE_VOCABULARY),
 )
@@ -1074,9 +1130,8 @@ def component_spec(comp):
     class the caller never wrote down, from inside a dict comprehension, before
     any engine saw anything -- which is exactly what a document checked on the
     way out exists to avoid. A component muscadet has no declaration form for
-    says so, and says which one it is. ``cod3s.ObjEvent`` and
-    ``cod3s.ObjDegMode`` are in that third row today, deliberately: see
-    :data:`MODE_VOCABULARIES`.
+    says so, and says which one it is. ``cod3s.ObjDegMode`` is in that third
+    row today, deliberately: see :data:`MODE_VOCABULARIES`.
 
     Parameters
     ----------
@@ -1275,25 +1330,23 @@ def flow_component_spec(comp):
 def mode_vocabulary(cls, where):
     """The :class:`ModeVocabulary` ``cls`` speaks, or a refusal naming it.
 
-    :data:`MODE_VOCABULARIES` is walked in order, most specific first, so a
-    ``cod3s.ObjFM`` gets the façade spelling and a plain ``ObjMode2S`` the
-    engine's. A mode class in neither family -- ``cod3s.ObjEvent``,
-    ``cod3s.ObjDegMode`` -- is refused here rather than written out in a
-    vocabulary its constructor does not take.
+    :data:`MODE_VOCABULARIES` is walked in order, MOST SPECIFIC FIRST, and the
+    order is what decides: ``cod3s.ObjEvent`` and ``cod3s.ObjFM`` are both
+    ``ObjMode2S``, so reversing it would quietly write every event and every
+    muscadet mode in the engine's spelling, which none of their constructors
+    takes. A mode class in no family is refused here rather than written out in
+    a vocabulary that does not fit it.
     """
     for family, vocabulary in MODE_VOCABULARIES:
         if isinstance(cls, type) and issubclass(cls, family):
-            # ObjEvent IS an ObjMode2S and takes none of its fields: it is
-            # excluded by name, at the one place the families are read.
-            if issubclass(cls, cod3s.ObjEvent):
-                break
             return vocabulary
 
     raise ComponentSpecError(
         f"{where}: {getattr(cls, '__name__', cls)!r} is not a mode class a "
-        f"{COMPONENT_KIND_FAILURE_MODE!r} declaration describes. The two it "
+        f"{COMPONENT_KIND_FAILURE_MODE!r} declaration describes. The three it "
         f"describes are the cod3s.ObjFM family, spelled failure_*/repair_*, "
-        f"and cod3s.ObjMode2S itself, spelled occ_*/not_occ_*"
+        f"cod3s.ObjMode2S itself, spelled occ_*/not_occ_*, and cod3s.ObjEvent, "
+        f"spelled with a cond and its comparison"
     )
 
 
@@ -1329,6 +1382,39 @@ def _mode_logic_name(value, key, where):
         f"truth function rather than the function. Declare one of "
         f"{sorted(MODE_LOGIC)}, or keep this mode a live object"
     )
+
+
+def _mode_operator_name(comp, where):
+    """The comparison spelling of an event, from the function it compiled to.
+
+    ``ObjEvent`` keeps ``get_operator_function(cond_operator)`` and drops the
+    string, which is what made an event look unreadable. It is not: the six
+    functions are ``operator`` module singletons, so identity gives the
+    spelling back exactly. Anything else is a function of the caller's own and
+    is refused, like every other live object here.
+    """
+    compiled = getattr(comp, "_event_cond_operator_fun", None)
+
+    for spelling, function in MODE_OPERATORS.items():
+        if compiled is function:
+            return spelling
+
+    raise ComponentSpecError(
+        f"{where}: its comparison is {compiled!r}, which is not one of "
+        f"{sorted(MODE_OPERATORS)}. A document carries the SPELLING of a "
+        f"comparison, never the function it compiled to"
+    )
+
+
+def _mode_tempo(comp, direction):
+    """The tempo an event was built with, from the delay law it became.
+
+    ``ObjEvent`` turns ``tempo_occ`` into ``occ_law={"cls": "delay", "time":
+    ...}`` and keeps only the law, so the tempo is read from there. Nothing
+    else can hold a tempo on an event: the engine has no other way to carry it.
+    """
+    law = getattr(comp, f"{direction}_law", None)
+    return getattr(law, "time", None)
 
 
 def _mode_law_spec(law, where):
@@ -1461,7 +1547,18 @@ def failure_mode_component_spec(comp):
     }
 
     for key, attribute in vocabulary.fields:
-        if key == "aut_name":
+        if key == "name":
+            # An event's own name IS a constructor argument, where every other
+            # mode's is derived from its targets; it therefore appears in the
+            # fields as well as in the entry's own ``name``.
+            value = comp.basename()
+        elif key == "cond_operator":
+            value = _mode_operator_name(comp, where)
+        elif key == "tempo_occ":
+            value = _mode_tempo(comp, "occ")
+        elif key == "tempo_not_occ":
+            value = _mode_tempo(comp, "not_occ")
+        elif key == "aut_name":
             value = _self_hosted_automaton_name(comp)
         elif key == "targets" and getattr(comp, "_self_hosted", False):
             # ``targets=None`` is what puts a mode in its SELF-HOSTED shape --
@@ -1480,7 +1577,7 @@ def failure_mode_component_spec(comp):
 
         spec[key] = _checked_declaration(value, f"{where}, {key}")
 
-    for key, attribute, default in MODE_LOGIC_FIELDS:
+    for key, attribute, default in vocabulary.logic_fields:
         value = getattr(comp, attribute, default)
 
         if value is not default:
@@ -1538,21 +1635,38 @@ def check_failure_mode_spec(spec):
             f"{', '.join(sorted(vocabulary.keys))}"
         )
 
-    targets = spec.get("targets")
-    # ``None`` is the SELF-HOSTED shape and not an omission, so it is accepted
-    # where the vocabulary has one -- and refused for the ObjFM façade, whose
-    # historical contract turns it into the silent no-op of an empty list.
-    self_hosted = targets is None and "aut_name" in vocabulary.defaults
-    if not self_hosted and (
-        not isinstance(targets, (list, tuple))
-        or not all(isinstance(target, str) for target in targets)
-    ):
+    field_keys = {key for key, _ in vocabulary.fields}
+
+    if "targets" in field_keys:
+        targets = spec.get("targets")
+        # ``None`` is the SELF-HOSTED shape and not an omission, so it is
+        # accepted where the vocabulary has one -- and refused for the ObjFM
+        # façade, whose historical contract turns it into the silent no-op of
+        # an empty list. An event has no targets at all: it observes the whole
+        # system, so the key is not in its vocabulary and is not checked here.
+        self_hosted = targets is None and "aut_name" in field_keys
+        if not self_hosted and (
+            not isinstance(targets, (list, tuple))
+            or not all(isinstance(target, str) for target in targets)
+        ):
+            raise ComponentSpecError(
+                f"{where}: 'targets' is the list of component names the mode "
+                f"affects, got {targets!r}"
+            )
+
+    if "cond" in field_keys and spec.get("cond") is None:
         raise ComponentSpecError(
-            f"{where}: 'targets' is the list of component names the mode "
-            f"affects, got {targets!r}"
+            f"{where}: 'cond' is what the event watches, and an event that "
+            f"watches nothing never fires"
         )
 
-    for key, _attribute, _default in MODE_LOGIC_FIELDS:
+    if spec.get("cond_operator", "==") not in MODE_OPERATORS:
+        raise ComponentSpecError(
+            f"{where}: cond_operator={spec['cond_operator']!r} is not one of "
+            f"{sorted(MODE_OPERATORS)}"
+        )
+
+    for key, _attribute, _default in vocabulary.logic_fields:
         if key in spec and spec[key] not in MODE_LOGIC:
             raise ComponentSpecError(
                 f"{where}: {key}={spec[key]!r} is not one of {sorted(MODE_LOGIC)}"
@@ -1569,23 +1683,34 @@ def build_failure_mode_component(system, spec):
     reorders anything, because a mode has no ``set_flows()`` and therefore none
     of the ordering that makes :func:`build_component` what it is.
 
-    The component's own name is DERIVED by the engine, ``{target_name}__{fm_name}``,
-    and is therefore not a constructor keyword. A declaration carries it all
-    the same -- it is the key the document files the mode under, and what a
-    connection or an indicator would name -- so it is checked against what the
-    engine derived rather than dropped: a document whose key does not name the
-    component it builds is a document whose other entries point at nothing.
+    For a mode with targets, the component's own name is DERIVED by the engine,
+    ``{target_name}__{fm_name}``, and is therefore not a constructor keyword. A
+    declaration carries it all the same -- it is the key the document files the
+    mode under, and what a connection or an indicator would name -- so it is
+    checked against what the engine derived rather than dropped: a document
+    whose key does not name the component it builds is a document whose other
+    entries point at nothing. An event is self-hosted and its name IS a
+    constructor argument, so there the check is trivially satisfied and the key
+    is passed on rather than dropped.
     """
     name = check_failure_mode_spec(spec)
     _cls, vocabulary = _mode_class(spec.get("cls"), f"Failure mode {name}")
 
+    # ``name`` is dropped, being the key the document files the mode under and
+    # not a constructor argument -- EXCEPT for an event, which is self-hosted
+    # and whose constructor takes it. The vocabulary decides, so neither case
+    # is a special case written here.
+    dropped = {COMPONENT_KIND_KEY}
+    if "name" not in {key for key, _ in vocabulary.fields}:
+        dropped.add("name")
+
     keywords = {
         key: value
         for key, value in copy_declaration(spec).items()
-        if key not in ("name", COMPONENT_KIND_KEY)
+        if key not in dropped
     }
 
-    for key, _attribute, _default in MODE_LOGIC_FIELDS:
+    for key, _attribute, _default in vocabulary.logic_fields:
         if key in keywords:
             keywords[key] = MODE_LOGIC[keywords[key]]
 
