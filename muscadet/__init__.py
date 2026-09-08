@@ -18,9 +18,28 @@ from .capacity import (
 )
 from .declare import (
     ComponentSpecError,
+    SystemSpecError,
     build_component,
+    build_system,
     check_spec,
+    check_system_spec,
     component_spec,
+    system_spec,
+)
+from .engine import (
+    ENGINE_ENTRY_POINT_GROUP,
+    REFERENCE_ENGINE,
+    Engine,
+    EngineAlreadyRegisteredError,
+    EngineError,
+    EngineRunnerMissingError,
+    UnknownEngineError,
+    get_engine,
+    is_reference_engine,
+    register_engine,
+    registered_engines,
+    reset_engines,
+    unregister_engine,
 )
 from .flow import (
     FlowDiscrete,
