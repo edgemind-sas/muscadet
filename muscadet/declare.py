@@ -62,6 +62,7 @@ import inspect
 import math
 import re
 
+import cod3s
 import pydantic
 
 from .common import copy_declaration
@@ -152,6 +153,244 @@ COMPONENT_KEYS = frozenset(
     + ("params", SOURCE_CLS_KEY)
     + tuple(section for section, _ in DECLARATION_SECTIONS)
     + POST_SET_FLOWS_SECTIONS
+)
+
+# ---------------------------------------------------------------------------
+# The second shape of a component declaration: a STANDALONE failure mode
+# ---------------------------------------------------------------------------
+#
+# A ``system.comp`` is not only made of ``ObjFlow``. A standalone failure mode
+# -- ``system.add_component(cls="ObjFMDelay", fm_name=..., targets=[...])`` --
+# is a PyCATSHOO component of its own, carrying no flow at all, and NOTHING
+# else in the system records it: unlike a mode declared ON a component, which
+# ``ObjFlow.declared_failure_modes`` keeps and ``component_spec`` writes into
+# that component's ``failure_modes`` section, a standalone mode leaves no trace
+# on the component it targets. Skipping it would therefore not lose decoration,
+# it would lose the model: the two interactive examples built on a compromise
+# cascade would declare their components and none of the attack.
+#
+# So it gets its own entry, and the entry says which of the two shapes it is.
+
+#: Key a component declaration states its SHAPE under. Absent means
+#: :data:`COMPONENT_KIND_FLOW`, which is what every declaration written before
+#: this key existed means -- so no stored document has to be rewritten, and a
+#: reader that ignores the key reads exactly what it used to.
+COMPONENT_KIND_KEY = "kind"
+
+#: An ``ObjFlow``: flows, capacities, rules, transfers, and the modes declared
+#: on it. The default, and the shape :data:`COMPONENT_KEYS` describes.
+COMPONENT_KIND_FLOW = "flow"
+
+#: A standalone member of the ``cod3s.ObjFM`` family: no flow, an occurrence
+#: law, and effects it applies to components it NAMES rather than owns.
+COMPONENT_KIND_FAILURE_MODE = "failure_mode"
+
+COMPONENT_KINDS = (COMPONENT_KIND_FLOW, COMPONENT_KIND_FAILURE_MODE)
+
+#: The two truth functions a mode may compose its condition groups with, named
+#: rather than held. They are callables, so a document cannot carry the
+#: function -- but it can carry which of the two it is, and that costs one
+#: mapping instead of a refusal on a mode that declared nothing unusual.
+#: Anything else is a callable of the caller's own and is refused, exactly as
+#: ``cod3s.ObjEvent`` refuses one for the same reason: reaching into builtins
+#: by name would accept ``"sum"`` and produce wrong truth logic.
+MODE_LOGIC = {"all": all, "any": any}
+
+#: The two condition-logic fields, their attribute, and their default. Kept
+#: apart from a vocabulary's ``fields`` because they are the only two read
+#: through :data:`MODE_LOGIC` rather than as data, and both vocabularies spell
+#: them the same way.
+MODE_LOGIC_FIELDS = (
+    ("cond_inner_logic", "cond_inner_logic", all),
+    ("cond_outer_logic", "cond_outer_logic", any),
+)
+
+
+class ModeVocabulary(pydantic.BaseModel):
+    """How one FAMILY of mode classes spells its declaration.
+
+    There are two, and the split is not muscadet's doing. ``cod3s.ObjMode2S``
+    is the engine, and it takes ``occ_*`` / ``not_occ_*``; ``cod3s.ObjFM`` is
+    the backward-compatible façade over it and takes ``failure_*`` /
+    ``repair_*``, storing them in the engine's fields through aliases. Both are
+    live classes a study builds today -- the COD3S Platform emits ``ObjMode2S``
+    natively, and every muscadet model in the wild uses the ``ObjFM`` spelling
+    -- so a document has to carry either.
+
+    **A declaration is spelled the way its own constructor takes it**, which is
+    why the vocabulary follows the CLASS rather than being normalised to one of
+    the two. Splatting the entry into ``cls(**entry)`` is then the whole of the
+    build: there is no translation layer to get subtly wrong, and a key a
+    constructor does not take is refused by name before anything is built.
+    """
+
+    model_config = pydantic.ConfigDict(frozen=True)
+
+    #: ``(spec key, attribute read back from)``, in the order the constructor
+    #: takes them, so a reader of the constructor and a reader of a document
+    #: walk the same list.
+    fields: tuple
+
+    #: What each field is when the modeller said nothing, so a declaration
+    #: writes only what someone decided. The name, the targets and the target
+    #: name are deliberately absent: the first two are what a mode IS, and the
+    #: third decides the component's name.
+    defaults: dict
+
+    #: The key the mode's own name is declared under.
+    name_key: str
+
+    #: The fields holding ONE ENTRY PER COMMON-CAUSE ORDER, where an entry is
+    #: either a scalar or the vector of the law's parameters for that order.
+    #:
+    #: **A document has no tuples, and the engine reads one.** ``ObjMode2S``
+    #: takes a TUPLE at an order to mean "the parameters of that order", and
+    #: wraps anything else into a one-element one -- so a list arriving where
+    #: the engine expects a tuple is read as a single parameter WHOSE VALUE IS
+    #: A LIST, and PyCATSHOO refuses it with a Boost signature dump naming no
+    #: field. Not hypothetical: the engine pads a short vector with ``(0,)``
+    #: itself, so any common-cause mode declared with one rate for every order
+    #: came back as ``[1.0, [0], [0]]`` and could not be rebuilt. A list at an
+    #: order therefore MEANS what the tuple means, and the build converts.
+    order_vectors: tuple
+
+    #: The fields holding a ``cod3s.pycatshoo.mode_law.ModeLaw``, which is a
+    #: pydantic model rather than data and is dumped rather than refused.
+    #: Empty for the façade family, whose law is carried by the class itself.
+    law_fields: tuple = ()
+
+    @property
+    def keys(self):
+        """Every key a declaration in this vocabulary may carry.
+
+        ``cls`` is the mode CLASS here and not a base to expand onto: for the
+        façade family the occurrence law lives in the class (``ObjFMDelay``
+        draws a delay, ``ObjFMExp`` a rate), so there is no ``source_cls``
+        counterpart -- a mode read back names the class it is.
+        """
+        return frozenset(
+            ("name", "cls", COMPONENT_KIND_KEY, "label", "description", "metadata")
+            + tuple(key for key, _ in self.fields)
+            + tuple(key for key, _, _ in MODE_LOGIC_FIELDS)
+            + ("drop_inactive_automata",)
+        )
+
+
+#: ``cod3s.ObjFM`` and its subclasses, which is what a muscadet model writes --
+#: ``muscadet.ObjFailureMode*`` are subclasses of it -- and what
+#: ``system.add_component(cls="ObjFMDelay", ...)`` builds.
+FAILURE_MODE_VOCABULARY = ModeVocabulary(
+    name_key="fm_name",
+    fields=(
+        ("fm_name", "mode_name"),
+        ("targets", "targets"),
+        ("target_name", "target_name"),
+        ("behaviour", "behaviour"),
+        ("failure_state", "occ_state"),
+        ("failure_cond", "occ_cond"),
+        ("failure_effects", "occ_effects"),
+        ("failure_effects_trans", "occ_effects_trans"),
+        ("failure_param_name", "occ_param_name"),
+        ("failure_param", "occ_param"),
+        ("repair_state", "not_occ_state"),
+        ("repair_cond", "not_occ_cond"),
+        ("repair_effects", "not_occ_effects"),
+        ("repair_effects_trans", "not_occ_effects_trans"),
+        ("repair_param_name", "not_occ_param_name"),
+        ("repair_param", "not_occ_param"),
+        ("param_name_order_prefix", "param_name_order_prefix"),
+        ("trans_name_prefix", "trans_name_prefix"),
+        ("trans_name_prefix_fun", "trans_name_prefix_fun"),
+        ("step", "step"),
+    ),
+    defaults={
+        "behaviour": "internal",
+        "failure_state": "occ",
+        "failure_cond": True,
+        "failure_effects": {},
+        "failure_effects_trans": {},
+        "repair_state": "rep",
+        "repair_cond": True,
+        "repair_effects": {},
+        "repair_effects_trans": {},
+        "param_name_order_prefix": "__{order}_o_{order_max}",
+        "trans_name_prefix": "__cc_{target_comb_u}",
+        "trans_name_prefix_fun": None,
+        "step": None,
+    },
+    order_vectors=("failure_param", "repair_param"),
+)
+
+#: The generic two-state engine, ``cod3s.ObjMode2S`` itself. What the COD3S
+#: Platform emits natively, and what carries the declared occurrence LAWS a
+#: façade derives from its class instead.
+MODE_VOCABULARY = ModeVocabulary(
+    name_key="mode_name",
+    fields=(
+        ("mode_name", "mode_name"),
+        ("targets", "targets"),
+        ("target_name", "target_name"),
+        ("aut_name", None),
+        ("behaviour", "behaviour"),
+        ("occ_state", "occ_state"),
+        ("occ_law", "occ_law"),
+        ("occ_cond", "occ_cond"),
+        ("occ_effects", "occ_effects"),
+        ("occ_effects_trans", "occ_effects_trans"),
+        ("occ_param_name", "occ_param_name"),
+        ("occ_param", "occ_param"),
+        ("occ_parked_state", "occ_parked_state"),
+        ("not_occ_state", "not_occ_state"),
+        ("not_occ_law", "not_occ_law"),
+        ("not_occ_cond", "not_occ_cond"),
+        ("not_occ_effects", "not_occ_effects"),
+        ("not_occ_effects_trans", "not_occ_effects_trans"),
+        ("not_occ_param_name", "not_occ_param_name"),
+        ("not_occ_param", "not_occ_param"),
+        ("not_occ_parked_state", "not_occ_parked_state"),
+        ("param_name_order_prefix", "param_name_order_prefix"),
+        ("trans_name_prefix", "trans_name_prefix"),
+        ("trans_name_prefix_fun", "trans_name_prefix_fun"),
+        ("step", "step"),
+    ),
+    defaults={
+        "aut_name": None,
+        "behaviour": "internal",
+        "occ_state": "occ",
+        "occ_law": None,
+        "occ_cond": True,
+        "occ_effects": {},
+        "occ_effects_trans": {},
+        "occ_parked_state": None,
+        "not_occ_state": "not_occ",
+        "not_occ_law": None,
+        "not_occ_cond": True,
+        "not_occ_effects": {},
+        "not_occ_effects_trans": {},
+        "not_occ_parked_state": None,
+        "param_name_order_prefix": "__{order}_o_{order_max}",
+        "trans_name_prefix": "__cc_{target_comb_u}",
+        "trans_name_prefix_fun": None,
+        "step": None,
+    },
+    order_vectors=("occ_param", "not_occ_param"),
+    law_fields=("occ_law", "not_occ_law"),
+)
+
+#: Which vocabulary a mode class speaks, MOST SPECIFIC FIRST. ``cod3s.ObjFM``
+#: is an ``ObjMode2S``, so the order is what decides, and reversing it would
+#: quietly write every muscadet mode in the engine's spelling.
+#:
+#: ``cod3s.ObjEvent`` is an ``ObjMode2S`` too and is deliberately absent: its
+#: constructor takes a ``cond``, an ``inner_logic`` and a ``cond_operator``
+#: rather than the engine fields, and it keeps the COMPILED operator instead of
+#: the spelling -- so a built event cannot be read back at all, and the honest
+#: answer is the refusal :func:`component_spec` gives, not a declaration
+#: missing its comparison. Same for ``cod3s.ObjDegMode``, which is a
+#: multi-state mode and not an ``ObjMode2S`` in the first place.
+MODE_VOCABULARIES = (
+    (cod3s.ObjFM, FAILURE_MODE_VOCABULARY),
+    (cod3s.ObjMode2S, MODE_VOCABULARY),
 )
 
 #: Field-name prefixes a RUNTIME HANDLE may carry: the PyCATSHOO variables and
@@ -269,6 +508,26 @@ def _checked_declaration(value, where):
         return _as_data(value)
 
     if isinstance(value, dict):
+        # A KEY that is not a string is refused here, and not by ``json.dumps``
+        # much later: a mapping keyed by tuples walks through this gate
+        # untouched, because every VALUE under it serialises perfectly well.
+        # The document then looks read, looks checked, and dies at the moment
+        # it is written -- on a ``TypeError`` naming a type and no field. A
+        # platform export reached exactly that, its instance overrides being
+        # indexed by ``(attribute, role)``.
+        #
+        # Refused rather than coerced: a tuple key has no canonical spelling,
+        # and picking one here would be muscadet deciding the shape of somebody
+        # else's metadata behind their back.
+        for key in value:
+            if not isinstance(key, str):
+                raise ComponentSpecError(
+                    f"{where}: is keyed by {key!r}, a {type(key).__name__}, "
+                    f"and a document is keyed by strings. A mapping written "
+                    f"out under a key no JSON object can carry is refused "
+                    f"here rather than at the moment it is written; give the "
+                    f"key a string spelling"
+                )
         return {
             key: _checked_declaration(item, f"{where}.{key}")
             for key, item in value.items()
@@ -575,6 +834,30 @@ def _failure_mode_method(entry, name):
     return method_name
 
 
+def component_kind(spec):
+    """Which of :data:`COMPONENT_KINDS` a declaration is, refusing an unknown one.
+
+    Absent means :data:`COMPONENT_KIND_FLOW`, which is what every declaration
+    written before the key existed means: no stored document has to be
+    rewritten, and the only entries that carry the key are the ones that need
+    it to be read at all.
+    """
+    if not isinstance(spec, dict):
+        raise ComponentSpecError(
+            f"a component declaration is a mapping, got {type(spec).__name__}"
+        )
+
+    kind = spec.get(COMPONENT_KIND_KEY, COMPONENT_KIND_FLOW)
+
+    if kind not in COMPONENT_KINDS:
+        raise ComponentSpecError(
+            f"Component {spec.get('name')!r}: {COMPONENT_KIND_KEY}={kind!r} is "
+            f"not one of {list(COMPONENT_KINDS)}"
+        )
+
+    return kind
+
+
 def check_spec(spec):
     """Validate a declaration WITHOUT building anything, and return its name.
 
@@ -586,7 +869,15 @@ def check_spec(spec):
     What is left to the build is what only the engine can answer -- that a rule
     names a declared flow, that a conduit does not meter what a rule already
     carries.
+
+    Dispatches on :func:`component_kind`, so the caller validating a batch does
+    not have to sort the two shapes itself -- and, more to the point, does not
+    get an ObjFlow's key list quoted at a declaration that never claimed to be
+    one.
     """
+    if component_kind(spec) == COMPONENT_KIND_FAILURE_MODE:
+        return check_failure_mode_spec(spec)
+
     name = _check_keys(spec)
 
     for section in [key for key, _ in DECLARATION_SECTIONS] + list(
@@ -612,17 +903,20 @@ def build_component(system, spec):
     system : muscadet.System
         The system the component is added to.
     spec : dict
-        The declaration. ``name`` is required; ``cls`` defaults to
-        ``"ObjFlow"``. ``params`` is the declaration of the named class itself
-        -- ``rate``, ``capacity``, ``activate`` and so on -- and the sections
-        listed in :data:`DECLARATION_SECTIONS` and
-        :data:`POST_SET_FLOWS_SECTIONS` are added on top of what that class
-        declared.
+        The declaration. A ``kind`` of :data:`COMPONENT_KIND_FAILURE_MODE`
+        sends it to :func:`build_failure_mode_component`; absent or
+        :data:`COMPONENT_KIND_FLOW`, it is an ``ObjFlow``, where ``name`` is
+        required, ``cls`` defaults to ``"ObjFlow"``, ``params`` is the
+        declaration of the named class itself -- ``rate``, ``capacity``,
+        ``activate`` and so on -- and the sections listed in
+        :data:`DECLARATION_SECTIONS` and :data:`POST_SET_FLOWS_SECTIONS` are
+        added on top of what that class declared.
 
     Returns
     -------
-    muscadet.ObjFlow
-        The built component, ``set_flows()`` already called, ready to connect.
+    muscadet.ObjFlow or cod3s.ObjFM
+        The built component, ``set_flows()`` already called on an ``ObjFlow``,
+        ready to connect.
 
     Raises
     ------
@@ -637,6 +931,9 @@ def build_component(system, spec):
     a spec never carries ``partial_init``: a caller who set it would either get
     a component built twice or one never wired to the engine.
     """
+    if component_kind(spec) == COMPONENT_KIND_FAILURE_MODE:
+        return build_failure_mode_component(system, spec)
+
     name = check_spec(spec)
     clsname = spec.get("cls", "ObjFlow")
     params = spec.get("params") or {}
@@ -759,7 +1056,61 @@ def build_component(system, spec):
 
 
 def component_spec(comp):
-    """Read a live component back into a declaration.
+    """Read a live component back into a declaration, whatever kind it is.
+
+    A system holds more than one kind of component, and the difference is not
+    cosmetic: an ``ObjFlow`` is described by its flows, a standalone mode has
+    none at all. So this reads what the object IS, rather than assuming what it
+    has:
+
+    ==================================  ======================================
+    ``muscadet.ObjFlow``                :func:`flow_component_spec`
+    ``cod3s.ObjMode2S`` and subclasses  :func:`failure_mode_component_spec`
+    anything else                       refused, by name
+    ==================================  ======================================
+
+    **The refusal is the point of the third row.** Iterating ``flows_in`` on
+    whatever a system happens to hold reported an ``AttributeError`` naming a
+    class the caller never wrote down, from inside a dict comprehension, before
+    any engine saw anything -- which is exactly what a document checked on the
+    way out exists to avoid. A component muscadet has no declaration form for
+    says so, and says which one it is. ``cod3s.ObjEvent`` and
+    ``cod3s.ObjDegMode`` are in that third row today, deliberately: see
+    :data:`MODE_VOCABULARIES`.
+
+    Parameters
+    ----------
+    comp : muscadet.ObjFlow or cod3s.ObjMode2S
+
+    Returns
+    -------
+    dict
+        A spec :func:`build_component` accepts.
+
+    Raises
+    ------
+    ComponentSpecError
+        When a declaration holds something no mapping can carry, or when the
+        component is of a kind no declaration describes.
+    """
+    if isinstance(comp, cod3s.ObjMode2S):
+        return failure_mode_component_spec(comp)
+
+    if hasattr(comp, "flows_in") and hasattr(comp, "flows_out"):
+        return flow_component_spec(comp)
+
+    raise ComponentSpecError(
+        f"Component {comp.basename()} is of class {type(comp).__name__}, which "
+        f"no component declaration describes. A declaration is written for an "
+        f"ObjFlow, which is read from its flows, or for a standalone mode of "
+        f"the cod3s.ObjMode2S family, which is read from its occurrence law "
+        f"and its effects. Keep this component out of a system whose "
+        f"declaration has to leave muscadet, or give its kind a declaration form"
+    )
+
+
+def flow_component_spec(comp):
+    """Read a live ``ObjFlow`` back into a declaration.
 
     What a spec can hold, it holds: the flows with their declaration fields, the
     capacities, the measurement channels, the rule sets, the transfer pairs, and
@@ -921,6 +1272,356 @@ def component_spec(comp):
     return spec
 
 
+def mode_vocabulary(cls, where):
+    """The :class:`ModeVocabulary` ``cls`` speaks, or a refusal naming it.
+
+    :data:`MODE_VOCABULARIES` is walked in order, most specific first, so a
+    ``cod3s.ObjFM`` gets the façade spelling and a plain ``ObjMode2S`` the
+    engine's. A mode class in neither family -- ``cod3s.ObjEvent``,
+    ``cod3s.ObjDegMode`` -- is refused here rather than written out in a
+    vocabulary its constructor does not take.
+    """
+    for family, vocabulary in MODE_VOCABULARIES:
+        if isinstance(cls, type) and issubclass(cls, family):
+            # ObjEvent IS an ObjMode2S and takes none of its fields: it is
+            # excluded by name, at the one place the families are read.
+            if issubclass(cls, cod3s.ObjEvent):
+                break
+            return vocabulary
+
+    raise ComponentSpecError(
+        f"{where}: {getattr(cls, '__name__', cls)!r} is not a mode class a "
+        f"{COMPONENT_KIND_FAILURE_MODE!r} declaration describes. The two it "
+        f"describes are the cod3s.ObjFM family, spelled failure_*/repair_*, "
+        f"and cod3s.ObjMode2S itself, spelled occ_*/not_occ_*"
+    )
+
+
+def _mode_class(clsname, where):
+    """The mode class named by ``clsname``, and the vocabulary it speaks.
+
+    Resolved the way ``PycComponent.from_dict`` resolves a ``cls``, through the
+    live subclass tree, so a mode class shipped by cod3s, defined by muscadet
+    or written by a modeller is found the same way and muscadet keeps no list
+    of the mode classes that may exist.
+    """
+    known = {cls.__name__: cls for cls in cod3s.PycComponent.get_subclasses()}
+    cls = known.get(str(clsname))
+
+    if cls is None:
+        raise ComponentSpecError(
+            f"{where}: cls={clsname!r} names no component class. A standalone "
+            f"mode names the class that carries its occurrence law, such as "
+            f"ObjFMExp, ObjFMDelay or ObjMode2S"
+        )
+
+    return cls, mode_vocabulary(cls, where)
+
+
+def _mode_logic_name(value, key, where):
+    """Which of :data:`MODE_LOGIC` ``value`` is, or a refusal."""
+    for name, function in MODE_LOGIC.items():
+        if value is function:
+            return name
+
+    raise ComponentSpecError(
+        f"{where}: {key} is {value!r}, and a document carries the NAME of a "
+        f"truth function rather than the function. Declare one of "
+        f"{sorted(MODE_LOGIC)}, or keep this mode a live object"
+    )
+
+
+def _mode_law_spec(law, where):
+    """A declared occurrence law, as data, or a refusal.
+
+    ``ModeLaw`` is a pydantic model rather than a mapping, so it is dumped and
+    not walked: ``parse_mode_law`` takes the dump back, which is what makes a
+    law-driven mode rebuildable at all.
+    """
+    if law is None:
+        return None
+
+    try:
+        return _checked_declaration(law.model_dump(), where)
+    except AttributeError as err:  # pragma: no cover - cod3s laws are pydantic
+        raise ComponentSpecError(
+            f"{where}: holds {type(law).__name__}, which is not an occurrence "
+            f"law a mapping can carry"
+        ) from err
+
+
+def _self_hosted_automaton_name(comp):
+    """The ``aut_name`` of a self-hosted mode, when it is not the mode's own.
+
+    Not stored: ``ObjMode2S`` builds its single automaton under
+    ``aut_name or mode_name`` and keeps only the automaton. So it is read back
+    from there, and written only when the two differ -- which is the only case
+    where omitting it would rebuild the automaton under another name and lose
+    every indicator that named it.
+    """
+    names = list(getattr(comp, "automata_d", None) or {})
+
+    if len(names) == 1 and names[0] != comp.mode_name:
+        return names[0]
+
+    return None
+
+
+def _drop_inactive_automata_spec(comp):
+    """``{"drop_inactive_automata": False}`` when a rebuild needs it, else ``{}``.
+
+    The one construction parameter of a mode that the built mode does not keep.
+    ``ObjMode2S`` consults it while building -- it decides whether a common
+    cause order whose law is inactive gets an automaton anyway -- and stores
+    nothing, so it cannot be read back the way every other field here is.
+
+    What the built mode DOES show is the RESULT, and that is enough to write a
+    value which rebuilds the same automata. A mode over ``n`` targets has one
+    automaton per non-empty combination, ``2**n - 1`` of them, when nothing was
+    dropped:
+
+    - fewer than that, and something was dropped, which only ``True`` does. It
+      is the default, so nothing is written and the rebuild drops it again;
+    - all of them, and ``False`` rebuilds them all whether or not an order is
+      inactive -- whereas the default would drop any that is. So ``False`` is
+      written, and it is right in both cases.
+
+    Only for a mode over more than one target. At order 1 there is a single
+    combination and the flag decides between a mode and a mode with no
+    automaton at all, which is not a model anyone writes; leaving the key out
+    keeps it off every ordinary mode declaration.
+    """
+    targets = list(getattr(comp, "targets", None) or [])
+
+    if len(targets) < 2:
+        return {}
+
+    if len(getattr(comp, "automata_d", None) or {}) == 2 ** len(targets) - 1:
+        return {"drop_inactive_automata": False}
+
+    return {}
+
+
+def failure_mode_component_spec(comp):
+    """Read a live standalone failure mode back into a declaration.
+
+    A standalone mode is a component of its own: it holds no flow, it names the
+    components it affects rather than owning them, and nothing on those
+    components records it. So it is read here, into an entry of the system's
+    ``components``, and that entry is what the model IS -- drop it and a
+    compromise cascade becomes a system where nothing ever fails.
+
+    **Spelled the way its own constructor takes it**, which is why the
+    vocabulary follows the class: a ``cod3s.ObjFM`` writes ``failure_*`` /
+    ``repair_*`` and a plain ``cod3s.ObjMode2S`` writes ``occ_*`` /
+    ``not_occ_*``, and ``cls(**spec)`` is the whole of the rebuild. See
+    :class:`ModeVocabulary` for why there are two.
+
+    Only what someone decided is written. A field left at the value the
+    vocabulary records as its default is omitted, so an ordinary mode declares
+    its law, its targets and its effects, and nothing else.
+
+    What is refused rather than dropped, and why it has to be
+    --------------------------------------------------------
+    A ``trans_name_prefix_fun``, a callable condition, a ``step`` object: they
+    build a mode and do not survive being written out. They go through
+    :func:`_checked_declaration`, which names the field and says so, because a
+    mode quietly missing its naming function rebuilds with different automaton
+    names and every indicator that named one is silently gone.
+
+    Two exceptions, both deliberate. The condition-logic fields are callables
+    too, but a mode composes its condition groups with one of exactly two of
+    them, so the document carries the NAME (:data:`MODE_LOGIC`); anything else
+    there is the caller's own function and is refused like the rest. And an
+    occurrence law is a pydantic model rather than a mapping, so it is dumped
+    (:func:`_mode_law_spec`) rather than refused.
+
+    Parameters
+    ----------
+    comp : cod3s.ObjFM or cod3s.ObjMode2S
+
+    Returns
+    -------
+    dict
+        A spec :func:`build_component` accepts.
+
+    Raises
+    ------
+    ComponentSpecError
+        When a declaration holds something no mapping can carry, or when the
+        mode class has no declaration form.
+    """
+    where = f"Failure mode {comp.basename()}"
+    vocabulary = mode_vocabulary(type(comp), where)
+
+    spec = {
+        "name": comp.basename(),
+        COMPONENT_KIND_KEY: COMPONENT_KIND_FAILURE_MODE,
+        "cls": type(comp).__name__,
+    }
+
+    for key, attribute in vocabulary.fields:
+        if key == "aut_name":
+            value = _self_hosted_automaton_name(comp)
+        elif key == "targets" and getattr(comp, "_self_hosted", False):
+            # ``targets=None`` is what puts a mode in its SELF-HOSTED shape --
+            # one automaton on the component itself, no common-cause machinery
+            # -- and the engine normalises it to ``[]`` right after reading it.
+            # The two spellings are a different model, so the distinction is
+            # read from the flag rather than from what is left of the list.
+            value = None
+        elif key in vocabulary.law_fields:
+            value = _mode_law_spec(getattr(comp, attribute, None), f"{where}, {key}")
+        else:
+            value = getattr(comp, attribute, None)
+
+        if key in vocabulary.defaults and value == vocabulary.defaults[key]:
+            continue
+
+        spec[key] = _checked_declaration(value, f"{where}, {key}")
+
+    for key, attribute, default in MODE_LOGIC_FIELDS:
+        value = getattr(comp, attribute, default)
+
+        if value is not default:
+            spec[key] = _mode_logic_name(value, key, where)
+
+    spec.update(_drop_inactive_automata_spec(comp))
+
+    # Same rule as an ObjFlow spec: written only when it says something.
+    # ``label`` defaults to the name the engine derived from the targets and
+    # the mode, and ``description`` to the label, so emitting them
+    # unconditionally would fill every mode declaration with its own name.
+    if comp.label != comp.basename():
+        spec["label"] = comp.label
+    if comp.description != comp.label:
+        spec["description"] = comp.description
+    if comp.metadata:
+        spec["metadata"] = _checked_declaration(comp.metadata, f"{where}, metadata")
+
+    return spec
+
+
+def check_failure_mode_spec(spec):
+    """Validate a standalone failure mode declaration, and return its name.
+
+    The counterpart of :func:`check_spec` for the second shape a component
+    declaration takes. Same contract: everything checkable from the mapping
+    alone, before anything is built.
+    """
+    if not isinstance(spec, dict):
+        raise ComponentSpecError(
+            f"a failure mode declaration is a mapping, got {type(spec).__name__}"
+        )
+
+    where = f"Failure mode {spec.get('name') or spec.get('cls')}"
+
+    # The CLASS first, because it is what decides the vocabulary, and every
+    # check below reads a key whose spelling that vocabulary owns.
+    _cls, vocabulary = _mode_class(spec.get("cls"), where)
+
+    mode_name = spec.get(vocabulary.name_key)
+    name = spec.get("name") or mode_name
+    where = f"Failure mode {name}"
+
+    if not mode_name or not isinstance(mode_name, str):
+        raise ComponentSpecError(
+            f"{where}: {vocabulary.name_key!r} is what the mode is called, and "
+            f"it is a non-empty string"
+        )
+
+    unknown = sorted(set(spec) - vocabulary.keys)
+    if unknown:
+        raise ComponentSpecError(
+            f"{where}: unknown key(s) {', '.join(unknown)}. A "
+            f"{spec['cls']} declaration carries: "
+            f"{', '.join(sorted(vocabulary.keys))}"
+        )
+
+    targets = spec.get("targets")
+    # ``None`` is the SELF-HOSTED shape and not an omission, so it is accepted
+    # where the vocabulary has one -- and refused for the ObjFM façade, whose
+    # historical contract turns it into the silent no-op of an empty list.
+    self_hosted = targets is None and "aut_name" in vocabulary.defaults
+    if not self_hosted and (
+        not isinstance(targets, (list, tuple))
+        or not all(isinstance(target, str) for target in targets)
+    ):
+        raise ComponentSpecError(
+            f"{where}: 'targets' is the list of component names the mode "
+            f"affects, got {targets!r}"
+        )
+
+    for key, _attribute, _default in MODE_LOGIC_FIELDS:
+        if key in spec and spec[key] not in MODE_LOGIC:
+            raise ComponentSpecError(
+                f"{where}: {key}={spec[key]!r} is not one of {sorted(MODE_LOGIC)}"
+            )
+
+    return name
+
+
+def build_failure_mode_component(system, spec):
+    """Build one standalone failure mode from a declaration held in data.
+
+    ``cls`` names the class that carries the occurrence law and every other key
+    is a constructor keyword, so the build is the constructor: nothing here
+    reorders anything, because a mode has no ``set_flows()`` and therefore none
+    of the ordering that makes :func:`build_component` what it is.
+
+    The component's own name is DERIVED by the engine, ``{target_name}__{fm_name}``,
+    and is therefore not a constructor keyword. A declaration carries it all
+    the same -- it is the key the document files the mode under, and what a
+    connection or an indicator would name -- so it is checked against what the
+    engine derived rather than dropped: a document whose key does not name the
+    component it builds is a document whose other entries point at nothing.
+    """
+    name = check_failure_mode_spec(spec)
+    _cls, vocabulary = _mode_class(spec.get("cls"), f"Failure mode {name}")
+
+    keywords = {
+        key: value
+        for key, value in copy_declaration(spec).items()
+        if key not in ("name", COMPONENT_KIND_KEY)
+    }
+
+    for key, _attribute, _default in MODE_LOGIC_FIELDS:
+        if key in keywords:
+            keywords[key] = MODE_LOGIC[keywords[key]]
+
+    # See :attr:`ModeVocabulary.order_vectors`: an order's parameters are a
+    # tuple to the engine and a list in a document, and handing the list over
+    # makes PyCATSHOO refuse a value it prints as ``list`` without naming a
+    # field.
+    for key in vocabulary.order_vectors:
+        entries = keywords.get(key)
+        if isinstance(entries, list):
+            keywords[key] = [
+                tuple(entry) if isinstance(entry, list) else entry for entry in entries
+            ]
+
+    comp = system.add_component(**keywords)
+
+    if comp is None:
+        raise ComponentSpecError(
+            f"Failure mode {name}: the system already holds a component of "
+            f"that name. A declaration builds a NEW mode; give this one a "
+            f"distinct {vocabulary.name_key!r} or 'target_name'"
+        )
+
+    declared_name = spec.get("name")
+    if declared_name and comp.basename() != declared_name:
+        raise ComponentSpecError(
+            f"Failure mode {declared_name}: the engine names this mode "
+            f"{comp.basename()!r}, from its 'target_name' and its "
+            f"{vocabulary.name_key!r}. "
+            f"A declaration naming it otherwise files it under a name nothing "
+            f"else in the document can reach"
+        )
+
+    return comp
+
+
 # ---------------------------------------------------------------------------
 # The SYSTEM scale: what a component declaration cannot carry
 # ---------------------------------------------------------------------------
@@ -1047,6 +1748,11 @@ def system_spec(system):
     :func:`component_spec`. What it adds over reading each component is the
     part no component knows: how they are wired, and what is observed.
 
+    ``components`` holds every component of the system, of either kind: the
+    ``ObjFlow`` components AND the standalone failure modes, which are
+    components in their own right and are described nowhere else. Each entry
+    says which it is (:data:`COMPONENT_KIND_KEY`).
+
     Deliberately NOT included: targets and simulation parameters. Those are the
     configuration of a RUN, handed to ``simulate()``, not the description of a
     system. Two systems carrying the same declaration are the same system,
@@ -1057,7 +1763,8 @@ def system_spec(system):
     ------
     ComponentSpecError
         Through :func:`component_spec`, when a component holds something no
-        mapping can carry -- a Python callable, typically.
+        mapping can carry -- a Python callable, typically -- or when it is of a
+        kind no declaration describes.
     """
     return {
         "version": SYSTEM_SPEC_VERSION,
@@ -1105,6 +1812,22 @@ def check_system_spec(spec):
     for name, comp_spec in components.items():
         check_spec(comp_spec)
 
+        # A mode names the components it affects, and nothing else in the
+        # document says whether they are there. Unchecked, a typo built the
+        # whole system and then failed inside cod3s' effect resolution, naming
+        # a variable rather than the target that does not exist.
+        if component_kind(comp_spec) == COMPONENT_KIND_FAILURE_MODE:
+            unknown = [
+                target
+                for target in comp_spec.get("targets") or []
+                if target not in components
+            ]
+            if unknown:
+                raise SystemSpecError(
+                    f"failure mode {name!r}: target(s) {unknown} are not "
+                    f"declared components"
+                )
+
     for entry in spec.get("connections") or []:
         missing = [
             k
@@ -1138,6 +1861,14 @@ def build_system(spec, system=None):
     a preference. A connection needs both ends to exist, and an indicator
     resolves against components that are already there.
 
+    Within the components, the ``ObjFlow`` ones come before the standalone
+    failure modes, and that is not a preference either: a mode resolves every
+    one of its effects against every target BEFORE creating a single variable
+    -- cod3s does that deliberately, so a typo fails cleanly rather than
+    leaving a half-built mode -- so a target declared after the mode that
+    affects it would be resolved against nothing. The document's own order is
+    kept inside each of the two groups.
+
     Parameters
     ----------
     spec : dict
@@ -1159,8 +1890,11 @@ def build_system(spec, system=None):
 
         system = System(name=spec.get("name") or "system")
 
-    for name, comp_spec in spec["components"].items():
-        build_component(system, {**comp_spec, "name": comp_spec.get("name", name)})
+    for kind in COMPONENT_KINDS:
+        for name, comp_spec in spec["components"].items():
+            if component_kind(comp_spec) != kind:
+                continue
+            build_component(system, {**comp_spec, "name": comp_spec.get("name", name)})
 
     for entry in spec.get("connections") or []:
         flow = entry.get("flow")
