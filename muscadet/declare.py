@@ -231,6 +231,81 @@ def _is_serialisable(value):
     return False
 
 
+def _document_fault(value, where):
+    """Where ``value`` stops being a document, or ``None`` when the whole of it is.
+
+    The path-naming twin of :func:`_is_serialisable`, which answers the very
+    same question with a bool: a caller that only has to pick a branch does not
+    pay for building a path, and a caller that has to REFUSE cannot say
+    anything useful without one.
+
+    Two walks rather than one because a path costs something to build and the
+    bool answer is asked for field by field. Their agreement is what makes a
+    second walk safe rather than a second opinion, so it is PINNED, in
+    ``test_declaration_document_001``, over the same table both are measured
+    against: what one calls serialisable is what the other calls a document.
+
+    KEYS are half of it, and the half that used to go missing. Every value
+    under a tuple key serialises perfectly well, so a mapping keyed by one
+    walks through a value-only gate untouched: the document looks read, looks
+    checked, and dies at the moment it is written, on a ``TypeError`` naming a
+    type and no field. A JSON object is keyed by strings, and an integer key is
+    refused for the same reason though ``json`` accepts it -- it comes back a
+    string, so what was read is not what was written.
+    """
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return None
+
+    if isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            fault = _document_fault(item, f"{where}[{index}]")
+            if fault:
+                return fault
+        return None
+
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if not isinstance(key, str):
+                return (
+                    f"{where} is keyed by {key!r}, a {type(key).__name__}, and "
+                    f"a document is keyed by strings"
+                )
+            fault = _document_fault(item, f"{where}.{key}")
+            if fault:
+                return fault
+        return None
+
+    return f"{where} holds {type(value).__name__}, which no document can carry"
+
+
+def _checked_document(spec, where, error=ComponentSpecError):
+    """``spec`` itself, once the whole of it is something a document carries.
+
+    The gate this module's per-declaration refusals cannot be, and not a
+    duplicate of them. Each of those fires where ONE value is read and names
+    the declaration that carried it, which is what a modeller needs to fix it;
+    together they close the holes they were written for, one at a time, and
+    nothing says the next section added closes its own. This one is the claim
+    itself: whatever path built it, a declaration this module RETURNS survives
+    ``json.dumps``. It is the only place that sees the whole document, so it is
+    the only place that claim can be made.
+
+    Deliberately on the produce side alone. :func:`check_system_spec` reads a
+    declaration a caller hands in, and building from a mapping no document can
+    carry stays supported on purpose -- see :func:`_checked_declaration`, whose
+    reasoning this follows rather than reverses.
+    """
+    fault = _document_fault(spec, where)
+    if fault is None:
+        return spec
+
+    raise error(
+        f"{fault}. A declaration is a versioned exchange format, so it is "
+        f"refused here, where the path names what carried it, rather than at "
+        f"the ``json.dumps`` that would fail on it later naming only a type"
+    )
+
+
 def _as_data(value):
     """Normalise a read-back declaration to what a JSON round trip gives back.
 
@@ -918,7 +993,7 @@ def component_spec(comp):
     if getattr(comp, "has_default_out_automata", False):
         spec["create_default_out_automata"] = True
 
-    return spec
+    return _checked_document(spec, f"component {comp.basename()}")
 
 
 # ---------------------------------------------------------------------------
@@ -1053,25 +1128,41 @@ def system_spec(system):
     whatever one intends to compute on them. The COD3S Platform already draws
     this line, between its model export and its study.
 
+    **What comes back survives ``json.dumps``, and that is checked rather than
+    intended.** Every section above has its own refusal and each names the
+    declaration it read, which is what a modeller needs; none of them can say
+    anything about the document as a whole, and the sections do not all go
+    through the same gate -- the indicators are dumped by cod3s, the
+    connections are read off the engine. :func:`_checked_document` is the one
+    place that sees all of it at once, so the guarantee is stated there, once,
+    instead of being the sum of what the parts happen to refuse.
+
     Raises
     ------
     ComponentSpecError
         Through :func:`component_spec`, when a component holds something no
         mapping can carry -- a Python callable, typically.
+    SystemSpecError
+        When what the whole declaration holds is not something a document
+        carries: a mapping keyed by anything but a string, typically.
     """
-    return {
-        "version": SYSTEM_SPEC_VERSION,
-        "name": (
-            getattr(system, "name", lambda: None)()
-            if callable(getattr(system, "name", None))
-            else getattr(system, "name", None)
-        ),
-        "components": {
-            name: component_spec(comp) for name, comp in (system.comp or {}).items()
+    return _checked_document(
+        {
+            "version": SYSTEM_SPEC_VERSION,
+            "name": (
+                getattr(system, "name", lambda: None)()
+                if callable(getattr(system, "name", None))
+                else getattr(system, "name", None)
+            ),
+            "components": {
+                name: component_spec(comp) for name, comp in (system.comp or {}).items()
+            },
+            "connections": system_connections(system),
+            "indicators": system_indicators(system),
         },
-        "connections": system_connections(system),
-        "indicators": system_indicators(system),
-    }
+        "$",
+        SystemSpecError,
+    )
 
 
 def check_system_spec(spec):
