@@ -2332,6 +2332,110 @@ the sequence, and a grid point is not in it, so the session returns to its
 start rather than to the previous observation. The TUI refuses the key after
 a playback and points at reset.
 
+## Engine conformance: where an engine does it otherwise
+
+muscadet is a modelling interface over more than one engine, and it decides
+what a muscadet model means. Where an engine cannot honour a decision, the gap
+is written down in `muscadet.conformance` rather than left to be discovered on
+a result nobody can explain.
+
+Reading the record builds no system, loads no engine and runs nothing:
+
+```sh
+python -m muscadet.conformance pycatshoo
+```
+
+```
+muscadet conformance -- engine 'pycatshoo'
+(the engine muscadet is written against; being the reference does not make it conformant)
+
+Departs from muscadet on 1 point:
+
+  [transition_instant_observation]
+    muscadet defines : An indicator observed at instant t sees the state AFTER every transition that fires at t.
+    this engine      : Observes the state BEFORE the transitions due at that instant are resolved.
+    consequence      : Visible only when a DETERMINISTIC transition falls exactly on an observation instant, [...]
+    compensated by   : nothing; it reaches the result
+    source           : COD3S Platform ADR-2026-09-01-multi-moteur-simulation-raichu, decision 9; [...]
+
+Honours: armed_transition_date, interactive_step_granularity, advance_to_date
+
+Informational. muscadet refuses no run on the strength of this record; whether an engine can carry a study is the capability matrix's question, and it is asked elsewhere.
+```
+
+or from Python:
+
+```python
+import muscadet
+
+for deviation in muscadet.conformance.deviations("raichu"):
+    print(deviation.point, "->", deviation.behaviour)
+
+print(muscadet.conformance.describe("raichu"))
+```
+
+| Call | Answers |
+|---|---|
+| `deviations(engine=None, point=None)` | where things are done otherwise, in report order |
+| `conformant_points(engine)` | the points that engine was reviewed against and honours |
+| `is_assessed(engine)` | whether it was reviewed at all |
+| `semantic_points()` | every point muscadet has decided, with its rule and why |
+| `describe(engine=None)` | all of the above as text |
+
+### What it is not
+
+It is **not** the capability matrix. That one says what an engine *knows how*
+to do, and a launch is refused by subtracting one set from the other. This one
+says where an engine does it *otherwise*: the study runs, it returns numbers,
+and those numbers follow a convention that is not muscadet's. Folding the two
+together would make a divergence look like a missing capability and refuse an
+engine perfectly able to carry the study.
+
+So the registry **informs, it never forbids**. Nothing inside muscadet reads
+it, which is what makes that a property of the code rather than a promise.
+
+An engine nobody assessed gets an empty answer, and an empty answer is not a
+clean bill of health -- `is_assessed` is what tells the two apart.
+
+### The entries today
+
+| Point | Engine | Does it otherwise |
+|---|---|---|
+| `transition_instant_observation` | `pycatshoo` | reads the state *before* the transitions due at that instant |
+| `armed_transition_date` | `raichu` | samples the law as soon as the transition is armed |
+| `interactive_step_granularity` | `raichu` | one step draws a single transition instead of resolving the instant |
+| `advance_to_date` | `raichu` | has no `isimu_step_to` primitive; the date is reached by repeating steps |
+
+The first one is permanent and reaches the result: PyCATSHOO is a third-party
+library, so the gap is a known limit of the reference engine rather than a
+defect to fix. It only shows when a **deterministic** transition falls exactly
+on an observation instant, which commensurable durations make ordinary: a mode
+with a 1000 h delay observed at 1000 h.
+
+The last three are compensated by the COD3S Platform's interactive worker, so
+a platform user never meets them. **A library user driving the engine directly
+does** -- which is why this record lives here and not in the platform.
+
+### Declaring a third engine
+
+muscadet imports no engine, so an engine it cannot know adds its own record:
+
+```python
+from muscadet.conformance import Deviation, assess_engine, register_deviation
+
+register_deviation(Deviation(
+    engine="my-engine",
+    point="advance_to_date",
+    behaviour="Advances to the date, then rounds it to its own grid.",
+    consequence="A stop lands near the asked date, not on it.",
+    source="my integration notes",
+))
+assess_engine("my-engine")
+```
+
+The *points* stay muscadet's. An engine free to declare which rules it is
+judged against would be certifying itself.
+
 ## Modelling pitfalls
 
 Seven things measured on real models, none of them visible from the API, each of which cost a debugging cycle.
