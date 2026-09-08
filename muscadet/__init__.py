@@ -1,3 +1,5 @@
+import importlib
+
 from .capacity import (
     COMBINE_MAX,
     COMBINE_MEAN,
@@ -93,3 +95,38 @@ from .transfer import (
     resolve_operand,
 )
 from .version import __version__
+
+
+def __getattr__(name):
+    """Bind ``muscadet.conformance`` on first use, and only then (PEP 562).
+
+    The conformance registry says where an engine departs from what muscadet
+    defines. Three things follow from resolving it lazily rather than importing
+    it at the top of this file, and all three are the point rather than a
+    micro-optimisation:
+
+    - it is reachable the way a reader expects, ``import muscadet`` then
+      ``muscadet.conformance.describe("raichu")``, without being flattened in
+      beside ``ObjFlow`` and ``FlowContinuousIn`` where it would read as one
+      more modelling primitive. It is a statement ABOUT the library, not part
+      of its vocabulary;
+    - importing muscadet does not import it, so the registry is a leaf of the
+      package graph with no exception at all -- which is what makes "nothing
+      inside muscadet can refuse a run on the strength of a divergence" a
+      property of the code rather than a promise
+      (``tests/test_conformance_registry_001.py``);
+    - ``python -m muscadet.conformance <engine>``, the consultation the README
+      documents, runs clean. Imported here, the module would already be in
+      ``sys.modules`` when runpy re-executes it, and every consultation would
+      open on a RuntimeWarning about unpredictable behaviour.
+
+    Imported through ``importlib`` and not with ``from . import conformance``:
+    the ``from`` form asks the import machinery for the attribute once the
+    submodule is loaded, which lands back in this function and recurses until
+    the stack gives out. ``import_module`` returns the module and binds it on
+    the package itself, so this runs exactly once.
+    """
+    if name == "conformance":
+        return importlib.import_module(f".{name}", __name__)
+
+    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
