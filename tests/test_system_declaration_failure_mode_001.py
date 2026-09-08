@@ -65,17 +65,33 @@ INTERACTIVE_EXAMPLES = tuple(
     )
 )
 
-#: What the ticket named, and what a discovery that quietly shrinks would hide.
-#: Derivation protects against forgetting to ADD one; this protects against a
-#: module being removed, or renamed, and the claim shrinking with it.
-TICKETED_EXAMPLES = frozenset(
+#: The examples whose ABSENCE has to be loud, and the other half of the guard.
+#: Derivation covers the addition -- a factory dropped into the package is run
+#: without anyone remembering to say so -- and covers nothing at all about the
+#: removal: a module deleted, renamed, or whose ``build`` is renamed simply
+#: stops being discovered, and the suite stays green while claiming less than
+#: it did the day before.
+#:
+#: A floor rather than an equality, so adding an example stays silent (it is
+#: run anyway) and removing one of these is not.
+#:
+#: ``dil_v2`` is in it and is NOT one of the six the ticket named. That is the
+#: whole point of writing this list down twice: the first version of it held
+#: exactly the six, so the one example whose disappearance would matter most --
+#: the real COD3S Platform export, which is the shape the seam exists for --
+#: was the only one the anti-shrink half did not protect. A guard that covers
+#: the cases you thought of first is the bet it was built to replace.
+ANCHORED_EXAMPLES = frozenset(
     {
+        # The six the ticket named.
         "cyber_3comp",
         "power_plant",
         "rbd_kn",
         "trigger_source",
         "datacenter_lite",
         "inverter_chain",
+        # And the one it did not.
+        "dil_v2",
     }
 )
 
@@ -340,8 +356,18 @@ def run_probe(script, *args):
 
 
 def test_the_examples_are_discovered_and_none_went_missing():
-    """The derivation found the ones the ticket named, and then some."""
-    assert TICKETED_EXAMPLES <= set(INTERACTIVE_EXAMPLES), INTERACTIVE_EXAMPLES
+    """The derivation found every example that has to be there, and then some.
+
+    Fails on a removal or a rename, which is the half discovery cannot cover.
+    An example ADDED beyond these is run without being named here: it is
+    discovered, and nothing about it needs a decision.
+    """
+    missing = sorted(ANCHORED_EXAMPLES - set(INTERACTIVE_EXAMPLES))
+    assert not missing, (
+        f"{missing} no longer expose a build() in examples/isimu. Removing an "
+        f"example is a decision; losing one to a rename is not. Discovered: "
+        f"{list(INTERACTIVE_EXAMPLES)}"
+    )
 
 
 @pytest.mark.parametrize("example", INTERACTIVE_EXAMPLES)
