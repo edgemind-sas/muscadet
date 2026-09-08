@@ -210,13 +210,27 @@ class ModeTargetForDeclarationTest(muscadet.ObjFlow):
 
 
 system = muscadet.System(name="M2SRef")
-system.add_component(name="A", cls="ModeTargetForDeclarationTest")
+for name in ("A", "B"):
+    system.add_component(name=name, cls="ModeTargetForDeclarationTest")
 system.add_component(
     cls="ObjMode2S",
     mode_name="engine",
     targets=["A"],
     occ_law={"cls": "exp", "rate": 0.1},
     not_occ_law={"cls": "delay", "time": 3},
+    occ_effects={"f_fed_available_out": False},
+)
+# The shape the COD3S Platform actually emits: a law whose parameter is a
+# VECTOR, one entry per common-cause order, rather than the scalar a hand-
+# written model uses. Measured on a real export bundle
+# (`occ_law: {"cls": "delay", "time": [1000.0]}`), so it is pinned here: a
+# scalar-only test would have let a vector law be lost in silence.
+system.add_component(
+    cls="ObjMode2S",
+    mode_name="vector",
+    targets=["A", "B"],
+    occ_law={"cls": "exp", "rate": [0.1, 0.01]},
+    not_occ_law={"cls": "exp", "rate": [1.0, 1.0]},
     occ_effects={"f_fed_available_out": False},
 )
 # ``targets=None`` is the SELF-HOSTED shape, and it is not ``targets=[]``: one
@@ -267,6 +281,8 @@ print("RESULT " + json.dumps({
     "rebuilt": rebuilt["components"]["A__engine"],
     "self_hosted": declared["components"]["selfhosted"],
     "event": declared["components"]["_ind_two_clauses"],
+    "vector_law": declared["components"]["X__vector"],
+    "vector_automata": len(rebuilt_system.comp["X__vector"].automata_d),
     "self_hosted_automata": sorted(rebuilt_system.comp["selfhosted"].automata_d),
 }))
 """
@@ -370,6 +386,11 @@ def test_the_generic_engine_round_trips_with_its_declared_laws():
     # A comparison that is NOT the default comes back by its spelling, which
     # is the whole reason an event has a declaration form rather than a refusal.
     assert result["event"]["cond_operator"] == "!="
+    # A law whose parameter is a vector, one entry per common-cause order,
+    # which is what a platform export carries and what a scalar-only test
+    # would have let through unnoticed.
+    assert result["vector_law"]["occ_law"] == {"cls": "exp", "rate": [0.1, 0.01]}
+    assert result["vector_automata"] == 2**2 - 1
     assert result["identical"], result
 
 
