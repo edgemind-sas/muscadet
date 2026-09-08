@@ -4,6 +4,7 @@ import re
 import cod3s
 
 from .capacity import MEASUREMENT_LEVEL, MEASUREMENT_RATE, MEASUREMENT_RATIO
+from .engine import is_reference_engine, isimu_start_on, simulate_on
 from .flow_continuous import (
     RATE_OBSERVATION_IN_SUFFIX,
     RATE_OBSERVATION_OUT_SUFFIX,
@@ -574,19 +575,44 @@ class System(cod3s.PycSystem):
     # Run entry points -- both must go through the pre-run step
     # ------------------------------------------------------------------
 
-    def simulate(self, *args, **kwargs):
-        """Batch (Monte Carlo) run, preceded by the pre-run step."""
-        self.prerun()
-        return super().simulate(*args, **kwargs)
+    def simulate(self, *args, engine=None, **kwargs):
+        """Batch (Monte Carlo) run, preceded by the pre-run step.
 
-    def isimu_start(self, *args, **kwargs):
+        ``engine`` is where the run happens. Saying nothing, or naming
+        :data:`~muscadet.engine.REFERENCE_ENGINE`, takes the direct PyCATSHOO
+        path this method has always taken. Any other name is looked up in the
+        registry of :mod:`muscadet.engine`, which muscadet fills from
+        registrations rather than from imports: the model is read back as a
+        declaration and handed over, and everything else -- ``simu_params``
+        included -- travels beside it, untouched.
+
+        The pre-run step runs whatever the engine, and that is deliberate: what
+        it derives is muscadet's semantics, not PyCATSHOO's, down to the cycle
+        refusals of :mod:`muscadet.ordering`. Skipping it for a foreign engine
+        would let that engine receive a declaration muscadet itself refuses to
+        run, which is the divergence the whole seam exists to prevent.
+        """
+        self.prerun()
+        if is_reference_engine(engine):
+            return super().simulate(*args, **kwargs)
+        return simulate_on(engine, self, *args, **kwargs)
+
+    def isimu_start(self, *args, engine=None, **kwargs):
         """Interactive session start, preceded by the pre-run step.
 
         ``cod3s.PycSystem.isimu_start`` never touches ``prepare_simu``, so a
         step wired only into :meth:`simulate` would silently do nothing here.
+
+        ``engine`` selects where the session opens, exactly as in
+        :meth:`simulate`. Step-by-step and Monte Carlo take the same
+        declaration on purpose: a model that behaved differently one step at a
+        time than in bulk is a divergence nothing would report, and a
+        demonstration is given interactively.
         """
         self.prerun()
-        return super().isimu_start(*args, **kwargs)
+        if is_reference_engine(engine):
+            return super().isimu_start(*args, **kwargs)
+        return isimu_start_on(engine, self, *args, **kwargs)
 
     def startInteractive(self, *args, **kwargs):
         """Enter interactive mode, preceded by the pre-run step.
