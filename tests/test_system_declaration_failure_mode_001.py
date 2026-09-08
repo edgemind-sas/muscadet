@@ -44,17 +44,39 @@ from muscadet.declare import (
 
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
-#: The six factories ``examples/isimu`` ships and the ticket names. Listed here
-#: rather than discovered by globbing the package: a module dropped in beside
-#: them is not automatically one of the six, and a module REMOVED from them
-#: should fail this list rather than silently shrink the claim.
-INTERACTIVE_EXAMPLES = (
-    "cyber_3comp",
-    "power_plant",
-    "rbd_kn",
-    "trigger_source",
-    "datacenter_lite",
-    "inverter_chain",
+#: Every factory ``examples/isimu`` ships, DERIVED rather than listed.
+#:
+#: A hand-kept list here is a bet on which examples the declaration has to
+#: carry, and there is no reason to place it: a module that exposes ``build``
+#: in this package is an interactive example, and one this test does not run is
+#: one nobody finds out about. The first list written here held six and left
+#: out ``dil_v2``, which loads the real COD3S Platform DIL V2 export -- 26
+#: components through the platform importer, and precisely the corpus shape the
+#: whole seam exists for.
+#:
+#: Discovery is on ``build``, not on the file name: the package's own contract
+#: is "each module exposes a top-level ``build(...)`` returning a populated
+#: System", so anything else in there is not a factory.
+INTERACTIVE_EXAMPLES = tuple(
+    sorted(
+        path.stem
+        for path in (REPO_ROOT / "examples" / "isimu").glob("*.py")
+        if not path.stem.startswith("_") and "def build(" in path.read_text()
+    )
+)
+
+#: What the ticket named, and what a discovery that quietly shrinks would hide.
+#: Derivation protects against forgetting to ADD one; this protects against a
+#: module being removed, or renamed, and the claim shrinking with it.
+TICKETED_EXAMPLES = frozenset(
+    {
+        "cyber_3comp",
+        "power_plant",
+        "rbd_kn",
+        "trigger_source",
+        "datacenter_lite",
+        "inverter_chain",
+    }
 )
 
 #: Run in the subprocess, one example per process: PyCATSHOO forbids a second
@@ -317,11 +339,25 @@ def run_probe(script, *args):
 # ---------------------------------------------------------------------------
 
 
+def test_the_examples_are_discovered_and_none_went_missing():
+    """The derivation found the ones the ticket named, and then some."""
+    assert TICKETED_EXAMPLES <= set(INTERACTIVE_EXAMPLES), INTERACTIVE_EXAMPLES
+
+
 @pytest.mark.parametrize("example", INTERACTIVE_EXAMPLES)
 def test_every_interactive_example_declares_itself(example):
-    """The claim the ticket opens on: all six, not four."""
+    """The claim the ticket opens on: all of them, not four."""
     result = run_probe(_DECLARE_ONE_EXAMPLE, example)
     assert result["kinds"].get("flow"), result
+
+
+def test_the_real_platform_export_declares_itself():
+    """``dil_v2`` is the seam's own subject: a real COD3S Platform export, read
+    back by the importer and then declared. The first version of this module
+    left it out of a hand-kept list, which is exactly the example whose absence
+    would have mattered most."""
+    result = run_probe(_DECLARE_ONE_EXAMPLE, "dil_v2")
+    assert result["kinds"] == {"flow": 26}, result
 
 
 def test_the_two_richest_examples_declare_their_failure_modes():
