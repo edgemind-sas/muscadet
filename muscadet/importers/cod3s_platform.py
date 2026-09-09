@@ -2809,6 +2809,46 @@ _OBSERVABLE_ROLES: frozenset = frozenset(
 OverrideKey = Tuple[str, str]  # (flow_name, role)
 OverridesIndex = Dict[OverrideKey, Any]
 
+#: The same overrides, written out. A LIST of ``{"name", "role", "value"}``
+#: entries and not a mapping, because the pair that identifies an override is
+#: ``(name, role)`` and no JSON object is keyed by a pair.
+OverridesTrail = List[Dict[str, Any]]
+
+
+def _overrides_audit_trail(overrides: OverridesIndex) -> OverridesTrail:
+    """The audit trail of an override index, in a form a document can carry.
+
+    The index itself stays keyed by ``(name, role)``: that pair is what
+    :func:`_apply_instance_overrides`, :func:`_apply_capacity_overrides` and
+    :func:`_apply_controller_threshold_overrides` look a flow, a capacity or a
+    threshold up by, and a tuple is the honest spelling of a composite key
+    inside the process. What leaves the process is another matter -- a system
+    declaration is a JSON document, and ``json.dumps`` refuses a tuple key with
+    a ``TypeError`` naming only a type, far from the importer that wrote it.
+
+    Hence the two spellings, and the split between them. The alternative was a
+    single string key joining the pair with a separator, which is shorter to
+    write and worse to live with: the separator becomes a convention every
+    reader must know and every attribute name must avoid.
+
+    Sorted, so two exports of one model give the same trail and a diff between
+    them shows what actually changed.
+    """
+    return [
+        {"name": name, "role": role, "value": value}
+        for (name, role), value in sorted(overrides.items(), key=lambda item: item[0])
+    ]
+
+
+def _copied_audit_trail(trail: Any) -> OverridesTrail:
+    """A private copy of an audit trail, entries included.
+
+    The parse spec's trail and the built component's are the same information
+    but not the same objects: a reader mutating one -- annotating an entry,
+    say -- must not reach into the other.
+    """
+    return [dict(entry) for entry in trail or ()]
+
 
 def _parse_input_logic_value(
     raw: Any, *, flow_name: str, comp_name: str
@@ -3609,7 +3649,9 @@ def _parse_components(
                     metadata={
                         "platform_id": cid,
                         "attributes_initial": instance_attrs,
-                        "controller_threshold_overrides": dict(threshold_overrides),
+                        "controller_threshold_overrides": _overrides_audit_trail(
+                            threshold_overrides
+                        ),
                     },
                     controller=controller,
                 )
@@ -3670,8 +3712,8 @@ def _parse_components(
                 metadata={
                     "platform_id": cid,
                     "attributes_initial": instance_attrs,
-                    "instance_overrides": dict(overrides),
-                    "capacity_overrides": dict(capacity_overrides),
+                    "instance_overrides": _overrides_audit_trail(overrides),
+                    "capacity_overrides": _overrides_audit_trail(capacity_overrides),
                 },
                 capacities=capacities,
                 rule_sets=rule_sets_lookup.get(class_name) or (),
@@ -4477,8 +4519,8 @@ def _create_controller(
                 # for the same reason ``instance_overrides`` is on a flow
                 # component: what a component ran at is the first thing asked
                 # of a result that surprises.
-                "controller_threshold_overrides": dict(
-                    spec.metadata.get("controller_threshold_overrides") or {}
+                "controller_threshold_overrides": _copied_audit_trail(
+                    spec.metadata.get("controller_threshold_overrides")
                 ),
                 CONTROLLER_MARKER: True,
             }
@@ -4854,7 +4896,9 @@ def apply_to_system(
     (``platform_id``, ``attributes_initial``, ``instance_overrides``)
     come along the same way. ``instance_overrides`` is the condensed
     audit trail of overrides actually applied (filtered to roles
-    ``logic`` / ``init``, value-non-null), keyed by ``(flow_name, role)``.
+    ``logic`` / ``init``, value-non-null), one ``{"name", "role", "value"}``
+    entry per override -- see :func:`_overrides_audit_trail` for why a list
+    and not a mapping.
 
     Args:
         ctx: result of :func:`parse_platform_export`.
@@ -4907,11 +4951,11 @@ def apply_to_system(
                     "class_name": spec.class_name,
                     "platform_id": spec.metadata.get("platform_id"),
                     "attributes_initial": spec.metadata.get("attributes_initial", []),
-                    "instance_overrides": dict(
-                        spec.metadata.get("instance_overrides") or {}
+                    "instance_overrides": _copied_audit_trail(
+                        spec.metadata.get("instance_overrides")
                     ),
-                    "capacity_overrides": dict(
-                        spec.metadata.get("capacity_overrides") or {}
+                    "capacity_overrides": _copied_audit_trail(
+                        spec.metadata.get("capacity_overrides")
                     ),
                 }
             )
