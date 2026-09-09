@@ -4,6 +4,27 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 5.0.1 (2026-09-09)
+
+Maintenance on the 5.0 line, one line of pyproject and nothing else: the
+embedded cod3s ref moves from 1.16.1 to 1.17.0.
+
+No muscadet code changed, and no behaviour of muscadet changed. The release
+exists because a downstream consumer cannot raise its own cod3s ref above the
+one muscadet embeds: uv refuses to resolve two URLs for the same package, so
+the two pins move together or neither does.
+
+What the consumer gains is `SimulationConfig.pdmp_dt`, which lets a study set
+the base integration step of the continuous solver. Until it existed nothing
+anywhere set that step, so every study ran on PyCATSHOO's own 0.01 and paid
+five hundred network re-evaluations per unit of simulated time. muscadet is
+where the step is spent -- the solver calls back into its equations -- but not
+where it is chosen.
+
+Validated by running the 5.0.0 suite unchanged against cod3s 1.17.0: 1584
+passed, 2 skipped. The single commit 1.17.0 adds over 1.16.1 is additive, an
+optional field read between the system build and the simulation.
+
 ## 5.0.0 (2026-09-07)
 
 The batch of three defects living in the discrete/continuous interoperation:
