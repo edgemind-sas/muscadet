@@ -64,6 +64,18 @@ def _wrong_interpreter_message(broken):
         "    uv sync                        # once, to build .venv",
         "    uv run pytest                  # or: .venv/bin/python -m pytest",
     ]
+    if any(name == "Pycatshoo" for name, _ in broken):
+        # `uv sync` alone never repairs this one, so it is said rather than
+        # implied: PyCATSHOO is not on PyPI and is not in the lock file. It is
+        # picked up from the environment, and a run that clears PYTHONPATH --
+        # setting it rather than prefixing it, most often -- loses it while the
+        # rest of the environment still looks right.
+        lines += [
+            "",
+            "PyCATSHOO itself comes from neither: it is found through PYTHONPATH",
+            "(its Core/lib and addsOn) and loaded through LD_LIBRARY_PATH (Core/lib",
+            "and ThirdParty/lib). Prefix those, do not replace them.",
+        ]
     return "\n".join(lines)
 
 

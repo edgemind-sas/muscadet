@@ -192,6 +192,23 @@ def test_an_interpreter_missing_a_requirement_is_refused_once_and_by_name(
     assert "uv sync" in message, "the message must carry the way out"
 
 
+def test_a_missing_pycatshoo_is_told_where_pycatshoo_comes_from(root_conftest):
+    """`uv sync` never repairs that one, so the message says what does.
+
+    PyCATSHOO is on no index and in no lock file: it is found through
+    ``PYTHONPATH`` and loaded through ``LD_LIBRARY_PATH``. A run that replaces
+    either -- which is what happens when a script sets them instead of
+    prefixing them -- loses it while everything else still looks right.
+    """
+    broken = [("Pycatshoo", "ModuleNotFoundError: No module named 'Pycatshoo'")]
+
+    message = root_conftest._wrong_interpreter_message(broken)
+
+    assert "PYTHONPATH" in message
+    assert "LD_LIBRARY_PATH" in message
+    assert "uv sync" in message, "the generic way out stays, both can be at fault"
+
+
 def test_a_broken_requirement_is_reported_with_what_the_import_raised(root_conftest):
     """``ModuleNotFoundError: ...`` beside the name, so the cause needs no rerun."""
     broken = root_conftest.unimportable_requirements((ABSENT_MODULE,))
