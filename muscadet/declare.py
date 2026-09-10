@@ -1408,8 +1408,18 @@ def build_system(spec, system=None):
             # else -- not the document, not the component that referenced it,
             # not the fact that the two are declared a few keys apart. Named
             # here instead, and pointing at the one constant to extend.
+            #
+            # Narrow on purpose: the key has to name a component this document
+            # declares AND that is not in the system yet. Anything else is a
+            # KeyError of its own -- a rule naming a flow that does not exist,
+            # say -- and rewriting that one would replace a true message by a
+            # false diagnosis.
             missing = error.args[0] if error.args else None
-            if not (isinstance(missing, str) and missing in spec["components"]):
+            if not (
+                isinstance(missing, str)
+                and missing in spec["components"]
+                and missing not in (getattr(system, "comp", None) or {})
+            ):
                 raise
             raise SystemSpecError(
                 f"component {name!r} names component {missing!r}, which this "

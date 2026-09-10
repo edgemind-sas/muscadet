@@ -33,9 +33,11 @@ import random
 
 import pytest
 
+import muscadet.declare as declare
 from muscadet.declare import (
     COMPONENT_REFERENCE_KEYS,
     SystemSpecError,
+    build_system,
     check_system_spec,
     component_build_order,
     component_references,
@@ -257,6 +259,21 @@ def test_the_reference_vocabulary_is_written_down_once():
     assert COMPONENT_REFERENCE_KEYS == {"obj", "targets", "target_name"}
 
 
+def test_the_order_is_part_of_the_package_surface():
+    """A caller sorting a batch of documents needs it without reaching inside.
+
+    ``build_system`` is exported, so what decides the order it builds in is
+    exported beside it: a platform validating a study before paying for an
+    engine reads the same function the build reads, rather than a private one
+    that may be renamed under it.
+    """
+    import muscadet
+
+    assert muscadet.component_build_order is component_build_order
+    assert muscadet.component_references is component_references
+    assert muscadet.COMPONENT_REFERENCE_KEYS == COMPONENT_REFERENCE_KEYS
+
+
 # ----------------------------------------------------------------------
 # A document that constrains nothing keeps the order it was given
 # ----------------------------------------------------------------------
@@ -437,3 +454,85 @@ def test_a_declaration_that_is_merely_reordered_still_validates():
                 "components": reordered(components, keys),
             }
         )
+
+
+# ----------------------------------------------------------------------
+# The net under the vocabulary: a reference the order did not see
+# ----------------------------------------------------------------------
+#
+# :data:`COMPONENT_REFERENCE_KEYS` is a vocabulary, and a vocabulary can fall
+# behind what cod3s emits. When it does, the derived order does not see the
+# reference, the engine resolves it through ``system.comp[...]`` and raises a
+# bare ``KeyError``. These three pin what ``build_system`` makes of that: it
+# names both components and the constant to extend when -- and only when -- the
+# missing key really is a component the document declares and has not built.
+
+
+class FakeSystem:
+    """Enough of a system for ``build_system`` to reach its refusals.
+
+    ``build_component`` is replaced below, so nothing here is ever asked to
+    build anything: the only thing the guard reads on the system is which
+    components it already holds.
+    """
+
+    def __init__(self, holds=()):
+        self.comp = {name: object() for name in holds}
+        self.indicators = {}
+
+
+def two_components():
+    return {
+        "version": "1.0.0",
+        "name": "net",
+        "components": {"A": {"name": "A"}, "B": {"name": "B"}},
+    }
+
+
+def raising(error, on="A"):
+    """A ``build_component`` that fails on one component and no other."""
+
+    def build(system, spec):
+        if spec["name"] == on:
+            raise error
+        return None
+
+    return build
+
+
+def test_an_unseen_reference_is_named_with_the_constant_to_extend(monkeypatch):
+    monkeypatch.setattr(declare, "build_component", raising(KeyError("B")))
+
+    with pytest.raises(SystemSpecError) as refusal:
+        build_system(two_components(), system=FakeSystem())
+
+    message = str(refusal.value)
+    assert "'A'" in message and "'B'" in message
+    assert "COMPONENT_REFERENCE_KEYS" in message
+    for key in COMPONENT_REFERENCE_KEYS:
+        assert key in message
+
+
+def test_a_key_error_on_something_else_is_left_alone(monkeypatch):
+    """A rule naming a flow that does not exist raises a KeyError too.
+
+    Rewriting that one would replace a true message by a false diagnosis, so
+    the guard is narrow: the key has to name a component of this document.
+    """
+    monkeypatch.setattr(declare, "build_component", raising(KeyError("no_such_flow")))
+
+    with pytest.raises(KeyError, match="no_such_flow"):
+        build_system(two_components(), system=FakeSystem())
+
+
+def test_a_key_error_naming_an_ALREADY_built_component_is_left_alone(monkeypatch):
+    """Second half of the same narrowness: what is built cannot be missing.
+
+    A ``KeyError`` naming a component the system already holds says something
+    else entirely, and reading it as a build-order defect would send whoever
+    debugs it to the one place the problem is not.
+    """
+    monkeypatch.setattr(declare, "build_component", raising(KeyError("B")))
+
+    with pytest.raises(KeyError, match="B"):
+        build_system(two_components(), system=FakeSystem(holds=["B"]))

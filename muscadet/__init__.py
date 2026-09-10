@@ -19,12 +19,15 @@ from .capacity import (
     combine_sum,
 )
 from .declare import (
+    COMPONENT_REFERENCE_KEYS,
     ComponentSpecError,
     SystemSpecError,
     build_component,
     build_system,
     check_spec,
     check_system_spec,
+    component_build_order,
+    component_references,
     component_spec,
     system_spec,
 )
