@@ -118,7 +118,13 @@ ensure_newline_before_comments = true
 testpaths = ["tests"]
 python_files = ["test_*.py"]
 python_classes = ["Test*"]
-python_functions = ["test_*"]
+# pytest's own default, and it has to stay it: the sibling tests of
+# examples/rbd_01 to rbd_04 name their function `def test()`, which `test_*`
+# does not match. This block was dead text as long as a pytest.ini shadowed it,
+# so narrowing the pattern here cost nothing and was invisible; the day the
+# shadowing went away it silently stopped collecting four tests -- not even in
+# red, which is worse than red. Nothing under tests/ depends on the difference.
+python_functions = ["test*"]
 addopts = "-v --tb=short --strict-markers"
 markers = [
     "slow: marks tests as slow (deselect with '-m \"not slow\"')",

@@ -29,6 +29,27 @@
 ### Testing
 - Use pytest for testing
 - Test files should be named test_*.py
+- Run the suite through the project environment (`uv sync` once, then
+  `uv run pytest` or `.venv/bin/python -m pytest`). muscadet pins Python
+  `>=3.10,<3.11` because PyCATSHOO ships native libraries built for it, and the
+  root `conftest.py` refuses a run under any interpreter that cannot import
+  PyCATSHOO and cod3s rather than letting every test module fail on the same
+  import
+- Test configuration lives in `pyproject.toml` alone. pytest reads the first
+  inifile it finds and never merges two, so adding a `pytest.ini`,
+  `tox.ini` or `setup.cfg` section beside it silently disables `testpaths`,
+  the registered markers and `addopts`
+- Keep the collection patterns at pytest's defaults (`python_functions` is
+  `test*`, not `test_*`: the sibling tests of `examples/rbd_0*` name their
+  function `def test()`). A narrowed pattern does not fail, it collects fewer
+  tests and says nothing; `tests/test_suite_configuration_001.py` asserts that
+  every test file of the repository, under either of pytest's default names,
+  still yields at least one test
+- `pytest` with no argument is scoped to `tests/` by `testpaths`. The sibling
+  tests under `examples/` are run on demand (`pytest examples/<name>`), in a
+  process of their own: PyCATSHOO state is process-global, and an example
+  collected alongside the suite changes the outcome of tests that pass without
+  it
 
 ## Project specific coventions
 ### Flow Classes
