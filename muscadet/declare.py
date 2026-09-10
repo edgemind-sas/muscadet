@@ -58,6 +58,7 @@ Examples
 ... })
 """
 
+import heapq
 import inspect
 import math
 import re
@@ -948,6 +949,30 @@ _INDICATOR_COMMON_KEYS = (
     "value_test",
 )
 
+#: Keys whose VALUE names a component, wherever they appear inside a component
+#: declaration -- at its top level or nested arbitrarily deep in a condition
+#: tree. They are what :func:`component_build_order` derives the build order
+#: from, and each is a name the ENGINE resolves against the live system at the
+#: moment the declaring component is built:
+#:
+#: - ``obj`` is the cod3s condition-tree convention
+#:   (``{"attr": "occ", "obj": "OTHER", "ope": "==", "value": True}``): the
+#:   platform's "condition on another mode", resolved through
+#:   ``system.comp[obj]``, which raises a bare ``KeyError`` on a component that
+#:   does not exist yet;
+#: - ``targets`` is what a mode acts on, one name or a list of them, resolved
+#:   through ``system.component(...)`` while the mode's automata are built;
+#: - ``target_name`` is the single-target spelling of the same thing, and is
+#:   also the factorised label of a multi-target mode -- which is why every
+#:   name collected here is kept only when the document DECLARES a component
+#:   under it (see :func:`component_references`).
+#:
+#: This is the one place the vocabulary is written down. A reference key added
+#: to cod3s and not added here does not break silently: the build still refuses
+#: it, but by name, through the guard in :func:`build_system` rather than
+#: through the engine's ``KeyError``.
+COMPONENT_REFERENCE_KEYS = frozenset({"obj", "targets", "target_name"})
+
 #: The three things cod3s knows how to observe, each naming its subject with a
 #: DIFFERENT key and built by a different method. So a declaration states its
 #: ``kind``: without it, a variable and a state are indistinguishable mappings
@@ -1074,6 +1099,197 @@ def system_spec(system):
     }
 
 
+# ---------------------------------------------------------------------------
+# The build ORDER, derived from the document rather than trusted from it
+# ---------------------------------------------------------------------------
+#
+# **The order of an object's keys carries no meaning.** A JSON document may be
+# re-serialised sorted by a formatter, by a diff tool, by a round trip through
+# a database, and above all by an engine whose maps are ordered by key -- a
+# Rust reader over a ``BTreeMap`` sorts, which is exactly the RAICHU path. A
+# document that rebuilds only in the order it happened to be written in is
+# therefore not an exchange format, whatever its ``version`` says.
+#
+# It was one, measured 2026-09-10 on a platform study of six modes: a mode
+# whose ``occ_cond`` names another mode's ``occ`` state builds a condition the
+# engine resolves through ``system.comp[name]`` AT CONSTRUCTION, so the named
+# mode must already exist. Insertion order happened to put it first; sorted
+# order put the six referencing modes ahead of the six referenced ones and the
+# rebuild died on ``KeyError: 'Rail_1__Rail__Rail__Fissure_O'`` -- a message
+# naming neither the document, nor the component that referenced it, nor the
+# fact that both are declared a few keys apart.
+#
+# So the order is DERIVED here, from what each declaration names, and a cycle
+# -- the one thing no order can satisfy -- is refused by the names that form
+# it. The alternative reading, building every component and resolving the
+# references afterwards, was not taken: it makes a cycle build silently, and
+# a mode that can only occur once another has occurred, and vice versa, is a
+# model defect that has to surface at build time rather than as a mode that
+# never fires in a Monte-Carlo run nobody re-reads.
+
+
+def _reference_names(value, out):
+    """Collect, into ``out``, every name a declaration fragment points at.
+
+    Recursive over the WHOLE fragment rather than over a list of places a
+    reference is allowed to sit: a condition tree nests to an arbitrary depth
+    (outer list of OR clauses, inner list of AND clauses, then the leaves), and
+    a reference key may be introduced at a level nobody thought to look at.
+    """
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in COMPONENT_REFERENCE_KEYS:
+                if isinstance(item, str):
+                    out.append(item)
+                elif isinstance(item, (list, tuple)):
+                    out.extend(name for name in item if isinstance(name, str))
+            _reference_names(item, out)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _reference_names(item, out)
+
+
+def component_references(comp_spec, declared):
+    """The components ``comp_spec`` names, among those ``declared`` carries.
+
+    Parameters
+    ----------
+    comp_spec : dict
+        One component declaration.
+    declared : dict
+        Every name the document files a component under -- its key, and its
+        ``name`` field when the two differ -- mapped to the key. Built by
+        :func:`component_build_order`.
+
+    Returns
+    -------
+    list of str
+        Keys of ``declared``, in the order they were met, without duplicates
+        and without the component's own.
+
+    Notes
+    -----
+    A name the document does NOT declare is dropped rather than refused, and
+    that is deliberate: ``build_system`` fills a system the caller may already
+    have put components in, so a reference to something built outside the
+    document is legitimate. It is also what makes ``target_name`` usable as a
+    reference key at all -- on a multi-target mode it holds a factorised label
+    that names no component, and dropping it costs nothing because the
+    ``targets`` list beside it names every one of them.
+    """
+    names = []
+    _reference_names(comp_spec, names)
+
+    own_name = comp_spec.get("name") if isinstance(comp_spec, dict) else None
+    own = declared.get(own_name) if isinstance(own_name, str) else None
+
+    keys = []
+    for name in names:
+        key = declared.get(name)
+        if key is None or key == own or key in keys:
+            continue
+        keys.append(key)
+    return keys
+
+
+def component_build_order(components):
+    """The order ``components`` must be built in, whatever order it is written.
+
+    A component is built after everything its declaration names, so a document
+    reconstructs identically from its insertion order, from its sorted form, or
+    from any permutation of its keys. Components that constrain each other in
+    no way keep the order the document gives them, so a document with no
+    cross-reference at all is built exactly as before.
+
+    Parameters
+    ----------
+    components : dict
+        The ``components`` section of a system declaration.
+
+    Returns
+    -------
+    list of str
+        Every key of ``components``, once.
+
+    Raises
+    ------
+    SystemSpecError
+        When the references form a cycle, naming the components that form it.
+        A cycle is the one thing no build order satisfies, and it is refused
+        BEFORE anything is built rather than left to the engine, which reports
+        it as a ``KeyError`` on whichever member of the loop came first.
+    """
+    keys = list(components)
+    position = {key: index for index, key in enumerate(keys)}
+
+    # Both spellings a reference may use: the key the document files the
+    # component under, and the ``name`` its declaration carries. They are the
+    # same for anything ``system_spec`` writes; a hand-written document may
+    # differ, and a reference then names the component, not the key.
+    declared = {key: key for key in keys}
+    for key, comp_spec in components.items():
+        if isinstance(comp_spec, dict):
+            declared.setdefault(str(comp_spec.get("name") or key), key)
+
+    needs = {
+        key: component_references(
+            comp_spec if isinstance(comp_spec, dict) else {}, declared
+        )
+        for key, comp_spec in components.items()
+    }
+    needed_by = {key: [] for key in keys}
+    for key, references in needs.items():
+        for reference in references:
+            if reference != key:
+                needed_by[reference].append(key)
+
+    remaining = {
+        key: sum(1 for reference in references if reference != key)
+        for key, references in needs.items()
+    }
+
+    # A heap on the DOCUMENT's own position, so the result is the document's
+    # order everywhere the references leave it free. Any topological order
+    # would build; only this one leaves a document without cross-references
+    # byte-identical to what it was before this function existed.
+    ready = [position[key] for key in keys if remaining[key] == 0]
+    heapq.heapify(ready)
+
+    order = []
+    while ready:
+        key = keys[heapq.heappop(ready)]
+        order.append(key)
+        for dependent in needed_by[key]:
+            remaining[dependent] -= 1
+            if remaining[dependent] == 0:
+                heapq.heappush(ready, position[dependent])
+
+    if len(order) != len(keys):
+        raise SystemSpecError(_cycle_refusal(set(keys) - set(order), needs, position))
+
+    return order
+
+
+def _cycle_refusal(stuck, needs, position):
+    """The message a dependency cycle is refused with, naming its members."""
+    walk = []
+    seen = {}
+    key = min(stuck, key=position.get)
+    while key not in seen:
+        seen[key] = len(walk)
+        walk.append(key)
+        key = min((name for name in needs[key] if name in stuck), key=position.get)
+    cycle = walk[seen[key] :] + [key]
+
+    return (
+        f"components {' -> '.join(repr(name) for name in cycle)} form a "
+        f"dependency cycle: each one's declaration names the next, so none of "
+        f"them can be built first. A reference is resolved against the live "
+        f"system when the component carrying it is built, which is why the "
+        f"loop has no build order rather than merely an awkward one"
+    )
+
+
 def check_system_spec(spec):
     """Validate a system declaration without building anything.
 
@@ -1081,6 +1297,12 @@ def check_system_spec(spec):
     is checked HERE: a document from a future major is refused with its own
     number in the message, rather than half-built into a system whose shape
     nobody can explain.
+
+    The dependency cycle :func:`component_build_order` refuses is checked here
+    for the same reason: it is a property of the document alone, so a caller
+    validating a batch learns about it without raising a system, and
+    :func:`build_system` -- which opens on this function -- refuses one before
+    creating its first component rather than halfway through.
     """
     if not isinstance(spec, dict):
         raise SystemSpecError(
@@ -1104,6 +1326,8 @@ def check_system_spec(spec):
         )
     for name, comp_spec in components.items():
         check_spec(comp_spec)
+
+    component_build_order(components)
 
     for entry in spec.get("connections") or []:
         missing = [
@@ -1138,6 +1362,12 @@ def build_system(spec, system=None):
     a preference. A connection needs both ends to exist, and an indicator
     resolves against components that are already there.
 
+    **Among the components, the order is DERIVED and not read.** The key order
+    of a JSON object carries no meaning, so a component whose declaration names
+    another -- a mode conditioned on another mode, a mode acting on a target --
+    is built after the one it names, whatever order the document happens to be
+    written in. See :func:`component_build_order`.
+
     Parameters
     ----------
     spec : dict
@@ -1151,6 +1381,13 @@ def build_system(spec, system=None):
     Returns
     -------
     muscadet.System
+
+    Raises
+    ------
+    SystemSpecError
+        When the components' references form a cycle, and when a reference the
+        derived order did not see leaves a component unbuilt: both name the
+        components involved, where the engine names only a missing key.
     """
     check_system_spec(spec)
 
@@ -1159,8 +1396,28 @@ def build_system(spec, system=None):
 
         system = System(name=spec.get("name") or "system")
 
-    for name, comp_spec in spec["components"].items():
-        build_component(system, {**comp_spec, "name": comp_spec.get("name", name)})
+    for name in component_build_order(spec["components"]):
+        comp_spec = spec["components"][name]
+        try:
+            build_component(system, {**comp_spec, "name": comp_spec.get("name", name)})
+        except KeyError as error:
+            # The net under :data:`COMPONENT_REFERENCE_KEYS`. A reference key
+            # muscadet does not know about yet is invisible to the derived
+            # order, and the engine then resolves it through ``system.comp[...]``
+            # and raises a bare ``KeyError`` naming one component and nothing
+            # else -- not the document, not the component that referenced it,
+            # not the fact that the two are declared a few keys apart. Named
+            # here instead, and pointing at the one constant to extend.
+            missing = error.args[0] if error.args else None
+            if not (isinstance(missing, str) and missing in spec["components"]):
+                raise
+            raise SystemSpecError(
+                f"component {name!r} names component {missing!r}, which this "
+                f"declaration carries but which is not built yet: the "
+                f"reference sits under a key muscadet does not count as one "
+                f"(known: {', '.join(sorted(COMPONENT_REFERENCE_KEYS))}). Add "
+                f"that key to COMPONENT_REFERENCE_KEYS so the build order sees it"
+            ) from error
 
     for entry in spec.get("connections") or []:
         flow = entry.get("flow")
