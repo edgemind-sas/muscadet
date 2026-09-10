@@ -1,7 +1,9 @@
 """A bare ``pytest`` at the repository root runs the suite the project declares.
 
-Two ways the command a reviewer, a CI job or an orchestrator types can be red
-while the library is green, both met in practice and both pinned here:
+Three ways the command a reviewer, a CI job or an orchestrator types can be red
+-- or worse, green over less than it says -- while the library is fine. All
+three were met in practice, the third one by the very commit that fixed the
+first two:
 
 1. **A second configuration file shadowing the first.** ``pytest.ini`` used to
    sit beside ``pyproject.toml``. pytest reads the first inifile it finds and
@@ -19,7 +21,16 @@ while the library is green, both met in practice and both pinned here:
    ``conftest.py`` refuses that run once, by name, and this module pins the
    refusal rather than the wall of collection errors it replaces.
 
-The first statement is checked twice on purpose: on the effective configuration
+3. **A collection pattern that stops matching.** Dead text costs nothing, so a
+   ``python_functions`` narrowed to ``test_*`` sat in that block unnoticed and
+   went live the day the shadowing was removed. The four sibling tests of
+   ``examples/rbd_0*`` name their function ``def test()``: they stopped being
+   collected at all, which no run reports, no count betrays if nobody knew the
+   old one, and no red flags. The pattern is back to pytest's default, and the
+   statement asserted here is the general one -- no test file in the repository
+   is collected as zero tests.
+
+The scope statement is checked twice on purpose: on the effective configuration
 this run received, and end to end in a subprocess, because only the subprocess
 proves what the command actually gathers.
 """
@@ -34,6 +45,18 @@ import pytest
 #: A name no environment can satisfy, to drive the guard without touching the
 #: real requirements of the interpreter running this test.
 ABSENT_MODULE = "muscadet_no_such_requirement"
+
+#: Every directory of the repository that holds test files, collected or not by
+#: a bare run: ``tests`` is the suite, ``examples`` the sibling tests run on
+#: demand. Both answer to the same patterns, which is what makes a narrowing
+#: there invisible from here.
+TEST_DIRECTORIES = ("tests", "examples")
+
+#: pytest's own default file patterns, wider than the ``python_files`` this
+#: project declares. Walking the wider ones is deliberate: a file named against
+#: the convention is then reported as collected by nothing, which is a sentence
+#: someone can act on, rather than left out of both the walk and the run.
+TEST_FILE_PATTERNS = ("test_*.py", "*_test.py")
 
 
 @pytest.fixture(scope="module")
@@ -61,6 +84,44 @@ class _ConfigStub:
         self.marker_lines.append((name, line))
 
 
+def collected_files(rootpath, *targets):
+    """The files a real ``pytest`` run collects at least one test from.
+
+    Run in a subprocess from ``rootpath``, because what a command gathers is
+    answered by the command and by nothing else. The project's own ``addopts``
+    are dropped for one reason only: their ``-v`` would turn the one-id-per-line
+    listing parsed here into a tree. None of them decides WHAT is collected,
+    which is what every caller below asks about.
+
+    :param rootpath: the repository root, the run's working directory
+    :param targets: what to hand the command, nothing for an unscoped run
+    :return: the repository-relative paths that yielded at least one test
+    """
+    run = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "pytest",
+            "--collect-only",
+            "-o",
+            "addopts=",
+            "-q",
+            "-p",
+            "no:cacheprovider",
+            *targets,
+        ],
+        cwd=str(rootpath),
+        capture_output=True,
+        text=True,
+        timeout=600,
+    )
+    assert run.returncode == 0, run.stdout + run.stderr
+
+    gathered = {line.split("::")[0] for line in run.stdout.splitlines() if "::" in line}
+    assert gathered, "collection reported no test at all"
+    return gathered
+
+
 def test_the_configuration_in_force_is_the_one_pyproject_declares(pytestconfig):
     """No inifile shadows ``pyproject.toml``, whatever else the root may hold."""
     assert pytestconfig.inipath is not None, "the suite runs on no configuration"
@@ -80,37 +141,33 @@ def test_the_markers_the_suite_uses_are_registered(pytestconfig):
 
 
 def test_a_bare_pytest_gathers_the_tests_directory_and_nothing_else(pytestconfig):
-    """The end-to-end statement: what the command itself collects, from the root."""
-    collected = subprocess.run(
-        [
-            sys.executable,
-            "-m",
-            "pytest",
-            "--collect-only",
-            # The project's own addopts are dropped for the sole reason that
-            # their -v would turn the one-test-id-per-line listing parsed below
-            # into a tree. None of them decides WHAT is collected, which is the
-            # statement under test; testpaths still does, and still applies.
-            "-o",
-            "addopts=",
-            "-q",
-            "-p",
-            "no:cacheprovider",
-        ],
-        cwd=str(pytestconfig.rootpath),
-        capture_output=True,
-        text=True,
-        timeout=600,
-    )
-    assert collected.returncode == 0, collected.stdout + collected.stderr
+    """The end-to-end scope statement: what the command itself collects."""
+    gathered = collected_files(pytestconfig.rootpath)
 
-    gathered = {
-        line.split("::")[0] for line in collected.stdout.splitlines() if "::" in line
-    }
-    assert gathered, "collection reported no test at all"
     assert all(path.startswith("tests/") for path in gathered), sorted(
         path for path in gathered if not path.startswith("tests/")
     )
+
+
+def test_no_test_file_in_the_repository_is_collected_as_zero_tests(pytestconfig):
+    """A pattern that stops matching drops tests in silence, red being the least.
+
+    Asserted over ``examples/`` too, and over what is on disk rather than over a
+    list written here: a file added tomorrow under a name the patterns do not
+    reach must fail this, not go unnoticed like the four that did.
+    """
+    root = Path(pytestconfig.rootpath)
+    on_disk = {
+        path.relative_to(root).as_posix()
+        for directory in TEST_DIRECTORIES
+        for pattern in TEST_FILE_PATTERNS
+        for path in (root / directory).rglob(pattern)
+    }
+    assert on_disk, "no test file found at all, so the walk is what is wrong"
+
+    gathered = collected_files(root, *TEST_DIRECTORIES)
+
+    assert not on_disk - gathered, sorted(on_disk - gathered)
 
 
 def test_the_running_interpreter_satisfies_the_requirements_the_guard_checks(
