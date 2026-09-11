@@ -4,6 +4,69 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 5.2.0 (2026-09-09)
+
+muscadet becomes a modelling interface over more than one engine, and says
+where an engine does what it defines but does it OTHERWISE. Additive on every
+side: a run that names no engine takes the reference path it has always taken,
+and nothing inside the package reads the new registry.
+
+This release is also the first tag carrying the system declaration merged on
+`master` after 5.1.0 was cut from a side branch.
+
+### Added
+
+- **An engine seam**, `muscadet.engine`. An engine registers itself by calling
+  `register_engine`, or by advertising a `muscadet.engines` entry point its
+  distribution carries, and a run selects one by name:
+  `system.simulate(params, engine="raichu")`. The entry-point route is what
+  removes the last import from the CALLER too, so the choice of engine is a
+  setting rather than a line of code. What crosses the seam is the SYSTEM
+  DECLARATION and never the live system, with run parameters travelling beside
+  that document rather than inside it. The reference engine is not a plugin:
+  naming `pycatshoo`, or naming nothing, takes the direct path `System` has
+  always taken, and registering under that name is refused.
+- **A conformance registry**, `muscadet.conformance`. Four semantic points,
+  each with the rule muscadet settles on, why, and where it was settled; and
+  one entry per engine that departs from it, with what the engine does
+  instead, what it costs, and what -- if anything -- restores muscadet's
+  meaning before a result is read. Both engines appear on both sides of the
+  line: PyCATSHOO fails the first point (it observes an instant BEFORE the
+  transitions due at it are resolved), RAICHU honours that one and fails the
+  three interactive ones. Consultable with no platform, no model and no run:
+  `python -m muscadet.conformance raichu`.
+- **A system declares itself**, `muscadet.declare`: `system_spec`,
+  `check_system_spec` and `build_system`. `component_spec` already read a
+  component back; what no component knows is how it is wired and what is
+  observed, which are exactly what stops a declaration from being a system.
+  The document carries a semver version, refused by major rather than
+  half-read.
+
+### The two registries answer two questions
+
+The conformance registry is NOT the capability matrix. The matrix says what an
+engine knows how to do and guards a launch; this registry says where it does
+it otherwise and guards nothing. They answer an unknown engine in opposite
+directions, which is the shortest proof they are different objects: the matrix
+answers "covers nothing", this one answers "nothing to report", and says so
+through `is_assessed` rather than letting an empty tuple pass for a clean bill
+of health.
+
+That it cannot refuse a launch is structural rather than promised. Nothing
+inside muscadet imports the module: the package `__getattr__` binds it on
+first ACCESS (PEP 562), so importing muscadet does not even load it. Two tests
+assert it, one by source walk and one by `sys.modules` in a subprocess.
+
+### muscadet still imports no engine
+
+The seam knows no engine name, and a test keeps it that way: the package is
+parsed and any import beyond its declared dependencies fails it, including one
+reached through `importlib.import_module`. It is written as an ALLOWLIST
+rather than as a denylist of engine names, so it also refuses the third engine
+nobody has written yet. A third engine adds its own conformance record through
+`register_deviation` / `assess_engine`; what it cannot do is author the points
+it is judged on, or the registry becomes self-certification.
+
 ## 5.1.0 (2026-09-07)
 
 The COD3S Platform bridge carries the two fields 5.0.0 added to a capacity.
