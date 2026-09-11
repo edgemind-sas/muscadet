@@ -28,9 +28,13 @@ Two cascade mechanisms intentionally illustrated together:
    on ProcessIndustriel (the attack travels through the regular muscadet
    message-box wiring once MdC_B turns on the service flow).
 
-Repair is disabled (``repair_cond=lambda: False`` plus large
-``repair_param``): once compromised, the MdC stays active for the
-simulation horizon — matches the slides' one-way scenario.
+Repair is disabled (``repair_cond=False`` plus large ``repair_param``):
+once compromised, the MdC stays active for the simulation horizon, which
+matches the slides' one-way scenario. A constant is spelled as the
+constant and not as ``lambda: False``. cod3s reads a bool condition
+late, at every evaluation, so the two are the same guard; but a callable
+is a live object, and a system carrying one cannot be written out as a
+declaration for another engine to read.
 
 Expected stepping timeline::
 
@@ -140,7 +144,7 @@ def build() -> muscadet.System:
         targets=["Srv"],
         failure_param=10,
         failure_effects={},
-        repair_cond=lambda: False,
+        repair_cond=False,
         repair_param=1e9,
     )
 
@@ -155,7 +159,7 @@ def build() -> muscadet.System:
         failure_param=5,
         failure_cond=[[{"attr": "occ", "obj": "Srv__mdc_a", "value": True}]],
         failure_effects={"f_service_prod_available": True},
-        repair_cond=lambda: False,
+        repair_cond=False,
         repair_param=1e9,
     )
 
@@ -171,7 +175,7 @@ def build() -> muscadet.System:
             "F1_fed_available_out": False,
             "F2_fed_available_out": False,
         },
-        repair_cond=lambda: False,
+        repair_cond=False,
         repair_param=1e9,
     )
 
