@@ -35,6 +35,17 @@
   root `conftest.py` refuses a run under any interpreter that cannot import
   PyCATSHOO and cod3s rather than letting every test module fail on the same
   import
+- PyCATSHOO comes from neither `uv sync` nor the lock file: it is found through
+  `PYTHONPATH` (its `Core/lib` and `addsOn`) and loaded through
+  `LD_LIBRARY_PATH` (`Core/lib` and `ThirdParty/lib`), which an interactive
+  shell profile sets and nothing else does. A command that runs the suite
+  outside a login shell must therefore carry that environment itself, ahead of
+  the interpreter: `export PYCATSHOO_DIR=<install> && . "$PYCATSHOO_DIR/pycatshoorc" && ...`
+  sources PyCATSHOO's own rc file, which prefixes both variables from that one
+  path rather than retyping three. This is not hypothetical: the integration
+  check runs from a systemd user service, which reads no profile, and a line
+  that leaves the environment out ends in 0.3 s on the `conftest.py` refusal
+  naming `Pycatshoo`, having run no test at all
 - Test configuration lives in `pyproject.toml` alone. pytest reads the first
   inifile it finds and never merges two, so adding a `pytest.ini`,
   `tox.ini` or `setup.cfg` section beside it silently disables `testpaths`,
