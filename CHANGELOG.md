@@ -4,6 +4,26 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 5.3.1 (2026-09-12)
+
+Maintenance over 5.3.0: one line of `pyproject.toml`, no muscadet code and no
+muscadet behaviour. The embedded cod3s ref moves from 1.16.1 to 1.17.0.
+
+It exists for the reason 5.2.1 existed over 5.2.0, and it is the same line: a
+downstream consumer cannot raise its own cod3s ref above the one muscadet
+embeds, uv refusing to resolve two URLs for the same package, so the two pins
+move together or neither does. What the consumer gains is
+`SimulationConfig.pdmp_dt`, the base integration step of the continuous solver,
+instead of running on PyCATSHOO's own 0.01.
+
+5.3.0 carried 1.16.1 because it was cut from 5.2.0 and the bump lived on
+`maint/5.2.x`. That left the declaration of a standalone mode and the
+integration step on two branches no tag joined, so a consumer had to choose one
+or the other. This release joins them, and is the first tag to carry both.
+
+Validated by running the 5.3.0 suite unchanged against cod3s 1.17.0: 1806
+passed, 2 skipped.
+
 ## 5.3.0 (2026-09-12)
 
 A system declaration now comes out of every system muscadet can build, and

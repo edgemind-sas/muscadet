@@ -33,8 +33,14 @@ dependencies = [
     # mapping it builds from, which is what muscadet.declare needs to build the
     # same spec twice; and, from 1.16.0, PycSystem.isimu_step_to, without which
     # an interactive session cannot advance a model whose continuous variables
-    # are the only thing moving).
-    "cod3s @ git+https://github.com/edgemind-sas/cod3s.git@1.16.1",
+    # are the only thing moving; and, from 1.17.0, SimulationConfig.pdmp_dt,
+    # which lets a study set the base integration step of the continuous
+    # solver instead of running on PyCATSHOO's own default).
+    #
+    # This pin is also why a maintenance release can exist over nothing else:
+    # a downstream consumer cannot raise its own cod3s ref above the one
+    # muscadet embeds, uv refusing to resolve two URLs for the same package.
+    "cod3s @ git+https://github.com/edgemind-sas/cod3s.git@1.17.0",
     "graphviz==0.20.1",
 ]
 
