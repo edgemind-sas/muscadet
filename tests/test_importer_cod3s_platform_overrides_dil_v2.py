@@ -34,6 +34,7 @@ muscadet = pytest.importorskip("muscadet")
 
 import cod3s  # noqa: E402
 
+from muscadet.engine import system_declaration  # noqa: E402
 from muscadet.importers.cod3s_platform import (  # noqa: E402
     parse_platform_export,
     system_from_export,
@@ -214,9 +215,11 @@ def test_runtime_isimu_start_with_overrides_does_not_raise(
 
 def test_runtime_metadata_instance_overrides_propagated(base_payload, cleanup_system):
     """Audit trail : after apply_to_system, ``comp.metadata['instance_overrides']``
-    holds the condensed dict of overrides that were actually folded into the
-    KB defaults. Regression guard for the cosmetic bug where the parse-layer
-    metadata key was not whitelisted into the runtime metadata copy.
+    names every override that was actually folded into the KB defaults, one
+    ``{"name", "role", "value"}`` entry each. Regression guard for the cosmetic
+    bug where the parse-layer metadata key was not whitelisted into the runtime
+    metadata copy, and for the shape itself: a trail keyed by the ``(name,
+    role)`` PAIR is what kept the whole declaration out of ``json.dumps``.
     """
     payload = _patch_attributes(
         base_payload,
@@ -234,9 +237,75 @@ def test_runtime_metadata_instance_overrides_propagated(base_payload, cleanup_sy
 
     # PLC_1 — override applied : audit trail must reflect it
     plc1_overrides = system.comp["PLC_1"].metadata.get("instance_overrides")
-    assert plc1_overrides == {("CS_E_KVPP_Qx_PLC", "logic_in"): "2"}
+    assert plc1_overrides == [
+        {"name": "CS_E_KVPP_Qx_PLC", "role": "logic_in", "value": "2"},
+    ]
 
-    # PLC_2 — no override : audit trail must be an empty dict (not None)
+    # PLC_2 — no override : audit trail must be an empty list (not None)
     # so callers can trust the key's presence and iterate without guards.
     plc2_overrides = system.comp["PLC_2"].metadata.get("instance_overrides")
-    assert plc2_overrides == {}
+    assert plc2_overrides == []
+
+    # And the trail is a document, not just a Python object: what a reader
+    # asks of an audit trail is to be able to write it down.
+    assert json.loads(json.dumps(plc1_overrides)) == plc1_overrides
+
+
+def _non_string_keys(value, where="declaration"):
+    """Every place in ``value`` where a mapping is keyed by something else.
+
+    Walks the whole document rather than trusting ``json.dumps`` alone: the
+    dump stops at the FIRST offending key and names only its type, which is
+    exactly the report this ticket was born of.
+    """
+    found = []
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if not isinstance(key, str):
+                found.append(f"{where}: key {key!r} ({type(key).__name__})")
+            found.extend(_non_string_keys(item, f"{where}.{key}"))
+    elif isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            found.extend(_non_string_keys(item, f"{where}[{index}]"))
+    return found
+
+
+def test_the_declaration_of_an_imported_system_is_a_document(
+    base_payload, cleanup_system
+):
+    """A real export, imported, read back as a declaration, written out.
+
+    The whole chain in one process : ``export -> system_from_export ->
+    system_declaration -> json.dumps``. It used to stop on the last step with
+    ``TypeError: keys must be str, ... not tuple``, naming a type and no
+    component, because the importer wrote its override audit trails keyed by
+    the ``(name, role)`` pair it looks flows up by.
+    """
+    payload = _patch_attributes(
+        base_payload,
+        PLC_1_ID,
+        [
+            {
+                "name": "CS_E_KVPP_Qx_PLC",
+                "role": "logic_in",
+                "value": "2",
+            }
+        ],
+    )
+    system = system_from_export(payload)
+    cleanup_system.append(system)
+
+    declaration = system_declaration(system)
+
+    # Named one by one rather than left to json.dumps, which reports the first
+    # and says nothing about where it sits.
+    assert _non_string_keys(declaration) == []
+
+    document = json.dumps(declaration)
+    assert json.loads(document) == declaration
+
+    # The audit trail crossed with it, and still says what was overridden.
+    plc1 = declaration["components"]["PLC_1"]
+    assert plc1["metadata"]["instance_overrides"] == [
+        {"name": "CS_E_KVPP_Qx_PLC", "role": "logic_in", "value": "2"},
+    ]

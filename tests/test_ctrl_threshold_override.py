@@ -415,14 +415,28 @@ class TestTheParseLayerFoldsTheTuning:
         ctx = _parse(build_payload())
         low = next(comp for comp in ctx.components if comp.name == "PUMP_LOW")
 
-        assert low.metadata["controller_threshold_overrides"] == {
-            ("run__threshold", "controller_threshold"): LOW_START,
-            ("alarm__op1__activate", "controller_threshold"): LOW_ALARM_ACTIVATE,
-            ("alarm__op1__release", "controller_threshold"): LOW_ALARM_RELEASE,
-        }
-        # An untuned instance carries an empty index, the sentinel dropped.
+        # One entry per tuned number, sorted by (name, role) so two exports of
+        # one model give the same trail.
+        assert low.metadata["controller_threshold_overrides"] == [
+            {
+                "name": "alarm__op1__activate",
+                "role": "controller_threshold",
+                "value": LOW_ALARM_ACTIVATE,
+            },
+            {
+                "name": "alarm__op1__release",
+                "role": "controller_threshold",
+                "value": LOW_ALARM_RELEASE,
+            },
+            {
+                "name": "run__threshold",
+                "role": "controller_threshold",
+                "value": LOW_START,
+            },
+        ]
+        # An untuned instance carries an empty trail, the sentinel dropped.
         untuned = next(comp for comp in ctx.components if comp.name == "PUMP_CLASS")
-        assert untuned.metadata["controller_threshold_overrides"] == {}
+        assert untuned.metadata["controller_threshold_overrides"] == []
 
 
 # ===========================================================================
@@ -704,15 +718,31 @@ class TestTheInstancesSwitchAtTheirOwnDates:
 
         assert metadata["controller"] is True
         assert metadata["class_name"] == PUMP_CLASS_NAME
+        assert {
+            "name": "run__threshold",
+            "role": "controller_threshold",
+            "value": LOW_START,
+        } in metadata["controller_threshold_overrides"]
         assert (
-            metadata["controller_threshold_overrides"][
-                ("run__threshold", "controller_threshold")
-            ]
-            == LOW_START
+            montage.comp["PUMP_CLASS"].metadata["controller_threshold_overrides"] == []
         )
-        assert (
-            montage.comp["PUMP_CLASS"].metadata["controller_threshold_overrides"] == {}
-        )
+
+    def test_the_tuning_is_written_down_as_a_document_can_carry_it(self, montage):
+        """The trail survives being written out, which is what a trail is for.
+
+        Keyed by the ``(name, role)`` pair the apply layer looks a threshold up
+        by, it did not: ``json.dumps`` refused a tuple key on a message naming a
+        type and no component. The three override bags the importer attaches
+        share one spelling for that reason, and this pins the controller one.
+
+        Not asserted through ``system_declaration``: that reader does not carry
+        an ``ObjCtrl`` at all yet, so a system holding a controller cannot be
+        declared whatever its metadata looks like.
+        """
+        import json
+
+        trail = montage.comp["PUMP_LOW"].metadata["controller_threshold_overrides"]
+        assert json.loads(json.dumps(trail)) == trail
 
 
 def test_delete(montage):
