@@ -4,6 +4,91 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 5.3.0 (2026-09-12)
+
+A system declaration now comes out of every system muscadet can build, and
+goes into JSON. Two shapes stopped it before, and both are ordinary rather
+than exotic: a component that holds no flow, which is what a mode declared on
+its own is, and an audit trail keyed by a pair, which is what the COD3S
+Platform importer wrote on every component it built.
+
+### It is cut from 5.2.0, not from 5.2.1
+
+5.2.1 is a maintenance release on `maint/5.2.x`: one line of `pyproject.toml`,
+moving the embedded cod3s ref from 1.16.1 to 1.17.0, no muscadet code. This
+release does not carry it. It is cut from the branch the declaration was built
+on, whose cod3s ref is still 1.16.1, and a consumer has to pin cod3s to the
+same ref as the one embedded here -- uv refuses to resolve two URLs for the
+same package. So the choice is not "which cod3s is newer" but "which cod3s the
+consumer pins", and the consumer this release exists for pins 1.16.1. What
+1.17.0 adds is `SimulationConfig.pdmp_dt`, the base integration step of the
+continuous solver; whoever needs it moves both refs together, one commit away.
+
+### Added
+
+- **A two-state mode declared as a component declares itself.** `system_spec`
+  iterated `flows_in` over everything `system.comp` held, and such a mode
+  holds none: two of the six interactive examples died on `AttributeError:
+  'ObjFMDelay' object has no attribute 'flows_in'`, from inside a dict
+  comprehension, before any engine saw anything. `component_spec` now
+  dispatches on what the object IS -- `muscadet.ObjFlow`, `cod3s.ObjMode2S`
+  and its subclasses, `cod3s.ObjEvent` -- and refuses anything else by a
+  message naming the class. A standalone mode gets its OWN entry rather than
+  being skipped: a mode declared ON a component is already written into that
+  component's `failure_modes`, but a standalone one is recorded nowhere else,
+  so skipping it would lose the model and not the decoration (`cyber_3comp`
+  would declare three components and none of the compromise cascade that IS
+  the example).
+- **`cod3s.ObjEvent` declares itself too, comparison included.** The platform
+  translator synthesises one per study event and one per indicator whose
+  formula has more than one clause, so it is not a corner of the corpus. The
+  six comparisons it compiles to are `operator` module singletons, so identity
+  gives the spelling back exactly. `cod3s.ObjDegMode` stays refused by name:
+  it holds a list of states rather than two, and no vocabulary fits it.
+- **`kind` says which shape an entry is**, and its value for a mode is
+  `two_state_mode` (`COMPONENT_KIND_TWO_STATE_MODE`). It covers three families
+  -- `cod3s.ObjEvent`, the `cod3s.ObjFM` family and `cod3s.ObjMode2S` -- and
+  only the middle one is a failure, so the value names the two states the
+  three share rather than the nature of the most common one. Not `mode` nor
+  `standalone_mode`: both would collide with `ObjDegMode`, whose constructor
+  is not this one. No release ever published another spelling.
+- **`component_build_order` and `component_references`** on the package
+  surface, so a caller validating a batch reads the function the build reads.
+
+### Changed
+
+- **The COD3S Platform importer writes its three override audit trails as
+  documents.** `instance_overrides`, `capacity_overrides` and
+  `controller_threshold_overrides` were keyed by the `(name, role)` pair the
+  apply layer looks a flow, a capacity or a threshold up by. No JSON object is
+  keyed by a pair, so the declaration of ANY imported model stopped at
+  `json.dumps`. Each bag is now a sorted LIST of `{"name", "role", "value"}`
+  entries. The INTERNAL index is untouched and stays keyed by the pair, which
+  is what makes the change small: not one model built changes. **BREAKING for
+  a reader of those three metadata keys**, a mapping becomes a list; there is
+  no such reader inside muscadet.
+
+### Fixed
+
+- **What muscadet reads back is a document, and it is checked as one.** A
+  mapping keyed by a tuple walked through every per-field gate, because every
+  VALUE under such a key serialises perfectly well, and died at the moment the
+  declaration was written, on a `TypeError` naming a type and neither the
+  component nor the field. `_checked_document` states the guarantee once, on
+  the two read-back entry points, and names the path
+  (`$.components.Rail_1.metadata.instance_overrides`). An integer key is
+  refused too, though `json` accepts it: it comes back a string, so what is
+  read is not what was written.
+- **A declaration rebuilds in any key order.** The key order of a JSON object
+  carries no meaning, and a Rust reader over a `BTreeMap` sorts -- which is
+  exactly the path this declaration exists for. A mode whose `occ_cond` names
+  another mode's state needs that mode to exist at construction, so sorted
+  order put the six referencing modes ahead of the six referenced ones and the
+  rebuild died on a `KeyError` naming nothing. `build_system` now DERIVES the
+  order from what each declaration names, keeping the document's own order
+  wherever the references leave it free. A cycle is refused by the names that
+  form it, from `check_system_spec`, before the first component is created.
+
 ## 5.2.0 (2026-09-09)
 
 muscadet becomes a modelling interface over more than one engine, and says
