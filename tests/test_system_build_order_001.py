@@ -64,7 +64,7 @@ def a_mode(name, target, conditioned_on=None):
     """
     spec = {
         "name": name,
-        "kind": "failure_mode",
+        "kind": "two_state_mode",
         "cls": "ObjFMExp",
         "fm_name": name.split("__")[-1],
         "targets": [target],

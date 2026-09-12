@@ -33,7 +33,7 @@ import pytest
 
 import muscadet
 from muscadet.declare import (
-    COMPONENT_KIND_FAILURE_MODE,
+    COMPONENT_KIND_TWO_STATE_MODE,
     COMPONENT_KIND_KEY,
     ComponentSpecError,
     SystemSpecError,
@@ -160,12 +160,12 @@ print("RESULT " + json.dumps({
     "modes": sorted(
         name
         for name, entry in declared["components"].items()
-        if entry.get("kind") == "failure_mode"
+        if entry.get("kind") == "two_state_mode"
     ),
     "rebuilt_modes": sorted(
         name
         for name, entry in rebuilt["components"].items()
-        if entry.get("kind") == "failure_mode"
+        if entry.get("kind") == "two_state_mode"
     ),
 }))
 """
@@ -391,11 +391,11 @@ def test_the_two_richest_examples_declare_their_failure_modes():
     what they declare is the cascade -- not three components and no attack."""
     assert run_probe(_DECLARE_ONE_EXAMPLE, "cyber_3comp")["kinds"] == {
         "flow": 3,
-        "failure_mode": 3,
+        "two_state_mode": 3,
     }
     assert run_probe(_DECLARE_ONE_EXAMPLE, "power_plant")["kinds"] == {
         "flow": 5,
-        "failure_mode": 5,
+        "two_state_mode": 5,
     }
 
 
@@ -403,7 +403,7 @@ def test_a_model_of_pure_flows_declares_no_mode():
     """The other four are unchanged, key for key: a document that grew a
     section on a model that has none would be a document that moved."""
     for example in ("rbd_kn", "trigger_source", "datacenter_lite", "inverter_chain"):
-        assert "failure_mode" not in run_probe(_DECLARE_ONE_EXAMPLE, example)["kinds"]
+        assert "two_state_mode" not in run_probe(_DECLARE_ONE_EXAMPLE, example)["kinds"]
 
 
 def test_the_document_round_trips_through_its_own_modes():
@@ -598,7 +598,7 @@ def test_a_flowless_object_no_longer_breaks_the_read(the_run):
     mode = the_run["system"].comp["A__single"]
     assert not hasattr(mode, "flows_in")
     spec = component_spec(mode)
-    assert spec[COMPONENT_KIND_KEY] == COMPONENT_KIND_FAILURE_MODE
+    assert spec[COMPONENT_KIND_KEY] == COMPONENT_KIND_TWO_STATE_MODE
     assert spec["cls"] == "ObjFMDelay"
 
 
@@ -614,7 +614,7 @@ def test_a_standalone_mode_gets_its_own_entry(the_run):
         "C__engine",
         "_ind_two_clauses",
     }
-    assert components["A__single"][COMPONENT_KIND_KEY] == COMPONENT_KIND_FAILURE_MODE
+    assert components["A__single"][COMPONENT_KIND_KEY] == COMPONENT_KIND_TWO_STATE_MODE
     assert components["A"].get(COMPONENT_KIND_KEY, "flow") == "flow"
 
 

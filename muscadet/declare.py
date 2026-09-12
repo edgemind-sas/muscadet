@@ -158,12 +158,12 @@ COMPONENT_KEYS = frozenset(
 )
 
 # ---------------------------------------------------------------------------
-# The second shape of a component declaration: a STANDALONE failure mode
+# The second shape of a component declaration: a STANDALONE two-state mode
 # ---------------------------------------------------------------------------
 #
-# A ``system.comp`` is not only made of ``ObjFlow``. A standalone failure mode
-# -- ``system.add_component(cls="ObjFMDelay", fm_name=..., targets=[...])`` --
-# is a PyCATSHOO component of its own, carrying no flow at all, and NOTHING
+# A ``system.comp`` is not only made of ``ObjFlow``. A standalone two-state
+# mode -- ``system.add_component(cls="ObjFMDelay", fm_name=..., targets=[...])``
+# -- is a PyCATSHOO component of its own, carrying no flow at all, and NOTHING
 # else in the system records it: unlike a mode declared ON a component, which
 # ``ObjFlow.declared_failure_modes`` keeps and ``component_spec`` writes into
 # that component's ``failure_modes`` section, a standalone mode leaves no trace
@@ -183,11 +183,17 @@ COMPONENT_KIND_KEY = "kind"
 #: on it. The default, and the shape :data:`COMPONENT_KEYS` describes.
 COMPONENT_KIND_FLOW = "flow"
 
-#: A standalone member of the ``cod3s.ObjFM`` family: no flow, an occurrence
-#: law, and effects it applies to components it NAMES rather than owns.
-COMPONENT_KIND_FAILURE_MODE = "failure_mode"
+#: A TWO-STATE automaton declared as a component of its own: no flow, an
+#: occurrence law, and effects it applies to components it NAMES rather than
+#: owns. It covers the three families :data:`MODE_VOCABULARIES` describes --
+#: ``cod3s.ObjEvent``, the ``cod3s.ObjFM`` family and ``cod3s.ObjMode2S``
+#: itself -- and only the middle one is a failure: an event observes a
+#: condition, an ``ObjMode2S`` is a bare two-state mode. What the kind has to
+#: tell a reader is which constructor to call, so it names the two states the
+#: three share, not the nature of the one that happens to be most common.
+COMPONENT_KIND_TWO_STATE_MODE = "two_state_mode"
 
-COMPONENT_KINDS = (COMPONENT_KIND_FLOW, COMPONENT_KIND_FAILURE_MODE)
+COMPONENT_KINDS = (COMPONENT_KIND_FLOW, COMPONENT_KIND_TWO_STATE_MODE)
 
 #: The two truth functions a mode may compose its condition groups with, named
 #: rather than held. They are callables, so a document cannot carry the
@@ -1007,7 +1013,7 @@ def check_spec(spec):
     get an ObjFlow's key list quoted at a declaration that never claimed to be
     one.
     """
-    if component_kind(spec) == COMPONENT_KIND_FAILURE_MODE:
+    if component_kind(spec) == COMPONENT_KIND_TWO_STATE_MODE:
         return check_failure_mode_spec(spec)
 
     name = _check_keys(spec)
@@ -1035,7 +1041,7 @@ def build_component(system, spec):
     system : muscadet.System
         The system the component is added to.
     spec : dict
-        The declaration. A ``kind`` of :data:`COMPONENT_KIND_FAILURE_MODE`
+        The declaration. A ``kind`` of :data:`COMPONENT_KIND_TWO_STATE_MODE`
         sends it to :func:`build_failure_mode_component`; absent or
         :data:`COMPONENT_KIND_FLOW`, it is an ``ObjFlow``, where ``name`` is
         required, ``cls`` defaults to ``"ObjFlow"``, ``params`` is the
@@ -1063,7 +1069,7 @@ def build_component(system, spec):
     a spec never carries ``partial_init``: a caller who set it would either get
     a component built twice or one never wired to the engine.
     """
-    if component_kind(spec) == COMPONENT_KIND_FAILURE_MODE:
+    if component_kind(spec) == COMPONENT_KIND_TWO_STATE_MODE:
         return build_failure_mode_component(system, spec)
 
     name = check_spec(spec)
@@ -1419,7 +1425,7 @@ def mode_vocabulary(cls, where):
 
     raise ComponentSpecError(
         f"{where}: {getattr(cls, '__name__', cls)!r} is not a mode class a "
-        f"{COMPONENT_KIND_FAILURE_MODE!r} declaration describes. The three it "
+        f"{COMPONENT_KIND_TWO_STATE_MODE!r} declaration describes. The three it "
         f"describes are the cod3s.ObjFM family, spelled failure_*/repair_*, "
         f"cod3s.ObjMode2S itself, spelled occ_*/not_occ_*, and cod3s.ObjEvent, "
         f"spelled with a cond and its comparison"
@@ -1618,7 +1624,7 @@ def failure_mode_component_spec(comp):
 
     spec = {
         "name": comp.basename(),
-        COMPONENT_KIND_KEY: COMPONENT_KIND_FAILURE_MODE,
+        COMPONENT_KIND_KEY: COMPONENT_KIND_TWO_STATE_MODE,
         "cls": type(comp).__name__,
     }
 
@@ -2254,7 +2260,7 @@ def check_system_spec(spec):
         # document says whether they are there. Unchecked, a typo built the
         # whole system and then failed inside cod3s' effect resolution, naming
         # a variable rather than the target that does not exist.
-        if component_kind(comp_spec) == COMPONENT_KIND_FAILURE_MODE:
+        if component_kind(comp_spec) == COMPONENT_KIND_TWO_STATE_MODE:
             unknown = [
                 target
                 for target in comp_spec.get("targets") or []
