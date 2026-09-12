@@ -67,7 +67,15 @@ import re
 import cod3s
 import pydantic
 
+from .capacity import MeasurementOut
 from .common import copy_declaration
+from .obj_ctrl import (
+    CTRL_OUT_BOOL,
+    CTRL_OUT_VALUE,
+    CtrlRepublish,
+    ObjCtrl,
+    build_ctrl_node,
+)
 from .profile import PROFILE_CLASSES, Profile
 from .transfer import TRANSFER_CLASSES, Transfer
 
@@ -111,10 +119,14 @@ CONSTRUCTOR_KEYS = (
 #: component ever carries both them and the flow sections. What this constant
 #: records for them is the ORDER and the two method names, in the one place the
 #: order is written down, so that a bridge reading it places a controller's
-#: sections without forking the sequence. :func:`build_component` owns the
-#: ``ObjFlow`` construction lifecycle and does not build controllers; a spec
-#: carrying a controller section on a component that has no builder for it is
-#: refused BY NAME below rather than crashing on a missing attribute.
+#: sections without forking the sequence. That reading is
+#: :data:`CONTROLLER_SECTIONS`, derived from here rather than restated, and a
+#: controller is built by :func:`build_controller_component` -- in one
+#: constructor call, because ``build_component`` owns the ``ObjFlow``
+#: lifecycle (``partial_init``, ``add_flows``, one ``set_flows()``) that a peer
+#: class does not have. A spec carrying a controller section on a component
+#: that has no builder for it is still refused BY NAME below rather than
+#: crashing on a missing attribute.
 #:
 #: Every one of these runs BEFORE ``set_flows()``. The two sections that run
 #: after it are handled apart, in :data:`POST_SET_FLOWS_SECTIONS`, because they
@@ -193,7 +205,86 @@ COMPONENT_KIND_FLOW = "flow"
 #: three share, not the nature of the one that happens to be most common.
 COMPONENT_KIND_TWO_STATE_MODE = "two_state_mode"
 
-COMPONENT_KINDS = (COMPONENT_KIND_FLOW, COMPONENT_KIND_TWO_STATE_MODE)
+# ---------------------------------------------------------------------------
+# The third shape of a component declaration: a CONTROLLER
+# ---------------------------------------------------------------------------
+#
+# :class:`muscadet.ObjCtrl` is a PEER of ``ObjFlow`` and not a subclass of it
+# (R39): a flow transports a conserved quantity, a controller transports a
+# reading or a signal, and nothing is allocated. It is therefore neither of the
+# two shapes above -- ``issubclass(ObjCtrl, ObjFlow)`` and
+# ``issubclass(ObjCtrl, cod3s.ObjMode2S)`` are both False -- and a system
+# holding one had no declaration at all: the read refused it BY NAME, which was
+# a diagnosis rather than an answer, and left every model that thresholds
+# anything out of reach of an engine reading the document.
+#
+# Skipping it would be the same loss as skipping a standalone mode, and worse
+# in one way: a controller is WIRED, so a document that dropped it would keep
+# the connections naming it and rebuild into a system whose commanded equipment
+# is never told anything, with no order arriving and nothing raised anywhere.
+
+#: A CONTROLLER: observation inputs, boolean or value outputs, and the emission
+#: grammar (R42) each output carries. No flow, no occurrence law, and the two
+#: sections :data:`DECLARATION_SECTIONS` already records the order of.
+COMPONENT_KIND_CONTROLLER = "controller"
+
+COMPONENT_KINDS = (
+    COMPONENT_KIND_FLOW,
+    COMPONENT_KIND_TWO_STATE_MODE,
+    COMPONENT_KIND_CONTROLLER,
+)
+
+#: The sections a controller declaration carries, in the order they are
+#: declared in. DERIVED from :data:`DECLARATION_SECTIONS` and from
+#: ``ObjCtrl.DECLARATION_KEYS`` rather than restated, which is exactly the
+#: reading those two entries were placed for: the order is written down once,
+#: and this module reads it instead of forking it.
+#:
+#: ``tests/test_system_declaration_controller_001.py`` pins the intersection
+#: against ``ObjCtrl.DECLARATION_KEYS``, because a third controller section
+#: added to the class and not to :data:`DECLARATION_SECTIONS` would silently
+#: fall out of this tuple -- and a section a component declares that a document
+#: does not carry is a declaration lost without a trace.
+CONTROLLER_SECTIONS = tuple(
+    section
+    for section, _ in DECLARATION_SECTIONS
+    if section in ObjCtrl.DECLARATION_KEYS
+)
+
+#: Every key a controller declaration may carry.
+CONTROLLER_KEYS = frozenset(
+    (
+        "name",
+        "cls",
+        "label",
+        "description",
+        "metadata",
+        COMPONENT_KIND_KEY,
+        SOURCE_CLS_KEY,
+    )
+    + CONTROLLER_SECTIONS
+)
+
+#: The field of a BOOLEAN output holding the PyCATSHOO variable it writes, and
+#: the one runtime handle of the library that :data:`RUNTIME_FIELD_PREFIXES`
+#: does not catch: ``"var".startswith("var_")`` is False, where its neighbour
+#: ``var_available`` falls through. Named here, and handed to the ``skip``
+#: parameter :func:`_declaration_fields` carries for precisely this, rather
+#: than by either mechanism that looks like the right one:
+#:
+#: - NOT by widening the prefix tuple to ``"var"``, which would swallow every
+#:   declaration field whose name merely begins with those three letters;
+#: - NOT by :data:`DERIVED_EXCLUDED_FIELDS`, which is consulted by field name
+#:   ALONE, without looking at the class. ``var`` carries two opposite meanings
+#:   in this module and the collision is not a future risk: on
+#:   ``CtrlSignalOut`` it is the live engine handle to drop, while a few
+#:   hundred lines below :data:`_INDICATOR_KINDS` makes ``var`` the SUBJECT a
+#:   variable indicator observes, carried in the clear and without which the
+#:   indicator does not rebuild.
+#:
+#: The exclusion therefore stays borne by the class that justifies it, which is
+#: how a capacity's ``serve_cond`` is already handled.
+CTRL_SIGNAL_RUNTIME_FIELDS = ("var",)
 
 #: The two truth functions a mode may compose its condition groups with, named
 #: rather than held. They are callables, so a document cannot carry the
@@ -821,6 +912,64 @@ def _prod_cond_spec(comp, groups, negates, compares):
     return spec
 
 
+def _ctrl_emit_spec(node):
+    """The DECLARATION form of a compiled output grammar (R42).
+
+    The controller-side twin of :func:`_prod_cond_spec`, and it exists for the
+    same reason: ``build_ctrl_node`` RESOLVES a declaration as it reads it. A
+    combination's operands are replaced by the nodes they built -- so a node
+    holds nodes and never the mappings they came from -- and a band left
+    without a release edge has one filled in from its activation level. What
+    the controller then holds is a tree of live pydantic objects, not the
+    declaration it was handed.
+
+    Walked back rather than dumped, deliberately. ``operands`` is typed
+    ``List[Any]`` so that the recursion has one entry point, which leaves its
+    serialisation to pydantic's duck typing; and a dump writes ``k: None`` on
+    every combination that is not a k-of-n, which is a key the grammar carries
+    for one logic alone. Walking the node's own ``operand_nodes()`` costs one
+    function and owes nothing to either.
+
+    A field left at ``None`` is omitted, and that is exact rather than
+    convenient: after validation no node field carries a meaningful ``None``.
+    ``CtrlCombine.k`` is None exactly when the logic is not ``k``, where
+    declaring it is refused; ``CtrlBand.release`` is never None at all, the
+    validator having replaced it by the activation level. So the walk writes
+    both band edges every time, which is what makes the round trip stable.
+
+    Parameters
+    ----------
+    node : muscadet.CtrlNode or None
+        What the output emits, or ``None`` for an output nothing computes and
+        whose value is written by hand.
+
+    Returns
+    -------
+    dict or None
+        A mapping ``add_control_out`` accepts under ``emit``.
+    """
+    if node is None:
+        return None
+
+    fields = type(node).model_fields
+
+    spec = {}
+    for key in fields:
+        if key == "operands":
+            continue
+        value = getattr(node, key, None)
+        if value is None:
+            continue
+        spec[key] = value
+
+    if "operands" in fields:
+        spec["operands"] = [
+            _ctrl_emit_spec(operand) for operand in node.operand_nodes()
+        ]
+
+    return spec
+
+
 def _declaration_fields(obj, where, skip=()):
     """The declaration fields of one pydantic declaration object.
 
@@ -1009,12 +1158,17 @@ def check_spec(spec):
     carries.
 
     Dispatches on :func:`component_kind`, so the caller validating a batch does
-    not have to sort the two shapes itself -- and, more to the point, does not
-    get an ObjFlow's key list quoted at a declaration that never claimed to be
-    one.
+    not have to sort the three shapes itself -- and, more to the point, does
+    not get an ObjFlow's key list quoted at a declaration that never claimed to
+    be one.
     """
-    if component_kind(spec) == COMPONENT_KIND_TWO_STATE_MODE:
+    kind = component_kind(spec)
+
+    if kind == COMPONENT_KIND_TWO_STATE_MODE:
         return check_failure_mode_spec(spec)
+
+    if kind == COMPONENT_KIND_CONTROLLER:
+        return check_controller_spec(spec)
 
     name = _check_keys(spec)
 
@@ -1042,7 +1196,9 @@ def build_component(system, spec):
         The system the component is added to.
     spec : dict
         The declaration. A ``kind`` of :data:`COMPONENT_KIND_TWO_STATE_MODE`
-        sends it to :func:`build_failure_mode_component`; absent or
+        sends it to :func:`build_failure_mode_component` and one of
+        :data:`COMPONENT_KIND_CONTROLLER` to
+        :func:`build_controller_component`; absent or
         :data:`COMPONENT_KIND_FLOW`, it is an ``ObjFlow``, where ``name`` is
         required, ``cls`` defaults to ``"ObjFlow"``, ``params`` is the
         declaration of the named class itself -- ``rate``, ``capacity``,
@@ -1069,8 +1225,13 @@ def build_component(system, spec):
     a spec never carries ``partial_init``: a caller who set it would either get
     a component built twice or one never wired to the engine.
     """
-    if component_kind(spec) == COMPONENT_KIND_TWO_STATE_MODE:
+    kind = component_kind(spec)
+
+    if kind == COMPONENT_KIND_TWO_STATE_MODE:
         return build_failure_mode_component(system, spec)
+
+    if kind == COMPONENT_KIND_CONTROLLER:
+        return build_controller_component(system, spec)
 
     name = check_spec(spec)
     clsname = spec.get("cls", "ObjFlow")
@@ -1204,20 +1365,21 @@ def component_spec(comp):
     ==================================  ======================================
     ``muscadet.ObjFlow``                :func:`flow_component_spec`
     ``cod3s.ObjMode2S`` and subclasses  :func:`failure_mode_component_spec`
+    ``muscadet.ObjCtrl``                :func:`controller_component_spec`
     anything else                       refused, by name
     ==================================  ======================================
 
-    **The refusal is the point of the third row.** Iterating ``flows_in`` on
+    **The refusal is the point of the last row.** Iterating ``flows_in`` on
     whatever a system happens to hold reported an ``AttributeError`` naming a
     class the caller never wrote down, from inside a dict comprehension, before
     any engine saw anything -- which is exactly what a document checked on the
     way out exists to avoid. A component muscadet has no declaration form for
-    says so, and says which one it is. ``cod3s.ObjDegMode`` is in that third
+    says so, and says which one it is. ``cod3s.ObjDegMode`` is in that last
     row today, deliberately: see :data:`MODE_VOCABULARIES`.
 
     Parameters
     ----------
-    comp : muscadet.ObjFlow or cod3s.ObjMode2S
+    comp : muscadet.ObjFlow, cod3s.ObjMode2S or muscadet.ObjCtrl
 
     Returns
     -------
@@ -1233,16 +1395,27 @@ def component_spec(comp):
     if isinstance(comp, cod3s.ObjMode2S):
         return failure_mode_component_spec(comp)
 
+    # Before the flow test rather than after it, though the two cannot both
+    # answer: an ``ObjCtrl`` is a PEER of ``ObjFlow`` (R39) and carries no flow
+    # collection at all. Read on what the object IS, so a subclass of it that
+    # happened to grow a ``flows_in`` would still be declared as the controller
+    # it is, rather than through a collection that describes none of its
+    # interfaces.
+    if isinstance(comp, ObjCtrl):
+        return controller_component_spec(comp)
+
     if hasattr(comp, "flows_in") and hasattr(comp, "flows_out"):
         return flow_component_spec(comp)
 
     raise ComponentSpecError(
         f"Component {comp.basename()} is of class {type(comp).__name__}, which "
         f"no component declaration describes. A declaration is written for an "
-        f"ObjFlow, which is read from its flows, or for a standalone mode of "
-        f"the cod3s.ObjMode2S family, which is read from its occurrence law "
-        f"and its effects. Keep this component out of a system whose "
-        f"declaration has to leave muscadet, or give its kind a declaration form"
+        f"ObjFlow, which is read from its flows; for a standalone mode of the "
+        f"cod3s.ObjMode2S family, which is read from its occurrence law and "
+        f"its effects; or for an ObjCtrl, which is read from its observation "
+        f"inputs and the grammar its outputs emit. Keep this component out of "
+        f"a system whose declaration has to leave muscadet, or give its kind a "
+        f"declaration form"
     )
 
 
@@ -1830,6 +2003,280 @@ def build_failure_mode_component(system, spec):
 
 
 # ---------------------------------------------------------------------------
+# The CONTROLLER: read, checked, and built in one constructor call
+# ---------------------------------------------------------------------------
+
+
+def controller_component_spec(comp):
+    """Read a live :class:`muscadet.ObjCtrl` back into a declaration.
+
+    Two sections and nothing else, in the order
+    :data:`CONTROLLER_SECTIONS` derives from :data:`DECLARATION_SECTIONS`: the
+    observation inputs, then the outputs with the grammar each emits (R42).
+    Everything else a controller holds -- the automata its grammar compiled to,
+    the crossing automata of an aggregating input, the threshold variables, the
+    forcing and blinding endpoints -- is DERIVED from those two sections and is
+    rebuilt by them, exactly as an ``ObjFlow``'s derived automata are.
+
+    Read on ``ObjCtrl`` rather than on a subclass of it
+    --------------------------------------------------
+    ``cls`` is written as ``ObjCtrl`` and the class actually read is kept under
+    :data:`SOURCE_CLS_KEY`, which is the arbitration
+    :func:`flow_component_spec` already makes for an ``ObjFlow``. Here it is
+    more than a convention: a subclass declaring its own interfaces does so in
+    its constructor, so rebuilding as that subclass AND handing it the sections
+    read back would declare every interface twice, and ``ObjCtrl.claim_name``
+    would refuse the second. Expanding onto the peer class is the shape that
+    rebuilds.
+
+    Two translations the read makes, and why each is not a dump
+    -----------------------------------------------------------
+    * an input's aggregation. The interface says ``aggregate`` and the
+      measurement channel underneath says ``combine``; ``add_control_in``
+      translates one into the other, and this translates it back. Left as
+      ``combine``, the rebuild is refused by name -- the channel's own two keys
+      are deliberately kept out of a controller declaration (R40);
+    * a republication's gain. ``emit_gain_params`` folds it into
+      ``gain_default``, which is the initial value of ``{name}_level_gain``:
+      ONE number, ONE spelling, and ``add_control_out`` REFUSES a declaration
+      carrying both. Written back unfiltered, a controller that builds today
+      would refuse to rebuild from its own declaration.
+
+    What is NOT read back
+    ---------------------
+    A threshold tuned by writing its variable after the build
+    (``comp.variable("run_threshold").setValue(2.0)``, R44) is engine state and
+    not a declaration, so it is no more read here than any other variable
+    written by hand. Nothing is lost on the path this exists for: the COD3S
+    Platform importer folds an instance's threshold overrides into the emission
+    grammar at the PARSE layer, so what the node holds is already the tuned
+    value.
+
+    Parameters
+    ----------
+    comp : muscadet.ObjCtrl
+
+    Returns
+    -------
+    dict
+        A spec :func:`build_component` accepts.
+
+    Raises
+    ------
+    ComponentSpecError
+        When a declaration holds something no mapping can carry.
+    """
+    where = f"Controller {comp.basename()}"
+
+    controls_in = []
+    for iface_name, channel in comp.controls_in.items():
+        fields = _declaration_fields(channel, f"{where}, input {iface_name}")
+        fields.pop("cls", None)
+        name = fields.pop("name", iface_name)
+        aggregate = fields.pop("combine", None)
+        controls_in.append({"name": name, **fields, "aggregate": aggregate})
+
+    controls_out = []
+    for iface_name, interface in comp.controls_out.items():
+        node = comp.controls_emit.get(iface_name)
+        fields = _declaration_fields(
+            interface,
+            f"{where}, output {iface_name}",
+            skip=CTRL_SIGNAL_RUNTIME_FIELDS,
+        )
+        fields.pop("cls", None)
+        name = fields.pop("name", iface_name)
+
+        if isinstance(interface, MeasurementOut):
+            kind = CTRL_OUT_VALUE
+
+            # A publication's SOURCE names the capacity it reads, and a
+            # controller has none: what a value output publishes comes from its
+            # grammar, which is why ``CONTROL_OUT_VALUE_KEYS`` leaves the key
+            # out. It is None on every controller output there is -- no door
+            # sets it -- and writing it back would be refused by name at the
+            # rebuild.
+            fields.pop("source", None)
+
+            if isinstance(node, CtrlRepublish):
+                fields.pop("gain_default", None)
+        else:
+            kind = CTRL_OUT_BOOL
+
+        entry = {"name": name, "kind": kind, **fields}
+
+        emit = _ctrl_emit_spec(node)
+        if emit is not None:
+            entry["emit"] = emit
+
+        controls_out.append(entry)
+
+    read = {"controls_in": controls_in, "controls_out": controls_out}
+
+    spec = _as_data(
+        {
+            "name": comp.basename(),
+            COMPONENT_KIND_KEY: COMPONENT_KIND_CONTROLLER,
+            "cls": "ObjCtrl",
+            SOURCE_CLS_KEY: type(comp).__name__,
+            **{section: read[section] for section in CONTROLLER_SECTIONS},
+        }
+    )
+
+    # Same rule as the other two shapes: written only when it says something.
+    # ``label`` defaults to the name and ``description`` to the label, so
+    # emitting them unconditionally would fill every spec with its own name
+    # twice. ``metadata`` is where the platform importer attaches what it knows
+    # about the instance, the threshold overrides it applied included.
+    if comp.label != comp.basename():
+        spec["label"] = comp.label
+    if comp.description != comp.label:
+        spec["description"] = comp.description
+    if comp.metadata:
+        spec["metadata"] = _checked_declaration(comp.metadata, f"{where}, metadata")
+
+    return _checked_document(spec, f"controller {comp.basename()}")
+
+
+def check_controller_spec(spec):
+    """Validate a controller declaration without building anything, and name it.
+
+    The counterpart of :func:`check_spec` for the third shape a component
+    declaration takes. Same contract: everything checkable from the mapping
+    alone, before anything is built.
+
+    The emission grammar is part of that, and it is what makes this worth
+    more than a key list. ``build_ctrl_node`` is PURE -- it refuses an unknown
+    operator, an inverted band, an empty combination, a ``k`` beside an ``or``,
+    a Python callable -- so a batch of declarations is sorted without raising a
+    system. ``ObjCtrl.__init__`` walks it again before calling the engine
+    constructor, so the refusal is the same one either way; what changes is
+    only how early it arrives, and that it arrives as a
+    :class:`ComponentSpecError` like every other refusal of this module rather
+    than as the bare ``ValueError`` the grammar raises.
+    """
+    if not isinstance(spec, dict):
+        raise ComponentSpecError(
+            f"a controller declaration is a mapping, got {type(spec).__name__}"
+        )
+
+    name = spec.get("name")
+    if not name or not isinstance(name, str):
+        raise ComponentSpecError(f"Controller declaration without a 'name': {spec!r}")
+
+    unknown = sorted(set(spec) - CONTROLLER_KEYS)
+    if unknown:
+        plural = "s" if len(unknown) > 1 else ""
+        raise ComponentSpecError(
+            f"Controller {name}: unknown declaration key{plural} "
+            f"{', '.join(repr(key) for key in unknown)}; it accepts "
+            f"{', '.join(sorted(CONTROLLER_KEYS))}"
+        )
+
+    for section in CONTROLLER_SECTIONS:
+        for entry in _entries(spec, section, name):
+            if not isinstance(entry, dict):
+                raise ComponentSpecError(
+                    f"Controller {name}: every entry of section {section!r} is "
+                    f"a mapping, got {type(entry).__name__}"
+                )
+
+            iface_name = entry.get("name")
+            if not iface_name or not isinstance(iface_name, str):
+                raise ComponentSpecError(
+                    f"Controller {name}: an entry of section {section!r} "
+                    f"carries no 'name'. An interface name is what an output "
+                    f"grammar names its input by and what a connection reaches "
+                    f"its message box through, so an unnamed one is reachable "
+                    f"by nothing"
+                )
+
+            if section != "controls_out":
+                continue
+
+            try:
+                build_ctrl_node(
+                    f"Controller {name}: output {iface_name!r} emit",
+                    entry.get("emit"),
+                )
+            except ValueError as error:
+                raise ComponentSpecError(str(error)) from error
+
+    return name
+
+
+def build_controller_component(system, spec):
+    """Build one controller from a declaration held in data.
+
+    The constructor is the whole of the build, as it is for a standalone mode
+    and for the same reason: a controller has no ``set_flows()``, so it carries
+    none of the ordering that makes :func:`build_component` what it is. It owns
+    the ``ObjFlow`` lifecycle (``partial_init``, ``add_flows``, one
+    ``set_flows()``) that a PEER class does not have, which is why a controller
+    is built here rather than there -- ``ObjLogicGate`` stands outside it for
+    exactly the same reason.
+
+    What this does read from :data:`DECLARATION_SECTIONS`, through
+    :data:`CONTROLLER_SECTIONS`, is WHICH sections a controller carries. The
+    order between them is then the constructor's own: ``ObjCtrl.__init__``
+    declares every input before every output, because an output's grammar names
+    an input and the name has to resolve.
+
+    Parameters
+    ----------
+    system : muscadet.System
+    spec : dict
+        A declaration of kind :data:`COMPONENT_KIND_CONTROLLER`.
+
+    Returns
+    -------
+    muscadet.ObjCtrl
+
+    Raises
+    ------
+    ComponentSpecError
+        For a missing ``name``, an unknown key, a section that is not a list of
+        named mappings, an emission grammar the closed operator list does not
+        carry, or a name the system already holds.
+    """
+    name = check_controller_spec(spec)
+    clsname = spec.get("cls", "ObjCtrl")
+
+    # ``copy_declaration`` rather than the mapping itself: a spec is data the
+    # caller keeps and may build twice, and ``add_control_in`` hands its
+    # entries to a pydantic constructor that keeps what it is given.
+    sections = {
+        section: [copy_declaration(entry) for entry in _entries(spec, section, name)]
+        for section in CONTROLLER_SECTIONS
+    }
+
+    comp = system.add_component(
+        cls=clsname,
+        name=name,
+        label=spec.get("label"),
+        description=spec.get("description"),
+        metadata=spec.get("metadata", {}),
+        **sections,
+    )
+
+    # ``cod3s.PycSystem.add_component`` WARNS on a name the system already
+    # holds and returns None, so a caller reading the result back would get
+    # ``'NoneType' object has no attribute ...`` naming neither the spec nor
+    # the name that collided. Same refusal as :func:`build_component`, for the
+    # same input: a duplicate instance name is the likeliest defect of a
+    # platform export or a generated study.
+    if comp is None:
+        raise ComponentSpecError(
+            f"Controller {name}: the system already holds a component of that "
+            f"name. A declaration builds a NEW controller; give this one a "
+            f"distinct 'name', or read the existing one back with "
+            f"component_spec"
+        )
+
+    return comp
+
+
+# ---------------------------------------------------------------------------
 # The SYSTEM scale: what a component declaration cannot carry
 # ---------------------------------------------------------------------------
 
@@ -1913,10 +2360,24 @@ def system_connections(system):
     by any route reads back the same way.
 
     Each entry carries the two message boxes, and ``flow`` when the pair
-    follows the ``{flow}_out`` / ``{flow}_in`` convention. That name is not
-    decoration: rebuilding through :meth:`System.connect_flow` re-runs the
-    family check that refuses a discrete output feeding a continuous input,
-    which the raw ``connect`` route does not.
+    follows the ``{flow}_out`` / ``{flow}_in`` convention AND that name really
+    names a flow on both ends. That name is not decoration: rebuilding through
+    :meth:`System.connect_flow` re-runs the family check that refuses a
+    discrete output feeding a continuous input, which the raw ``connect`` route
+    does not.
+
+    **The box names alone are not enough to claim it, and that is measured.**
+    A MEASUREMENT link follows the same convention by construction -- a
+    capacity publishes a level on ``{name}_level_out`` and a channel imports it
+    on ``{name}_level_in`` -- so a channel named ``tank`` was written out with
+    ``flow: "tank_level"``, a flow nothing declares. ``connect_flow`` then
+    indexes ``flows_out["tank_level"]`` for its authorization check and the
+    rebuild died on a bare ``KeyError``; on a controller, whose ONLY wires are
+    measurement links and whose class carries no flow collection at all (R39),
+    it died one line earlier on ``'ObjCtrl' object has no attribute
+    'flows_in'``. Asking the two components what they actually hold is what
+    tells the two conventions apart, and it is what sends a measurement link
+    back down the raw ``connect`` route the README prescribes for it.
     """
     components = getattr(system, "comp", None) or {}
     by_engine_name = {}
@@ -1927,6 +2388,7 @@ def system_connections(system):
     out = []
     for key, comp in components.items():
         info = comp.get_cnct_info() or {}
+        flows_out = getattr(comp, "flows_out", None) or {}
         for source_box, box_info in info.items():
             if not str(source_box).endswith("_out"):
                 continue
@@ -1940,7 +2402,12 @@ def system_connections(system):
                     "target_box": target_box,
                 }
                 flow = str(source_box)[: -len("_out")]
-                if str(target_box) == f"{flow}_in":
+                flows_in = getattr(components.get(target_key), "flows_in", None) or {}
+                if (
+                    str(target_box) == f"{flow}_in"
+                    and flow in flows_out
+                    and flow in flows_in
+                ):
                     entry["flow"] = flow
                 out.append(entry)
     return sorted(
@@ -1979,10 +2446,11 @@ def system_spec(system):
     :func:`component_spec`. What it adds over reading each component is the
     part no component knows: how they are wired, and what is observed.
 
-    ``components`` holds every component of the system, of either kind: the
-    ``ObjFlow`` components AND the standalone failure modes, which are
-    components in their own right and are described nowhere else. Each entry
-    says which it is (:data:`COMPONENT_KIND_KEY`).
+    ``components`` holds every component of the system, whatever its kind: the
+    ``ObjFlow`` components, the standalone two-state modes, and the
+    controllers. The last two are components in their own right and are
+    described nowhere else, so dropping either would not lose decoration but
+    the model. Each entry says which it is (:data:`COMPONENT_KIND_KEY`).
 
     Deliberately NOT included: targets and simulation parameters. Those are the
     configuration of a RUN, handed to ``simulate()``, not the description of a
