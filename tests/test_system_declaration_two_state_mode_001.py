@@ -33,6 +33,7 @@ import pytest
 
 import muscadet
 from muscadet.declare import (
+    COMPONENT_KIND_CONTROLLER,
     COMPONENT_KIND_TWO_STATE_MODE,
     COMPONENT_KIND_KEY,
     ComponentSpecError,
@@ -549,13 +550,19 @@ def the_run():
 
     spec = system_spec(system)
 
+    # Not undeclarable -- it has a form of its own now -- but built here all the
+    # same, and after the document was read: one live system per process is the
+    # constraint, and what this module still asks of it is the one claim it
+    # owns, that the read does not refuse it. What it DECLARES is pinned in
+    # tests/test_system_declaration_controller_001.py.
+    controller = system.add_component(
+        name="CTRL",
+        cls="ObjCtrl",
+        controls_in=[{"name": "level"}],
+        controls_out=[{"name": "go", "kind": "bool"}],
+    )
+
     undeclarable = {
-        "controller": system.add_component(
-            name="CTRL",
-            cls="ObjCtrl",
-            controls_in=[{"name": "level"}],
-            controls_out=[{"name": "go", "kind": "bool"}],
-        ),
         "naming_function": system.add_component(
             cls="ObjFMDelay",
             fm_name="named",
@@ -586,7 +593,12 @@ def the_run():
         ),
     }
 
-    yield {"system": system, "spec": spec, "undeclarable": undeclarable}
+    yield {
+        "system": system,
+        "spec": spec,
+        "undeclarable": undeclarable,
+        "controller": controller,
+    }
 
 
 def test_a_flowless_object_no_longer_breaks_the_read(the_run):
@@ -707,12 +719,22 @@ def test_it_validates_without_building(the_run):
 # ---------------------------------------------------------------------------
 
 
-def test_a_component_of_an_undeclared_kind_is_refused_by_name(the_run):
-    """The class the ticket asks about in general: not an ObjFlow, not an
-    ObjFM. Refused by a message naming the class, never by an AttributeError
-    from inside a dict comprehension."""
-    with pytest.raises(ComponentSpecError, match="ObjCtrl"):
-        component_spec(the_run["undeclarable"]["controller"])
+def test_the_controller_that_stood_here_declares_itself_now(the_run):
+    """``ObjCtrl`` was this module's sample of "a class no declaration
+    describes", and it is one no longer.
+
+    The rule the sample stood for is unchanged and still pinned: a component
+    muscadet has no form for is refused by a message naming its class, never by
+    an ``AttributeError`` from inside a dict comprehension. What moved is which
+    class plays it -- ``test_a_multi_state_mode_is_refused_by_name`` holds it
+    with ``ObjDegMode`` -- because a controller is now a component kind of its
+    own. What it declares is pinned in
+    ``tests/test_system_declaration_controller_001.py``; the claim here is
+    narrower and is the one this module owns: the read no longer refuses it.
+    """
+    spec = component_spec(the_run["controller"])
+
+    assert spec[COMPONENT_KIND_KEY] == COMPONENT_KIND_CONTROLLER
 
 
 def test_a_live_object_inside_a_mode_is_refused_by_its_field(the_run):
