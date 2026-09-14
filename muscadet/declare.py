@@ -2501,7 +2501,11 @@ def build_controller_component(system, spec):
 #: muscadet read one number out of them and a reader of the typed law read
 #: another. A document that said one thing yesterday says the same thing
 #: today and builds the same system.
-SYSTEM_SPEC_VERSION = "1.0.0"
+#:
+#: 1.0.1 adds ``transmits`` on a capacity, which carries a default: a reader
+#: that ignores the key behaves exactly as it did at 1.0.0, and a 1.0.0
+#: document rebuilds here unchanged, its capacities taking the default.
+SYSTEM_SPEC_VERSION = "1.0.1"
 
 #: What an indicator declaration carries. Read back concretely rather than as
 #: the pattern the modeller typed: ``add_indicator`` takes regexes and expands

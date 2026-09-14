@@ -2328,14 +2328,21 @@ def _check_discharge_is_reachable(
         if held & (set(index.outputs) | consumed):
             continue
 
+        # The subject is built from what was declared, so the verb and the
+        # last clause agree with it: a message naming one key said
+        # "serve_rate govern" from the day it was written. Two keys is the
+        # most this list holds, and the muscadet-side twin of this refusal
+        # (``CapacityContinuous``) lists the same two, so ``" and ".join`` is
+        # the right join on both sides.
+        alone = len(declared) == 1
         raise Cod3sPlatformImportError(
             f"Class {class_name!r}, capacity {capacity.name!r}: "
-            f"{' and '.join(declared)} govern what a volume RELEASES, and "
-            f"nothing draws from this one -- it holds "
+            f"{' and '.join(declared)} govern{'s' if alone else ''} what a "
+            f"volume RELEASES, and nothing draws from this one -- it holds "
             f"{sorted(held)}, none of which is an output of the class nor "
             f"consumed by a rule set, so the declaration would never be read. "
             f"Declare the flow on the output side too, consume it in a rule "
-            f"set, or drop the field."
+            f"set, or drop the field{'' if alone else 's'}."
         )
 
 
@@ -4606,7 +4613,61 @@ def _rule_operand_kwargs(operand: RuleOperandSpec) -> Dict[str, Any]:
     return kwargs
 
 
-def _capacity_kwargs(capacity: CapacitySpec) -> Dict[str, Any]:
+def _capacity_transmits(
+    capacity: CapacitySpec,
+    *,
+    index: _FlowIndex,
+    rule_sets: Tuple[RuleSetSpec, ...],
+) -> bool:
+    """Whether the volume passes on what it does not hold back.
+
+    DERIVED and not read off the payload: the platform declares a capacity by
+    its volume, its side and its held flows, and nothing there says it. It does
+    not have to, because the class already says it twice over -- through the
+    interfaces it carries and through the rules it declares -- and this reads
+    the answer off those rather than asking the platform for a key it would
+    have to invent.
+
+    A volume transits when what it holds both ARRIVES and LEAVES, by the routes
+    the production sweep honours, which are the ones
+    :func:`_check_discharge_is_reachable` already enumerates for the way out:
+
+    * it arrives if the flow is an INPUT of the class, or a rule PRODUCES it
+      into an output-side volume;
+    * it leaves if the flow is an OUTPUT of the class, so that the identity
+      transfer (R31) carries it across, or a rule CONSUMES it.
+
+    Answered per capacity because ``Capacity.transmits`` is per capacity, so
+    ONE held flow with a through-path is enough: declaring False would tell a
+    reading engine to drop a path that exists, while the True it gets instead
+    costs nothing on the other constituents -- the empty branch bounds itself
+    by what arrives, which for a flow that arrives nowhere is zero.
+
+    Without this, ``CapacityContinuous(ports="out")`` and the imported
+    equivalent of the same battery came out of the document disagreeing: the
+    shipped class derives False from its ports, and an importer leaving the key
+    to its default wrote True on a volume nothing feeds.
+    """
+    produced = {
+        name for rule_set in rule_sets for rule in rule_set.rules for name in rule.prod
+    }
+    consumed = {
+        name for rule_set in rule_sets for rule in rule_set.rules for name in rule.cons
+    }
+
+    return any(
+        (held.name in index.inputs or held.name in produced)
+        and (held.name in index.outputs or held.name in consumed)
+        for held in capacity.flows
+    )
+
+
+def _capacity_kwargs(
+    capacity: CapacitySpec,
+    *,
+    index: _FlowIndex,
+    rule_sets: Tuple[RuleSetSpec, ...],
+) -> Dict[str, Any]:
     """Declaration kwargs of one capacity, as ``ObjFlow.add_capacity`` takes them.
 
     ``volume`` becomes ``capacity``: the platform names the quantity, muscadet
@@ -4614,6 +4675,11 @@ def _capacity_kwargs(capacity: CapacitySpec) -> Dict[str, Any]:
     muscadet resolve it from the sides the held flows are carried on,
     ``fill_rate`` left out keeps the pure-buffer default, and ``serve_rate``
     left out keeps the unbounded ceiling.
+
+    ``transmits`` is the exception and is always passed, because it is the one
+    key the payload does not carry and this bridge derives: see
+    :func:`_capacity_transmits` for what it is read off and why it cannot be
+    left to its default.
 
     The discharge command is emitted in the operand mapping form, through the
     very function a rule guard's operands go through, so a shape tightened on
@@ -4625,6 +4691,7 @@ def _capacity_kwargs(capacity: CapacitySpec) -> Dict[str, Any]:
             {"name": held.name, "weight": held.weight} for held in capacity.flows
         ],
         "capacity": capacity.volume,
+        "transmits": _capacity_transmits(capacity, index=index, rule_sets=rule_sets),
     }
     if capacity.side is not None:
         kwargs["side"] = capacity.side
@@ -4676,7 +4743,12 @@ def _declaration_entries(spec: ComponentSpec) -> Dict[str, List[Dict[str, Any]]]
     the day the platform exports them.
     """
     return {
-        "capacities": [_capacity_kwargs(capacity) for capacity in spec.capacities],
+        "capacities": [
+            _capacity_kwargs(
+                capacity, index=_FlowIndex(spec.flows), rule_sets=spec.rule_sets
+            )
+            for capacity in spec.capacities
+        ],
         "rules": [_rule_set_kwargs(rule_set) for rule_set in spec.rule_sets],
     }
 
