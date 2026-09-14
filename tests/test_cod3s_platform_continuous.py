@@ -1858,6 +1858,29 @@ class TestDischargeOnAVolumeWithNoWayOut:
         message = str(excinfo.value)
         assert "hopper" in message
         assert next(iter(extra)) in message
+        # The subject is built from what was declared, so the verb agrees with
+        # it: one key names one thing, and this message said "serve_rate
+        # govern" from the day it was written.
+        assert f"{next(iter(extra))} governs what a volume RELEASES" in message
+        assert message.endswith("or drop the field.")
+
+    def test_two_declared_keys_are_both_named_and_the_verb_follows(self):
+        # The other half of the agreement, and the most this list can hold:
+        # the muscadet-side twin of this refusal reaches three keys and needs
+        # an enumeration, where two are still joined by "and".
+        payload = _accumulator_payload(
+            "Macc_inert_both",
+            capacity_extra={"serve_rate": 40.0, "serve_cond": [["H2"]]},
+        )
+        with pytest.raises(Cod3sPlatformImportError) as excinfo:
+            _build_kb_rule_sets(
+                payload["kb"],
+                _build_kb_lookup(payload["kb"]),
+                _build_kb_capacities(payload["kb"], _build_kb_lookup(payload["kb"])),
+            )
+        message = str(excinfo.value)
+        assert "serve_rate and serve_cond govern what a volume RELEASES" in message
+        assert message.endswith("or drop the fields.")
 
     def test_a_rule_consuming_the_held_flow_is_a_way_out(self):
         # R48: both sides honour the ceiling, a hopper releasing into its rules

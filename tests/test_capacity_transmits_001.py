@@ -143,6 +143,51 @@ def run_explicit_override(obs):
         system.deleteSys()
 
 
+#: Every way the accumulator refusal can be built, and what its subject must
+#: read like. The message names the OFFENDING keys, so its subject varies with
+#: what was declared where it used to be a fixed pair.
+#:
+#: ``serve_cond`` names no port here on purpose: the refusal fires before the
+#: condition is resolved, which is what lets the third key join the list
+#: without a control port having to exist.
+CT_REFUSALS = (
+    ("one", dict(transmits=True), "transmits governs what"),
+    ("ceiling", dict(serve_rate=40.0), "serve_rate governs what"),
+    (
+        "two",
+        dict(serve_rate=40.0, transmits=True),
+        "serve_rate and transmits govern what",
+    ),
+    (
+        "three",
+        dict(serve_rate=40.0, serve_cond=["cmd"], transmits=True),
+        "serve_rate, serve_cond and transmits govern what",
+    ),
+)
+
+
+def run_refusal_wordings(obs):
+    """The four sentences the refusal builds, collected verbatim."""
+    system = muscadet.System(name="CtRefusalWordings")
+    try:
+        for index, (label, extra, _) in enumerate(CT_REFUSALS):
+            try:
+                system.add_component(
+                    name=f"ACC{index}",
+                    cls="CapacityContinuous",
+                    flow="q",
+                    capacity=CT_VOLUME,
+                    capacity_name="acc",
+                    ports="in",
+                    **extra,
+                )
+                obs[f"refusal_{label}"] = None
+            except ValueError as err:
+                obs[f"refusal_{label}"] = str(err)
+    finally:
+        system.deleteSys()
+
+
 def run_buffered_scenario(obs):
     """The montage driven, its document taken, both recorded."""
     system = build_buffered_system("CtBuffered")
@@ -208,6 +253,7 @@ def the_run():
 
     run_derivation(obs)
     run_explicit_override(obs)
+    run_refusal_wordings(obs)
     run_buffered_scenario(obs)
     run_round_trip(obs)
 
@@ -269,6 +315,31 @@ def test_transit_declared_on_a_volume_with_no_way_out_is_refused(the_run):
     assert "transmits" in str(error)
     assert "releases nothing" in str(error)
     assert "ports='both'" in str(error)
+
+
+def test_the_refusal_reads_as_a_sentence_whatever_it_names(the_run):
+    """Naming the offender made the subject vary, so the rest of it follows.
+
+    The message was FIXED while it listed the two keys it knew, and therefore
+    always plural and always right. Built from what was actually declared, it
+    said "serve_rate govern" on one key, and "a and b and c" on three -- a
+    list pretending to be a conjunction. A refusal a modeller reads is prose.
+    """
+    for label, _, subject in CT_REFUSALS:
+        message = the_run[f"refusal_{label}"]
+
+        assert message is not None, f"{label}: nothing was refused"
+        assert subject in message, f"{label}: {message}"
+        assert " and serve_cond and " not in message, f"{label}: stutters"
+
+    # The pronoun agrees too, and the offending keys are repeated at the end
+    # in the same enumeration, which is where the reader is told what to drop.
+    assert "would ever read it." in the_run["refusal_one"]
+    assert the_run["refusal_one"].endswith("drop transmits")
+    assert "would ever read them." in the_run["refusal_three"]
+    assert the_run["refusal_three"].endswith(
+        "drop serve_rate, serve_cond and transmits"
+    )
 
 
 # ----------------------------------------------------------------------

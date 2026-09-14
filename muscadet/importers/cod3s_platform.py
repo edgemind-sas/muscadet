@@ -2328,14 +2328,21 @@ def _check_discharge_is_reachable(
         if held & (set(index.outputs) | consumed):
             continue
 
+        # The subject is built from what was declared, so the verb and the
+        # last clause agree with it: a message naming one key said
+        # "serve_rate govern" from the day it was written. Two keys is the
+        # most this list holds, where ``" and ".join`` is the right join --
+        # the muscadet-side twin of this refusal reaches three and needs an
+        # enumeration of its own (``muscadet.kb.continuous.and_list``).
+        alone = len(declared) == 1
         raise Cod3sPlatformImportError(
             f"Class {class_name!r}, capacity {capacity.name!r}: "
-            f"{' and '.join(declared)} govern what a volume RELEASES, and "
-            f"nothing draws from this one -- it holds "
+            f"{' and '.join(declared)} govern{'s' if alone else ''} what a "
+            f"volume RELEASES, and nothing draws from this one -- it holds "
             f"{sorted(held)}, none of which is an output of the class nor "
             f"consumed by a rule set, so the declaration would never be read. "
             f"Declare the flow on the output side too, consume it in a rule "
-            f"set, or drop the field."
+            f"set, or drop the field{'' if alone else 's'}."
         )
 
 

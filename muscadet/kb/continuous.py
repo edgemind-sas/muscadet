@@ -106,6 +106,26 @@ def allocation_params(kwargs):
     return {key: kwargs[key] for key in ALLOCATION_KEYS if key in kwargs}
 
 
+def and_list(names):
+    """``a``, ``a and b``, ``a, b and c``: an enumeration a sentence can carry.
+
+    ``" and ".join`` reads as a conjunction up to two terms and as a stutter
+    past them, and the accumulator refusal below reached three the day
+    ``transmits`` joined the two keys it already named.
+
+    Local rather than shared with the platform importer, which builds the
+    same sentence about the same volume: its parse layer imports no muscadet
+    by design -- ``muscadet.common`` would pull PyCATSHOO into a layer that
+    runs without it -- so it restates what it needs, as it already does for
+    ``CONTROL_AGGREGATIONS``. Its own list stops at two keys, where the join
+    is right.
+    """
+    names = list(names)
+    if len(names) < 3:
+        return " and ".join(names)
+    return f"{', '.join(names[:-1])} and {names[-1]}"
+
+
 class ContinuousComponent(muscadet.ObjFlow):
     """Shared base of the shipped components: a CHECKED declaration.
 
@@ -540,12 +560,18 @@ class CapacityContinuous(ContinuousComponent):
         ]
 
         if ports == "in" and commanded:
+            # The subject VARIES since the message names the offending keys
+            # rather than the two it used to list whatever was declared, so
+            # the verb and the pronoun follow it. A refusal a modeller reads
+            # is prose, and "serve_rate govern" is not.
+            keys = and_list(commanded)
+            alone = len(commanded) == 1
             raise ValueError(
-                f"{' and '.join(commanded)} govern what a capacity RELEASES. "
-                "An accumulator (ports='in') releases nothing: it declares no "
-                "output and no rule, so nothing would ever read them. Declare "
-                "ports='both' to give the volume a way out, or drop "
-                f"{' and '.join(commanded)}"
+                f"{keys} govern{'s' if alone else ''} what a capacity "
+                "RELEASES. An accumulator (ports='in') releases nothing: it "
+                "declares no output and no rule, so nothing would ever read "
+                f"{'it' if alone else 'them'}. Declare ports='both' to give "
+                f"the volume a way out, or drop {keys}"
             )
 
         entries = flow_declarations(
