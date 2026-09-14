@@ -2414,16 +2414,29 @@ on an observation instant, which commensurable durations make ordinary: a mode
 with a 1000 h delay observed at 1000 h.
 
 The second is the only one about the **continuous** calculation, and it is the
-other entry nothing compensates. A study declares the resolution it wants its
-continuous part watched at, through `pdmp_dt`; RAICHU has no base step to set,
-because it locates a crossing by scanning and bisecting rather than by
-sampling a grid, so the request is accepted and never read. On a purely
-discrete model that costs nothing -- there is nothing for it to govern on
-either engine. On a continuous one the resolution becomes RAICHU's own
-(`max_step`, `sub_samples`), which its defaults make *finer* than the 0.02 a
-platform study writes: what is lost is not precision but the link, since
-asking for a finer resolution buys nothing and asking for a coarser one costs
-nothing.
+other entry nothing compensates. A study *requests* a resolution through
+`pdmp_dt`, and muscadet reads that number as a **floor**: no continuous
+phenomenon lasting longer than it goes unnoticed for want of looking often
+enough. Below the floor nothing is promised, so an engine that sees more is
+still conformant.
+
+That widens what the field is declared to be upstream, and deliberately: cod3s
+calls `pdmp_dt` the base integration step of the PDMP solver and applies it as
+one (`setDt`). A step size is a mechanism only one solver family has, and read
+that way the number means nothing to an engine built otherwise -- muscadet
+would be transcribing PyCATSHOO rather than deciding anything. Read as a
+floor, the same number is a question every engine can be asked. On PyCATSHOO
+the two readings coincide, a fixed grid of `dt` catching everything longer
+than `dt`.
+
+RAICHU has no base step to set, because it locates a crossing by scanning and
+bisecting rather than by sampling a grid, so the request is accepted and never
+read. On a purely discrete model that costs nothing -- there is nothing for it
+to govern on either engine. On a continuous one the floor is met or missed *by
+accident*: RAICHU watches at a spacing of its own (`max_step`, `sub_samples`,
+so no coarser than 0.00625), which clears the 0.02 a platform study writes and
+misses a study asking 0.002, without either being noticed. What is lost is the
+link rather than the precision.
 
 The last three are compensated by the COD3S Platform's interactive worker, so
 a platform user never meets them. **A library user driving the engine directly

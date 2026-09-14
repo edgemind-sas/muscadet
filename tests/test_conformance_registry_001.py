@@ -429,26 +429,66 @@ def test_the_advance_to_a_date_entry_says_why_it_is_not_a_matrix_line():
 # ----------------------------------------------------------------------
 
 
-def test_the_declared_resolution_is_a_point_muscadet_decided():
+def test_the_requested_resolution_is_a_point_muscadet_decided():
     """The first point on the CONTINUOUS calculation rather than on an instant.
 
     What muscadet decides is deliberately not "the solver steps at pdmp_dt",
     which would be transcribing the reference engine: it is that the STUDY
-    names the resolution and an engine honours the request however it likes.
+    requests a resolution and an engine honours the request however it likes.
     Written down because a reader of the registry could not otherwise tell
     that the question had even been asked.
     """
     point = conformance.semantic_point(POINT_CONTINUOUS_CROSSING_RESOLUTION)
 
     assert "pdmp_dt" in point.rule
-    assert "DECLARES" in point.rule
+    assert "REQUESTED BY THE STUDY" in point.rule
 
-    # The rule stops short of prescribing a mechanism, which is what leaves
-    # an adaptive engine free to be conformant.
-    assert "engine's own business" in point.rule
+    # The rule prescribes no mechanism, which is what leaves an adaptive
+    # engine free to be conformant rather than red by construction.
+    assert "its own business" in point.rule
 
     assert point.rationale
     assert "pdmp_dt" in point.source
+
+
+def test_the_rule_is_a_floor_and_says_what_it_does_not_promise():
+    """One-sided on purpose, and the asymmetry is load-bearing.
+
+    "At least this finely" is a rule an engine can be judged against. An
+    equality could not be: an adaptive engine watches at a spacing that moves
+    with the trajectory, so it would be non-conformant for being BETTER. The
+    other half has to be written too -- below the floor muscadet promises
+    nothing -- or a reader takes the absence of a short episode for its
+    non-occurrence, which is the misreading the whole point exists against.
+    """
+    rule = conformance.semantic_point(POINT_CONTINUOUS_CROSSING_RESOLUTION).rule
+
+    assert "FLOOR" in rule
+    assert "at least that finely" in rule
+    assert "is not evidence that it did not happen" in rule
+
+
+def test_the_rule_owns_up_to_re_reading_the_upstream_field():
+    """muscadet widens ``pdmp_dt``, and says so where the reader meets it.
+
+    cod3s declares the field as the base integration step of its PDMP solver
+    and its own runner applies it as exactly that, so a reader who knows cod3s
+    would otherwise meet a flat contradiction with no explanation. The
+    widening is the decision this point exists to make -- a step size is a
+    mechanism only one solver family has, and read that way the number means
+    nothing to an engine built otherwise -- so the rationale carries it rather
+    than leaving it between the lines.
+    """
+    point = conformance.semantic_point(POINT_CONTINUOUS_CROSSING_RESOLUTION)
+
+    assert "WIDENS" in point.rationale
+    assert "base integration step" in point.rationale
+    assert "setDt" in point.rationale
+
+    # And the re-reading is shown to be free where it can be checked: on a
+    # fixed grid of dt the two readings coincide.
+    assert "coincide" in point.rationale
+    assert "setDt" in point.source
 
 
 def test_raichu_locates_a_crossing_instead_of_stepping_a_grid():
@@ -482,6 +522,31 @@ def test_the_consequence_separates_a_discrete_model_from_a_continuous_one():
     assert "DISCRETE" in deviation.consequence
     assert "CONTINUOUS" in deviation.consequence
     assert "max_step" in deviation.consequence
+
+
+def test_the_floor_is_reported_as_met_by_accident_on_both_sides():
+    """The entry owes the case where the floor HOLDS as much as the one where
+    it does not.
+
+    Once the rule is a floor, this engine's defaults clear it for the 0.02 a
+    platform study writes and miss it for a study asking 0.002 -- and it does
+    both without ever reading the request, which is why it is one deviation
+    and not a conformance that depends on the number. An entry that only
+    reported the failing side would read as "RAICHU is too coarse", which is
+    false on the corpus as it stands and would be argued away the first time
+    someone measured it.
+    """
+    deviation = conformance.deviations(
+        ENGINE_RAICHU, POINT_CONTINUOUS_CROSSING_RESOLUTION
+    )[0]
+
+    assert "BY ACCIDENT" in deviation.consequence
+
+    # The side where it holds, and the side where it does not, each named
+    # with the number that decides it.
+    assert "0.02" in deviation.consequence
+    assert "0.002" in deviation.consequence
+    assert "FINER" in deviation.consequence
 
 
 def test_nothing_restores_the_resolution_the_study_asked_for():
