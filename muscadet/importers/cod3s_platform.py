@@ -2331,9 +2331,9 @@ def _check_discharge_is_reachable(
         # The subject is built from what was declared, so the verb and the
         # last clause agree with it: a message naming one key said
         # "serve_rate govern" from the day it was written. Two keys is the
-        # most this list holds, where ``" and ".join`` is the right join --
-        # the muscadet-side twin of this refusal reaches three and needs an
-        # enumeration of its own (``muscadet.kb.continuous.and_list``).
+        # most this list holds, and the muscadet-side twin of this refusal
+        # (``CapacityContinuous``) lists the same two, so ``" and ".join`` is
+        # the right join on both sides.
         alone = len(declared) == 1
         raise Cod3sPlatformImportError(
             f"Class {class_name!r}, capacity {capacity.name!r}: "

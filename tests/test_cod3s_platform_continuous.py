@@ -1865,9 +1865,9 @@ class TestDischargeOnAVolumeWithNoWayOut:
         assert message.endswith("or drop the field.")
 
     def test_two_declared_keys_are_both_named_and_the_verb_follows(self):
-        # The other half of the agreement, and the most this list can hold:
-        # the muscadet-side twin of this refusal reaches three keys and needs
-        # an enumeration, where two are still joined by "and".
+        # The other half of the agreement, and the most this list can hold.
+        # The muscadet-side twin of this refusal names the same two keys, and
+        # its wording is pinned in test_capacity_transmits_001.
         payload = _accumulator_payload(
             "Macc_inert_both",
             capacity_extra={"serve_rate": 40.0, "serve_cond": [["H2"]]},
