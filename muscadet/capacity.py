@@ -423,6 +423,23 @@ class Capacity(cod3s.ObjCOD3S):
         description="Initial raw quantity per held flow; omitted flows start at 0",
     )
 
+    transmits: bool = pydantic.Field(
+        True,
+        description=(
+            "Whether the volume passes on what it does not hold back: the "
+            "EXISTENCE of the empty branch of serve_limit, where a volume "
+            "holding nothing still lets through what currently transits it "
+            "(R7). True -- the default -- is what every capacity did before "
+            "the field existed, so no model moves. NOT a third rate beside "
+            "fill_rate and serve_rate, and named as a predicate rather than a "
+            "quantity for that reason: those two say HOW MUCH, one claimed and "
+            "one capped, while this one says only WHETHER the branch is there "
+            "at all. A volume declaring False is a pure store -- it serves "
+            "what it holds and nothing more -- which is what a reservoir with "
+            "no way in and an accumulator with no way out already are in fact."
+        ),
+    )
+
     fill_rate: float = pydantic.Field(
         0.0,
         description=(
@@ -1384,6 +1401,15 @@ class Capacity(cod3s.ObjCOD3S):
         draw at each flow's RAW share of the total, so a nearly depleted
         constituent is served in proportion to what is left of it and decays
         towards zero instead of crossing it.
+
+        **The empty branch is what :attr:`transmits` declares**, and muscadet
+        does not read the field here: it takes the branch whenever the wiring
+        gives it something to transit, which is the same thing said by the
+        model instead of by a key. The field exists because ANOTHER engine
+        reading the exported document cannot see that wiring -- a capacity that
+        transits and one that only stores come out with the same ``side`` --
+        and would otherwise have to guess it from the presence of an input flow
+        of the same name, a convention the document never states.
         """
         if not self.serves_from_stock(flow_name):
             return min(self.get_inflow(flow_name), self.serve_ceiling(flow_name))

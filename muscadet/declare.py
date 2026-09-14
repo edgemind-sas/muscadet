@@ -2285,7 +2285,11 @@ def build_controller_component(system, spec):
 #: changed meaning is a major. A reader refuses a major it does not know
 #: rather than guessing, because the whole point of this document is that two
 #: engines read the SAME thing.
-SYSTEM_SPEC_VERSION = "1.0.0"
+#:
+#: 1.0.1 adds ``transmits`` on a capacity, which carries a default: a reader
+#: that ignores the key behaves exactly as it did at 1.0.0, and a 1.0.0
+#: document rebuilds here unchanged, its capacities taking the default.
+SYSTEM_SPEC_VERSION = "1.0.1"
 
 #: What an indicator declaration carries. Read back concretely rather than as
 #: the pattern the modeller typed: ``add_indicator`` takes regexes and expands

@@ -146,6 +146,10 @@ FULL_DECLARATIONS = {
         capacity=10.0,
         ports="both",
         side="out",
+        # The derivation ``ports`` carries, stated explicitly, which is what
+        # ``side`` is doing on the line above and for the same reason: both are
+        # defaults a montage outside the three shorthands overrides.
+        transmits=True,
         demand=0.0,
         fill_rate=0.0,
         serve_rate=float("inf"),

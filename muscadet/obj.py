@@ -1279,7 +1279,13 @@ class ObjFlow(cod3s.PycComponent):
         content_init : dict, optional
             Initial raw quantity per held flow. An omitted flow starts empty.
         **params : dict
-            Additional capacity parameters.
+            Additional capacity parameters, among them ``transmits``: whether
+            the volume passes on what it does not hold back. It defaults to
+            True, which is what every capacity did before the field existed,
+            and muscadet's own solver takes that branch from the wiring rather
+            than from the key -- it is declared so that an engine reading the
+            exported document can see it, ``side`` being unable to tell a
+            buffer from a reservoir.
 
         Returns
         -------

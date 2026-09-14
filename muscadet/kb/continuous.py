@@ -384,6 +384,19 @@ class TransformerContinuous(ContinuousComponent):
 #: side each implies.
 CAPACITY_PORTS = {"both": "out", "in": "in", "out": "out"}
 
+#: And whether each of them TRANSITS, which ``side`` cannot say: ``"both"`` and
+#: ``"out"`` share the side ``"out"``, so a buffer and a reservoir came out of
+#: the exported document indistinguishable.
+#:
+#: Transit needs two ports, one to receive at and one to pass on to, and
+#: ``ports`` is exactly the declaration of which ports exist. A buffer has both
+#: and transits; a reservoir has no way in and an accumulator no way out, so
+#: neither has a through-path, whatever the volume holds. That this reproduces
+#: what muscadet already computes is not a coincidence and is measured: the
+#: empty branch of ``Capacity.serve_limit`` bounds itself by the inflow, which
+#: on a class declaring no input and no rule is zero.
+CAPACITY_TRANSMITS = {"both": True, "in": False, "out": False}
+
 
 class CapacityContinuous(ContinuousComponent):
     """A volume held over one or more continuous flows.
@@ -431,6 +444,15 @@ class CapacityContinuous(ContinuousComponent):
     side : str, optional
         Side the capacity itself sits on. Defaults to the one ``ports``
         implies.
+    transmits : bool, optional
+        Whether the volume passes on what it does not hold back. Defaults to
+        the one ``ports`` implies (:data:`CAPACITY_TRANSMITS`): a buffer
+        transits, a reservoir and an accumulator do not, having no second port
+        to transit toward. Declared here rather than left to be guessed,
+        because ``side`` cannot carry it -- ``"both"`` and ``"out"`` are both
+        ``side="out"`` -- and an engine reading the exported document would
+        otherwise have to infer a buffer from the presence of an input flow of
+        the same name.
     demand : float, optional
         Demand claimed on every input, for an accumulator. Defaults to 0.
     control : str, optional
@@ -479,6 +501,7 @@ class CapacityContinuous(ContinuousComponent):
         "capacity",
         "ports",
         "side",
+        "transmits",
         "demand",
         "fill_rate",
         "serve_rate",
@@ -502,18 +525,23 @@ class CapacityContinuous(ContinuousComponent):
         serve_cond = kwargs.get("serve_cond")
         control = kwargs.get("control")
 
+        # ``transmits`` joins the two: it says what a volume holding nothing
+        # still passes on, so on a shape that passes nothing on it is the same
+        # dead declaration. Only an explicit one offends -- the derived default
+        # is False on this shape and says exactly what is true of it.
         commanded = [
             key
             for key, value in (
                 ("serve_rate", math.isfinite(serve_rate)),
                 ("serve_cond", bool(serve_cond)),
+                ("transmits", bool(kwargs.get("transmits"))),
             )
             if value
         ]
 
         if ports == "in" and commanded:
             raise ValueError(
-                "serve_rate and serve_cond govern what a capacity RELEASES. "
+                f"{' and '.join(commanded)} govern what a capacity RELEASES. "
                 "An accumulator (ports='in') releases nothing: it declares no "
                 "output and no rule, so nothing would ever read them. Declare "
                 "ports='both' to give the volume a way out, or drop "
@@ -549,6 +577,7 @@ class CapacityContinuous(ContinuousComponent):
             ],
             capacity=kwargs.get("capacity"),
             side=kwargs.get("side", CAPACITY_PORTS[ports]),
+            transmits=bool(kwargs.get("transmits", CAPACITY_TRANSMITS[ports])),
             content_init=kwargs.get("content_init"),
             fill_rate=float(kwargs.get("fill_rate", 0.0)),
             serve_rate=serve_rate,
