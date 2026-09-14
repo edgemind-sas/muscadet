@@ -1780,6 +1780,103 @@ A pair adds **no edge to the connection graph**: its two flows belong to one com
 
 What a pair may not name: a measurement channel (it carries a reading and no quantity, and may combine publishers by median, which conserves nothing), a capacity, or a discrete flow. Every named flow needs a continuous **output**, since a balance is written on the output side; a conduit additionally needs the input side, because it meters a transit it would otherwise not have.
 
+### Ventilating a mixture: one volumetric rate, composed at the volume
+
+A capacity holding several constituents has a **composition**, and `split_draw` already
+composes a stock draw at it. What had no expression until 5.2.0 is the other half: a
+machine that moves a *volume* of that mixture, whatever it is made of. A ventilation
+extractor, a pump on a line carrying several species, a compressor.
+
+The difficulty is that the two outlet rates are **not** two declarations. For a room
+receiving air at `Q` and hydrogen at `q`, drained by an extractor moving `R`:
+
+```
+out_AIR = R (1 - x)        out_H2 = R x        x = m_H2 / (m_AIR + m_H2)
+```
+
+One degree of freedom, not two. Written as two independent per-flow demands — the only
+thing a consumer could declare before — the model gets two, and the result is not a
+rounding: measured on a room fed 50 of air and 2 of hydrogen behind an outlet asking 25
+of each, the hydrogen share stayed at **exactly zero** for the whole run while the room's
+air content rose from 90 to 340 over ten time units.
+
+So the rate is declared on the **machine** and the composition stays in the **volume**:
+
+```python
+class Room(muscadet.ObjFlow):
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        for flow in ("AIR", "H2"):
+            self.add_flow_continuous_in(name=flow)
+            self.add_flow_continuous_out(name=flow)
+        self.add_capacity(
+            name="room",
+            flows=["AIR", "H2"],          # one volume, therefore one composition
+            side="out",
+            capacity=1e5,
+            content_init={"AIR": 90.0, "H2": 0.0},
+            fill_rate=math.inf,           # the supply is pushed in, not pulled out
+        )
+
+
+system.add_component(
+    name="FAN",
+    cls="MixturePumpContinuous",
+    flows=["AIR", "H2"],
+    volumetric_rate=50.0,                 # a VOLUME per unit of time
+)
+```
+
+`MixturePumpContinuous` is the shipped form of `comp.add_mixture_in(name, flows,
+volumetric_rate)`, which any component may declare.
+
+**`volumetric_rate` is a volume, where every other rate in MUSCADET is a quantity.** The
+key says so on purpose. What leaves the volume per constituent is
+
+```
+out_f  =  R . m_f / sum_g ( m_g . w_g )
+```
+
+with `w_f` the `weight` of the capacity's flow entry — the volume one unit occupies — so
+`sum_f out_f . w_f` is exactly `R`. With every weight at 1 this is `R` times the raw
+share, which is what `split_draw` already composes with, so **no existing model moves**.
+
+Measured against the closed forms, both phases, to the fifth decimal:
+
+| phase | what it does |
+|---|---|
+| supply open | `x(t) = q/(Q+q) . [1 - (V/(V+qt))^((Q+q)/q)]`, plateau `q/(Q+q) = 0.03846` |
+| supply cut | `x(t) = x0 . exp(-R t / M0)`, time constant `M0/R` |
+
+Two things a reader gets wrong. The **share plateau does not depend on `R`**: it is the
+ratio of the inlet rates. And the **total is not conserved** when `R = Q`: the room grows
+by `q`, since `dM/dt = Q + q - R`.
+
+**`fill_rate` matters here.** A room takes what is blown into it, so its capacity is
+declared with `fill_rate=math.inf`, which R36 spells "whatever the producer delivers".
+At the default `fill_rate=0` the room would ask its sources only for what it releases,
+and the inflow would follow the extraction instead of the other way round.
+
+What is refused, and why:
+
+| Declaration | Refused because |
+|---|---|
+| a group flow that is not a continuous **input** | a discrete flow carries no quantity, a measurement channel no matter |
+| a group flow a rule set consumes, a transfer names, or a near-side capacity buffers | a group claims the whole of its input; a second claim is served out of a budget nothing arbitrates |
+| a group flow that is also a continuous **output** of the machine | it would destroy matter as soon as the outlet asked for less than the machine draws — measured, a pump at rate 50 behind a load asking 5 drew 49.16 of air, delivered 5, and 44.16 per unit of time entered no balance |
+| flows arriving from **several producers** | a mixture is composed inside one volume |
+| a producer with **no capacity** behind that output, or **several volumes** | there is no composition to split at |
+| a volume serving the group **and somebody else** | arbitrating a composed share against a per-flow request is not defined |
+| `volumetric_rate` negative or infinite | a direction is the connection's; `inf . share` is `NaN` on a constituent standing at zero |
+
+The last five are properties of the **connections**, so they are settled at the pre-run
+step and reported there, naming the group, the component and the flows.
+
+An **empty** volume serves nothing and fills first: with no composition there is nothing
+to compose, and passing the inflow straight through is the short-circuit this whole
+notion removes. A discharge ceiling (`serve_rate`) still caps what leaves, per flow, and
+a discharge command (`serve_cond`) still gates it.
+
 ### Assemble the whole system before the first run
 
 A system carrying continuous flows must be **complete** — every component and every connection — before `simulate()` or `isimu_start()` is called the first time.
@@ -1808,7 +1905,7 @@ A pre-run that **raised did not run**. A model refused on its first entry point 
 
 ### The shipped continuous components
 
-MUSCADET ships seven domain-neutral continuous components in `muscadet.kb.continuous`. Import them, and they resolve by name in `add_component(cls=...)`:
+MUSCADET ships eight domain-neutral continuous components in `muscadet.kb.continuous`. Import them, and they resolve by name in `add_component(cls=...)`:
 
 | Class                    | What it is                                                                    |
 |--------------------------|-------------------------------------------------------------------------------|
@@ -1818,6 +1915,7 @@ MUSCADET ships seven domain-neutral continuous components in `muscadet.kb.contin
 | `CapacityContinuous`     | a volume held over one or more flows: buffer (`ports="both"`), accumulator (`"in"`) or reservoir (`"out"`) |
 | `ConsumerContinuous`     | a continuous input publishing a declared `demand`                             |
 | `ExchangeContinuous`     | one flow in and out, metered by a transfer pair: what crosses is what the declared law computed, given whole (`transfer=`) or inline (`conductance`, `potential_a`, `potential_b`) |
+| `MixturePumpContinuous`  | a terminal machine drawing several constituents together at one `volumetric_rate`: the extractor of a ventilated volume |
 | `SensorContinuous`       | a level read over a measurement link — one publisher, or several combined by `combine="median"` — driving a discrete control output, and optionally republishing what it read (`publish`) so another sensor can vote on it |
 
 A transformer takes its rules as a parameter, so a two-in two-out reaction needs no subclass at all:

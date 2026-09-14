@@ -4,8 +4,8 @@ type: design
 date: 2026-09-14
 topic: multiflow-volumetric-machine
 issue: 4
-artifact_readiness: design-only
-execution: none
+artifact_readiness: implemented
+execution: done
 ---
 
 # A multi-flow volumetric machine, and the group demand it publishes
@@ -16,6 +16,11 @@ measured on this checkout at 5.1.0, with the engine, and the probes are listed
 at the end.
 
 Companion figure: `docs/review/2026-09-13-capacite-melange-ventile.svg`.
+
+**Implemented in 5.2.0.** `muscadet/mixture.py`, `Capacity.mixture_share`, the
+four sweep touch points, `MixturePumpContinuous`, and
+`tests/test_mixture_ventilation_001.py`. Two things moved between this note and
+the code, both measured during the work and both recorded in section 9 below.
 
 ---
 
@@ -312,7 +317,38 @@ capacity and transfer-pair material, README, and the figure refreshed.
 
 ---
 
-## 8. Probes
+## 8. What the implementation changed about this note
+
+Two things, both measured rather than reasoned, and both now in the shipped
+documentation.
+
+**A machine carrying its draw onward destroys matter, so it is refused.** The
+note assumed a `ports="both"` shape would need nothing of its own, the R31
+identity transfer carrying each constituent across. It conserves only while the
+outlet asks for at least what the machine draws. Measured on a pump at
+`volumetric_rate=50` behind a load asking 5: drawn 49.16 of air, delivered 5,
+and **44.16 per unit of time entered no balance**. The group draws the whole
+volumetric rate, what leaves is capped by the demand downstream, and nothing
+bounds the one by the other. Bounding it needs the machine's downstream demand
+to reach the volume that holds the composition, which is a mechanism of its own.
+Refused by name at declaration, and `MixturePumpContinuous` carries no
+`ports="both"`.
+
+**The opt-in left the volume entirely.** Section 4.3 proposed dropping
+`mixing=True`; the implementation confirms it costs nothing: the composed
+behaviour is triggered by the presence of a group consumer, read off
+`Capacity.serves_a_mixture`, which the pre-run resolution writes. A volume drawn
+per flow keeps the 5.1.0 behaviour byte for byte, which the suite measures both
+ways -- 1627 tests unchanged and green, plus 27 new.
+
+**What section 4.5 predicted held.** The composed share does exceed `R` when a
+weight is below 1, and `allocate_output` had to be told: a volume holding
+hydrogen alone at `weight 0.5` has an occupied volume of half its raw total,
+hence a share of `2 R`.
+
+---
+
+## 9. Probes
 
 Written for this note, kept out of the repository, under the session scratchpad:
 

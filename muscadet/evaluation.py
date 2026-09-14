@@ -270,6 +270,17 @@ def evaluate_demand(comp):
         # will not move.
         accumulate(pair.source, max(pair.quantity(comp), 0.0))
 
+    # A MIXTURE group asks ONE volumetric rate over several inputs (R51), and it
+    # is published on each of them rather than split here: what each constituent
+    # contributes is decided by the composition of the volume upstream, which
+    # this component has no way to know. The volume is what makes sense of it,
+    # in the grouped branch of ``get_output_request``. Assigned rather than
+    # accumulated because a group owns its inputs outright -- a flow a rule set,
+    # a transfer or a near-side capacity also claims is refused at declaration.
+    for group in comp.mixtures.values():
+        for flow_name in group.flows:
+            demands[flow_name] = float(group.volumetric_rate)
+
     # A continuous input no rule and no transfer covers claims what it was
     # declared with: a pure consumer has no output to map a demand back from.
     for flow_name, flow in comp.flows_continuous_in.items():
@@ -1882,11 +1893,19 @@ def get_output_request(comp, flow, rate):
     demand sweep never looks at their outputs at all and there is nothing to
     reuse.
     """
+    capacity = comp.get_capacity_of_flow(flow.name, "out")
+
+    # A volume drawn as a MIXTURE serves a share of one volumetric rate (R51),
+    # and the per-flow demands its machine published say nothing about that
+    # share: a machine displaces volume and does not know the composition. The
+    # discharge ceiling still caps it (R48), composed by min and never by
+    # product, ``inf * 0`` being NaN.
+    if capacity is not None and capacity.serves_a_mixture:
+        return min(capacity.mixture_share(flow.name), capacity.serve_ceiling(flow.name))
+
     demand = comp._demand_bound.get(flow.name)
     if demand is None:
         demand = comp.get_output_consumer_demand(flow)
-
-    capacity = comp.get_capacity_of_flow(flow.name, "out")
 
     if not math.isinf(demand):
         request = max(float(demand), 0.0)
@@ -1946,6 +1965,24 @@ def draw_from_capacity(comp, capacity, requests):
     dict
         ``{flow name: quantity served}``.
     """
+    # A volume drawn as a MIXTURE has already been asked a COMPOSED request
+    # (R51), so the transit short-circuit must not apply: what arrives in a step
+    # cannot leave it without entering the composition, or hydrogen crosses a
+    # room of air without raising its share. Composing the whole request is also
+    # idempotent here -- the requests sum to ``R . M / S`` and ``split_draw``
+    # divides that back at the raw share into ``R . m_f / S`` -- so this stays
+    # the documented rule rather than a pass-through with a different name, and
+    # a request the caller composed differently is still composed.
+    if capacity.serves_a_mixture:
+        asked = sum(requests.values())
+        share = capacity.split_draw(
+            asked if math.isfinite(asked) else capacity.total_quantity()
+        )
+        return {
+            name: max(min(requests[name], share.get(name, 0.0)), 0.0)
+            for name in requests
+        }
+
     transit = {name: capacity.get_inflow(name) for name in requests}
 
     # What the stock is asked for, over and above what transits. Capped by what
@@ -2021,9 +2058,24 @@ def allocate_output(comp, flow, available):
     available : float
         What it delivers this step.
 
+    **A mixture group is capped at its composed share, not at what it
+    published** (R51). Its machine publishes the volumetric rate on each member
+    flow, and the composed share can EXCEED that rate as soon as a weight is
+    below 1: a volume holding only a constituent at ``weight 0.5`` has
+    ``sum_g m_g w_g`` equal to half its raw total, hence a share of ``2 R``.
+    Capping at the published figure would then quietly serve less than the
+    volume released, and the difference would leave the balance. The volume is
+    drawn by that group alone, which is refused otherwise at the pre-run step,
+    so there is nobody to arbitrate against.
+
     Returns
     -------
     dict
         ``{consumer component name: quantity}``.
     """
+    capacity = comp.get_capacity_of_flow(flow.name, "out")
+
+    if capacity is not None and capacity.serves_a_mixture:
+        return flow.allocate(available, demands={capacity.mixture.consumer: available})
+
     return flow.allocate(available)
