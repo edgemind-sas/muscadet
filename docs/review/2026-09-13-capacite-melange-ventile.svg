@@ -1,0 +1,257 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1480 1780" width="1480" height="1780" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif">
+
+  <rect x="0" y="0" width="1480" height="1780" fill="#ffffff"/>
+  <defs>
+    <marker id="ma" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#1565c0"/></marker>
+    <marker id="mh" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#e65100"/></marker>
+    <marker id="mg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#455a64"/></marker>
+    <marker id="mp" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#4527a0"/></marker>
+    <marker id="mv" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#1b5e20"/></marker>
+  </defs>
+
+  <text x="36" y="46" font-size="22" font-weight="600" fill="#263238">Issue #4 : une capacité multi-flux ne sait pas ventiler un mélange</text>
+  <text x="36" y="72" font-size="13.5" fill="#546e7a">Où se situe l'écart entre la physique d'un volume bien mélangé et ce que muscadet 5.1.0 intègre, et quelle conception le referme. Tous les chiffres sont mesurés sur ce dépôt, moteur compris.</text>
+  <text x="36" y="92" font-size="13.5" fill="#546e7a">Hypothèse arrêtée le 13/09/2026 : l'air entre à Q = 50, l'hydrogène à q = 2, et le MÉLANGE sort à Q. Un seul débit d'extraction, composé à la teneur du volume.</text>
+  <text x="36" y="112" font-size="13.5" fill="#546e7a">Bleu plein : l'air. Orange tireté : l'hydrogène. Gris : le mélange. Violet : la mécanique PDMP. Vert : la conception retenue.</text>
+
+  <!-- ============================ PANNEAU 1 ============================ -->
+  <rect x="36" y="132" width="694" height="408" rx="8" fill="#fafafa" stroke="#90a4ae" stroke-width="1.3"/>
+  <text x="54" y="160" font-size="15" font-weight="700" fill="#263238">1 &#183; Le système et sa physique</text>
+
+  <rect x="232" y="184" width="212" height="150" rx="6" fill="#e3f2fd" stroke="#37474f" stroke-width="1.6"/>
+  <rect x="233" y="313" width="210" height="20" fill="#ffe0b2"/>
+  <text x="338" y="212" font-size="13" font-weight="700" fill="#263238" text-anchor="middle">SALLE</text>
+  <text x="338" y="232" font-size="12" fill="#1565c0" text-anchor="middle">air et hydrogène mélangés</text>
+  <text x="338" y="254" font-size="12.5" font-weight="600" fill="#263238" text-anchor="middle">V = 90</text>
+  <text x="338" y="290" font-size="12.5" fill="#37474f" text-anchor="middle">teneur  x = H2 / (AIR + H2)</text>
+  <text x="338" y="328" font-size="11" font-weight="600" fill="#e65100" text-anchor="middle">hydrogène</text>
+
+  <line x1="74" y1="214" x2="228" y2="214" stroke="#1565c0" stroke-width="2" marker-end="url(#ma)"/>
+  <text x="76" y="206" font-size="12.5" font-weight="600" fill="#1565c0">AIR  Q = 50</text>
+  <line x1="74" y1="284" x2="228" y2="284" stroke="#e65100" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#mh)"/>
+  <text x="76" y="276" font-size="12.5" font-weight="600" fill="#e65100">H2  q = 2</text>
+
+  <line x1="448" y1="250" x2="580" y2="250" stroke="#455a64" stroke-width="2.6" marker-end="url(#mg)"/>
+  <text x="452" y="240" font-size="12.5" font-weight="600" fill="#37474f">mélange</text>
+  <text x="452" y="272" font-size="12" fill="#546e7a">un seul débit, Q</text>
+  <rect x="586" y="216" width="118" height="70" rx="6" fill="#eceff1" stroke="#37474f" stroke-width="1.4"/>
+  <text x="645" y="245" font-size="12.5" font-weight="700" fill="#263238" text-anchor="middle">EXTRACTION</text>
+  <text x="645" y="265" font-size="11.5" fill="#546e7a" text-anchor="middle">composé à x</text>
+
+  <rect x="54" y="352" width="658" height="172" rx="6" fill="#fffde7" stroke="#f9a825" stroke-width="1.3"/>
+  <text x="70" y="376" font-size="13" font-weight="700" fill="#5d4037">Les deux sorties ne sont pas libres : une seule grandeur les fixe</text>
+  <text x="70" y="400" xml:space="preserve" font-size="12" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">sorties   out_AIR = Q (1 - x)        out_H2 = Q x</text>
+  <text x="70" y="420" xml:space="preserve" font-size="12" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">bilans    dm_AIR/dt = Q x            dm_H2/dt = q - Q x       dM/dt = q</text>
+  <text x="70" y="440" xml:space="preserve" font-size="12" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">teneur    dx/dt = [ q - (Q+q) x ] / M(t)                      M(t) = V + q t</text>
+  <text x="70" y="466" xml:space="preserve" font-size="12" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#1b5e20">phase 1   x(t) = q/(Q+q) . [ 1 - (V/(V+qt))^((Q+q)/q) ]       plateau  0,03846</text>
+  <text x="70" y="486" xml:space="preserve" font-size="12" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#1b5e20">phase 2   x(t) = x0 . exp(- Q t / M0)                         tau = M0/Q = 1,869</text>
+  <text x="70" y="512" font-size="12" fill="#5d4037">Le total n'est pas conservé : il croît de q. Le plateau de teneur, lui, ne dépend pas du débit d'extraction.</text>
+
+  <!-- ============================ PANNEAU 2 ============================ -->
+  <rect x="750" y="132" width="694" height="408" rx="8" fill="#fafafa" stroke="#90a4ae" stroke-width="1.3"/>
+  <text x="768" y="160" font-size="15" font-weight="700" fill="#263238">2 &#183; Ce que le modèle muscadet déclare aujourd'hui</text>
+
+  <rect x="768" y="180" width="148" height="54" rx="5" fill="#ffffff" stroke="#1565c0" stroke-width="1.4"/>
+  <text x="780" y="200" font-size="12.5" font-weight="700" fill="#263238">S_AIR</text>
+  <text x="780" y="217" font-size="11" fill="#546e7a">SourceContinuous</text>
+  <text x="780" y="230" font-size="11" font-weight="600" fill="#1565c0">rate = 50</text>
+
+  <rect x="768" y="254" width="148" height="54" rx="5" fill="#ffffff" stroke="#e65100" stroke-width="1.4"/>
+  <text x="780" y="274" font-size="12.5" font-weight="700" fill="#263238">S_H2</text>
+  <text x="780" y="291" font-size="11" fill="#546e7a">SourceContinuous</text>
+  <text x="780" y="304" font-size="11" font-weight="600" fill="#e65100">rate = 2</text>
+
+  <rect x="958" y="180" width="298" height="180" rx="5" fill="#ffffff" stroke="#00695c" stroke-width="1.6"/>
+  <text x="970" y="200" font-size="12.5" font-weight="700" fill="#263238">ROOM  (ObjFlow)</text>
+  <text x="970" y="222" xml:space="preserve" font-size="10.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#00695c">add_flow_continuous_in  : AIR, H2</text>
+  <text x="970" y="238" xml:space="preserve" font-size="10.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#00695c">add_flow_continuous_out : AIR, H2</text>
+  <text x="970" y="262" xml:space="preserve" font-size="10.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">add_capacity(name="room", side="out",</text>
+  <text x="970" y="278" xml:space="preserve" font-size="10.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">  flows=[AIR w=1, H2 w=1],</text>
+  <text x="970" y="294" xml:space="preserve" font-size="10.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">  capacity=1000, fill_rate=inf,</text>
+  <text x="970" y="310" xml:space="preserve" font-size="10.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">  content_init={AIR: 90, H2: 0})</text>
+  <text x="970" y="334" font-size="11" fill="#546e7a">un seul volume, donc une composition</text>
+  <text x="970" y="350" font-size="11" fill="#546e7a">elle seule connaît x</text>
+
+  <rect x="1272" y="224" width="164" height="92" rx="5" fill="#ffffff" stroke="#455a64" stroke-width="1.4"/>
+  <text x="1284" y="244" font-size="12.5" font-weight="700" fill="#263238">OUTLET</text>
+  <text x="1284" y="264" xml:space="preserve" font-size="10.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">add_flow_continuous_in</text>
+  <text x="1284" y="280" xml:space="preserve" font-size="10.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#b71c1c">var_demand_default</text>
+  <text x="1284" y="296" xml:space="preserve" font-size="10.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#b71c1c">  = 25   (AIR et H2)</text>
+
+  <line x1="918" y1="205" x2="954" y2="215" stroke="#1565c0" stroke-width="1.8" marker-end="url(#ma)"/>
+  <line x1="918" y1="281" x2="954" y2="271" stroke="#e65100" stroke-width="1.8" stroke-dasharray="6 4" marker-end="url(#mh)"/>
+  <line x1="1258" y1="252" x2="1268" y2="252" stroke="#1565c0" stroke-width="1.8" marker-end="url(#ma)"/>
+  <line x1="1258" y1="288" x2="1268" y2="288" stroke="#e65100" stroke-width="1.8" stroke-dasharray="6 4" marker-end="url(#mh)"/>
+
+  <rect x="768" y="380" width="658" height="144" rx="6" fill="#ffebee" stroke="#c62828" stroke-width="1.3"/>
+  <text x="784" y="404" font-size="13" font-weight="700" fill="#b71c1c">Rien ne dit à quel débit le volume se vide</text>
+  <text x="784" y="426" font-size="12" fill="#37474f">Ce qui sort est la somme de deux demandes indépendantes, 25 et 25, déclarées chacune sur son</text>
+  <text x="784" y="444" font-size="12" fill="#37474f">constituant. La teneur du mélange n'entre dans le calcul qu'au moment de composer un éventuel</text>
+  <text x="784" y="462" font-size="12" fill="#37474f">tirage au stock : elle ne décide jamais du débit total, qui est pourtant la grandeur physique.</text>
+  <text x="784" y="488" font-size="12" fill="#b71c1c">Et rien ne peut y suppléer : var_demand_default est une constante lue telle quelle, les coefficients</text>
+  <text x="784" y="506" font-size="12" fill="#b71c1c">cons d'une règle sont des flottants, aucun contrôleur n'écrit de demande. C'est un objet qui manque.</text>
+
+  <!-- ============================ PANNEAU 3 ============================ -->
+  <rect x="36" y="560" width="1408" height="340" rx="8" fill="#f3e5f5" stroke="#6a1b9a" stroke-width="1.3"/>
+  <text x="54" y="588" font-size="15" font-weight="700" fill="#4527a0">3 &#183; Ce que le PDMP évalue, dans l'ordre, à chaque pas d'intégration</text>
+
+  <rect x="54" y="606" width="248" height="80" rx="5" fill="#ffffff" stroke="#7e57c2" stroke-width="1.3"/>
+  <text x="68" y="628" font-size="12.5" font-weight="700" fill="#4527a0">1 &#183; compute_capability</text>
+  <text x="68" y="647" font-size="11" fill="#546e7a">ordre topologique</text>
+  <text x="68" y="666" font-size="10.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">{f}_capability_out</text>
+
+  <rect x="342" y="606" width="248" height="80" rx="5" fill="#ffffff" stroke="#7e57c2" stroke-width="1.3"/>
+  <text x="356" y="628" font-size="12.5" font-weight="700" fill="#4527a0">2 &#183; compute_demand</text>
+  <text x="356" y="647" font-size="11" fill="#546e7a">ordre anti-topologique</text>
+  <text x="356" y="666" font-size="10.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#b71c1c">{f}_demand_out = 25</text>
+
+  <rect x="630" y="606" width="248" height="80" rx="5" fill="#fff3e0" stroke="#e65100" stroke-width="1.8"/>
+  <text x="644" y="628" font-size="12.5" font-weight="700" fill="#bf360c">3 &#183; compute_production</text>
+  <text x="644" y="647" font-size="11" fill="#546e7a">ordre topologique</text>
+  <text x="644" y="666" font-size="10.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">set_inflow, tirage, set_outflow</text>
+
+  <rect x="918" y="606" width="248" height="80" rx="5" fill="#ffffff" stroke="#7e57c2" stroke-width="1.3"/>
+  <text x="932" y="628" font-size="12.5" font-weight="700" fill="#4527a0">4 &#183; Capacity.compute</text>
+  <text x="932" y="647" font-size="11" fill="#546e7a">CAPACITY_ORDER_BASE = 1 000 000</text>
+  <text x="932" y="666" font-size="10.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">setDvdtODE(...)</text>
+
+  <rect x="1206" y="606" width="192" height="80" rx="5" fill="#ffffff" stroke="#7e57c2" stroke-width="1.3"/>
+  <text x="1220" y="628" font-size="12.5" font-weight="700" fill="#4527a0">5 &#183; bande signal</text>
+  <text x="1220" y="647" font-size="11" fill="#546e7a">CONTROL_ORDER_BASE</text>
+  <text x="1220" y="666" font-size="10.5" fill="#546e7a">mesures, contrôleurs</text>
+
+  <line x1="306" y1="646" x2="338" y2="646" stroke="#4527a0" stroke-width="1.6" marker-end="url(#mp)"/>
+  <line x1="594" y1="646" x2="626" y2="646" stroke="#4527a0" stroke-width="1.6" marker-end="url(#mp)"/>
+  <line x1="882" y1="646" x2="914" y2="646" stroke="#4527a0" stroke-width="1.6" marker-end="url(#mp)"/>
+  <line x1="1170" y1="646" x2="1202" y2="646" stroke="#4527a0" stroke-width="1.6" marker-end="url(#mp)"/>
+
+  <rect x="54" y="706" width="666" height="176" rx="6" fill="#ffffff" stroke="#7e57c2" stroke-width="1.2"/>
+  <text x="70" y="730" font-size="13" font-weight="700" fill="#4527a0">Les variables du volume, et qui les écrit</text>
+  <text x="70" y="754" xml:space="preserve" font-size="11" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">ODE        room_qty_AIR, room_qty_H2, room_qty      le solveur</text>
+  <text x="70" y="772" xml:space="preserve" font-size="11" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">explicite  room_fill_*, room_ratio_*                Capacity.compute</text>
+  <text x="70" y="790" xml:space="preserve" font-size="11" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#bf360c">libres     room_inflow_f, room_outflow_f            la passe 3</text>
+  <text x="70" y="808" xml:space="preserve" font-size="11" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">surveillé  automate vide / plein, reset clamp_to_bounds</text>
+  <rect x="70" y="824" width="630" height="42" rx="4" fill="#ede7f6"/>
+  <text x="86" y="852" xml:space="preserve" font-size="13.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-weight="600" fill="#4527a0">d qty_f / dt  =  room_inflow_f  -  room_outflow_f</text>
+
+  <rect x="740" y="706" width="674" height="176" rx="6" fill="#e8f5e9" stroke="#2e7d32" stroke-width="1.2"/>
+  <text x="756" y="730" font-size="13" font-weight="700" fill="#1b5e20">L'intégration, elle, est fidèle à la physique</text>
+  <text x="756" y="754" font-size="12" fill="#263238">Le niveau de chaque constituant suit exactement l'écart entre ce qui entre et ce qui sort, la</text>
+  <text x="756" y="772" font-size="12" fill="#263238">composition est recalculée depuis les niveaux à chaque pas, et les bornes vide et plein sont</text>
+  <text x="756" y="790" font-size="12" fill="#263238">franchies exactement par une transition surveillée. Rien à reprendre de ce côté.</text>
+  <rect x="756" y="806" width="642" height="60" rx="4" fill="#ffebee" stroke="#c62828" stroke-width="1.2"/>
+  <text x="772" y="830" font-size="12.5" font-weight="700" fill="#b71c1c">Tout se joue donc dans la passe 3, sur la valeur écrite dans room_outflow_f :</text>
+  <text x="772" y="850" font-size="12.5" fill="#b71c1c">c'est la seule grandeur où la modélisation peut s'écarter de la physique du mélange.</text>
+
+  <!-- ============================ PANNEAU 4 ============================ -->
+  <rect x="36" y="920" width="1408" height="372" rx="8" fill="#fafafa" stroke="#90a4ae" stroke-width="1.3"/>
+  <text x="54" y="948" font-size="15" font-weight="700" fill="#263238">4 &#183; Les trois bornes par constituant qui empêchent le mélange de se ventiler</text>
+
+  <rect x="54" y="966" width="442" height="310" rx="6" fill="#ffebee" stroke="#c62828" stroke-width="1.5"/>
+  <text x="70" y="990" font-size="13" font-weight="700" fill="#b71c1c">A &#183; Le transit court-circuite le volume</text>
+  <rect x="70" y="1002" width="410" height="58" rx="4" fill="#ffffff"/>
+  <text x="82" y="1022" xml:space="preserve" font-size="10.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">transit_f = capacity.get_inflow(f)</text>
+  <text x="82" y="1040" xml:space="preserve" font-size="10.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">servi_f   = min(req_f, transit_f + tirage_f)</text>
+  <text x="70" y="1084" font-size="12" fill="#37474f">Ce qui arrive dans le pas peut repartir dans le même</text>
+  <text x="70" y="1102" font-size="12" fill="#37474f">pas, sans jamais entrer dans la composition. Juste</text>
+  <text x="70" y="1120" font-size="12" fill="#37474f">pour un tampon mono-flux : pousser 5 et tirer 5 doit</text>
+  <text x="70" y="1138" font-size="12" fill="#37474f">laisser le contenu tranquille. Faux pour un mélange :</text>
+  <text x="70" y="1156" font-size="12" fill="#37474f">l'hydrogène ne peut pas traverser un volume d'air</text>
+  <text x="70" y="1174" font-size="12" fill="#37474f">sans en élever la teneur.</text>
+  <rect x="70" y="1188" width="410" height="74" rx="4" fill="#ffffff" stroke="#c62828" stroke-width="1.1"/>
+  <text x="82" y="1210" font-size="11.5" font-weight="700" fill="#b71c1c">Mesuré, phase 1</text>
+  <text x="82" y="1230" xml:space="preserve" font-size="11" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">in_H2 = 2,0000   out_H2 = 2,0000</text>
+  <text x="82" y="1252" font-size="11.5" fill="#263238">dH2/dt = 0, la teneur reste à zéro, dix pas sur dix.</text>
+
+  <rect x="516" y="966" width="442" height="310" rx="6" fill="#ffebee" stroke="#c62828" stroke-width="1.5"/>
+  <text x="532" y="990" font-size="13" font-weight="700" fill="#b71c1c">B &#183; Il n'y a pas de débit commun</text>
+  <rect x="532" y="1002" width="410" height="76" rx="4" fill="#ffffff"/>
+  <text x="544" y="1022" xml:space="preserve" font-size="10.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">au_dela = somme sur f de max(req_f - transit_f, 0)</text>
+  <text x="544" y="1040" xml:space="preserve" font-size="10.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">        = max(25-50, 0) + max(25-0, 0)  =  25</text>
+  <text x="544" y="1062" xml:space="preserve" font-size="10.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">tirage  = capacity.split_draw(au_dela)</text>
+  <text x="532" y="1102" font-size="12" fill="#37474f">Le débit volumique effectif n'est pas Q : c'est ce qui</text>
+  <text x="532" y="1120" font-size="12" fill="#37474f">est demandé au-delà de ce qui arrive, donc il dépend</text>
+  <text x="532" y="1138" font-size="12" fill="#37474f">de l'arrivée. L'air arrive à 50 contre sa demande de</text>
+  <text x="532" y="1156" font-size="12" fill="#37474f">25, donc il ne pèse rien dans le tirage partagé : le</text>
+  <text x="532" y="1174" font-size="12" fill="#37474f">mélange sort à 25 là où la physique en sort 50.</text>
+  <rect x="532" y="1188" width="410" height="74" rx="4" fill="#ffffff" stroke="#c62828" stroke-width="1.1"/>
+  <text x="544" y="1210" font-size="11.5" font-weight="700" fill="#b71c1c">Mesuré, phase 2</text>
+  <text x="544" y="1230" xml:space="preserve" font-size="11" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">teneur à t=10 : 0,00274 contre 0,00018</text>
+  <text x="544" y="1252" font-size="11.5" fill="#263238">soit 15 fois la référence, décroissance bien trop lente.</text>
+
+  <rect x="978" y="966" width="442" height="310" rx="6" fill="#fff3e0" stroke="#ef6c00" stroke-width="1.5"/>
+  <text x="994" y="990" font-size="13" font-weight="700" fill="#bf360c">C &#183; La demande par constituant borne encore la sortie</text>
+  <rect x="994" y="1002" width="410" height="76" rx="4" fill="#ffffff"/>
+  <text x="1006" y="1022" xml:space="preserve" font-size="10.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">deliver_output(flow, servi_f)</text>
+  <text x="1006" y="1040" xml:space="preserve" font-size="10.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">  -&gt; allocate_output : min(part, demande conso)</text>
+  <text x="1006" y="1062" xml:space="preserve" font-size="10.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">set_outflow(f, délivré)</text>
+  <text x="994" y="1102" font-size="12" fill="#37474f">Non relevé dans l'issue, et décisif : le plafond par</text>
+  <text x="994" y="1120" font-size="12" fill="#37474f">constituant ne vit pas seulement dans le tirage, il est</text>
+  <text x="994" y="1138" font-size="12" fill="#37474f">réappliqué en aval par l'allocation. Un consommateur ne</text>
+  <text x="994" y="1156" font-size="12" fill="#37474f">reçoit jamais plus qu'il ne demande, donc la part</text>
+  <text x="994" y="1174" font-size="12" fill="#37474f">composée du mélange est retaillée une seconde fois.</text>
+  <rect x="994" y="1188" width="410" height="74" rx="4" fill="#ffffff" stroke="#ef6c00" stroke-width="1.1"/>
+  <text x="1006" y="1210" font-size="11.5" font-weight="700" fill="#bf360c">Mesuré, phase 1</text>
+  <text x="1006" y="1230" xml:space="preserve" font-size="11" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">in_AIR = 50  out_AIR = 25  air : 90 -&gt; 340 en 10 unités</text>
+  <text x="1006" y="1252" font-size="11.5" fill="#263238">Retirer le min du tirage ne change rien : total sorti identique.</text>
+
+  <!-- ============================ PANNEAU 5 ============================ -->
+  <rect x="36" y="1312" width="1408" height="428" rx="8" fill="#e8f5e9" stroke="#2e7d32" stroke-width="1.4"/>
+  <text x="54" y="1340" font-size="15" font-weight="700" fill="#1b5e20">5 &#183; La conception retenue : la machine porte le débit, le volume porte la composition</text>
+
+  <rect x="54" y="1358" width="660" height="200" rx="6" fill="#ffffff" stroke="#2e7d32" stroke-width="1.2"/>
+  <text x="70" y="1382" font-size="13" font-weight="700" fill="#1b5e20">Qui déclare quoi</text>
+
+  <rect x="70" y="1396" width="216" height="96" rx="5" fill="#e3f2fd" stroke="#00695c" stroke-width="1.5"/>
+  <text x="178" y="1418" font-size="12.5" font-weight="700" fill="#263238" text-anchor="middle">SALLE</text>
+  <text x="178" y="1437" font-size="11.5" fill="#37474f" text-anchor="middle">capacité AIR + H2</text>
+  <text x="178" y="1456" font-size="11.5" fill="#37474f" text-anchor="middle">elle seule connaît x</text>
+  <text x="178" y="1478" font-size="11.5" font-weight="600" fill="#1b5e20" text-anchor="middle">elle compose R</text>
+
+  <rect x="450" y="1396" width="248" height="96" rx="5" fill="#f1f8e9" stroke="#2e7d32" stroke-width="1.5"/>
+  <text x="462" y="1416" font-size="12.5" font-weight="700" fill="#263238">EXTRACTEUR</text>
+  <text x="462" y="1438" xml:space="preserve" font-size="10.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#1b5e20">add_mixture_in(</text>
+  <text x="462" y="1454" xml:space="preserve" font-size="10.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#1b5e20">  flows=["AIR", "H2"],</text>
+  <text x="462" y="1470" xml:space="preserve" font-size="10.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#1b5e20">  volumetric_rate=50)</text>
+  <text x="462" y="1486" font-size="10.5" fill="#546e7a">il déplace du volume, il ignore x</text>
+
+  <line x1="446" y1="1414" x2="290" y2="1414" stroke="#1b5e20" stroke-width="2" marker-end="url(#mv)"/>
+  <text x="368" y="1406" font-size="11" font-weight="600" fill="#1b5e20" text-anchor="middle">demande de groupe R</text>
+  <line x1="290" y1="1470" x2="446" y2="1470" stroke="#455a64" stroke-width="2" marker-end="url(#mg)"/>
+  <text x="368" y="1462" font-size="11" font-weight="600" fill="#37474f" text-anchor="middle">servi, composé par flux</text>
+
+  <text x="70" y="1516" font-size="12" fill="#263238">Mesuré à t=1, phase 1 : servi_AIR = 49,163 et servi_H2 = 0,8371, dont la somme pondérée vaut 50,000.</text>
+  <text x="70" y="1538" font-size="12" fill="#263238">Sur la sortie de la machine, rien de neuf : le transfert identité R31 porte chaque constituant et conserve la composition.</text>
+
+  <rect x="734" y="1358" width="690" height="200" rx="6" fill="#ffffff" stroke="#2e7d32" stroke-width="1.2"/>
+  <text x="750" y="1382" font-size="13" font-weight="700" fill="#1b5e20">La règle de partage, pondérée par le weight</text>
+  <rect x="750" y="1394" width="658" height="44" rx="4" fill="#e8f5e9"/>
+  <text x="770" y="1423" xml:space="preserve" font-size="15" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-weight="600" fill="#1b5e20">sortie_f  =  R . m_f  /  somme_g ( m_g . w_g )</text>
+  <text x="750" y="1458" font-size="12" fill="#263238">Somme des sortie_f . w_f = R : le volume extrait vaut exactement R.</text>
+  <text x="750" y="1478" font-size="12" fill="#263238">Tous les poids à 1 : c'est la part brute de split_draw, donc aucun modèle existant ne bouge.</text>
+  <text x="750" y="1498" font-size="12" fill="#263238">Le dénominateur existe déjà : current_fill() x capacity, recalculé depuis les niveaux ODE, sans retard d'un pas.</text>
+  <rect x="750" y="1510" width="658" height="34" rx="4" fill="#fff3e0" stroke="#ef6c00" stroke-width="1.1"/>
+  <text x="766" y="1532" font-size="12" font-weight="600" fill="#bf360c">R est un débit de VOLUME, quand tous les autres débits du module sont des débits de quantité. La clé doit le dire.</text>
+
+  <rect x="54" y="1578" width="1370" height="144" rx="6" fill="#ffffff" stroke="#2e7d32" stroke-width="1.2"/>
+  <text x="70" y="1602" font-size="13" font-weight="700" fill="#1b5e20">Deux pièces, et aucune ne marche sans l'autre</text>
+  <line x1="70" y1="1612" x2="1408" y2="1612" stroke="#b0bec5" stroke-width="1"/>
+  <text x="80" y="1630" font-size="11.5" font-weight="700" fill="#546e7a">La pièce</text>
+  <text x="800" y="1630" font-size="11.5" font-weight="700" fill="#546e7a">Ce qu'elle donne</text>
+  <text x="1000" y="1630" font-size="11.5" font-weight="700" fill="#546e7a">Sans l'autre, mesuré</text>
+  <line x1="70" y1="1638" x2="1408" y2="1638" stroke="#b0bec5" stroke-width="1"/>
+  <text x="80" y="1658" font-size="12" fill="#263238">La machine, et une demande de groupe composée au volume</text>
+  <text x="800" y="1658" font-size="12" font-weight="600" fill="#1b5e20">phase 1 exacte</text>
+  <text x="1000" y="1658" font-size="12" fill="#b71c1c">phase 2 à environ 150 fois la référence : 0,02723 contre 0,00018</text>
+  <text x="80" y="1680" font-size="12" fill="#263238">Le tirage : la formule de l'issue, sans le court-circuit de transit</text>
+  <text x="800" y="1680" font-size="12" font-weight="600" fill="#1b5e20">phase 2 exacte</text>
+  <text x="1000" y="1680" font-size="12" fill="#b71c1c">teneur figée à zéro sur toute la phase 1</text>
+  <line x1="70" y1="1690" x2="1408" y2="1690" stroke="#b0bec5" stroke-width="1"/>
+  <text x="80" y="1710" font-size="12" fill="#263238">Sur une demande composée, la formule de l'issue est <tspan font-weight="700">idempotente</tspan> : la somme des req vaut R.M/S, que split_draw redivise en R.m_f/S. Mesurée à la cinquième décimale, deux phases, poids 1/1 et 1/0,5. L'opt-in quitte donc le volume : rien à déclarer sur la capacité.</text>
+
+</svg>
