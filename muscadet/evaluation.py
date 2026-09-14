@@ -279,7 +279,7 @@ def evaluate_demand(comp):
     # a transfer or a near-side capacity also claims is refused at declaration.
     for group in comp.mixtures.values():
         for flow_name in group.flows:
-            demands[flow_name] = float(group.volumetric_rate)
+            demands[flow_name] = float(group.flow_rate)
 
     # A continuous input no rule and no transfer covers claims what it was
     # declared with: a pure consumer has no output to map a demand back from.

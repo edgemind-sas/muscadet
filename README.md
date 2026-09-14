@@ -1823,15 +1823,33 @@ system.add_component(
     name="FAN",
     cls="MixturePumpContinuous",
     flows=["AIR", "H2"],
-    volumetric_rate=50.0,                 # a VOLUME per unit of time
+    flow_rate=50.0,                 # a VOLUME per unit of time
 )
 ```
 
 `MixturePumpContinuous` is the shipped form of `comp.add_mixture_in(name, flows,
-volumetric_rate)`, which any component may declare.
+flow_rate)`, which any component may declare.
 
-**`volumetric_rate` is a volume, where every other rate in MUSCADET is a quantity.** The
-key says so on purpose. What leaves the volume per constituent is
+**Two things `flow_rate` does not say, and both change what a model means.**
+
+It is **one rate for the whole group, not a rate per flow**. `flow_rate=50` beside
+`flows=["AIR", "H2"]` does not mean 50 of each: it means 50 of the mixture, split at
+the composition. That single degree of freedom is the whole notion.
+
+And it is a **volume** per unit of time, where every other rate in MUSCADET is a
+quantity per unit of time — `rate` on a source, `fill_rate` and `serve_rate` on a
+capacity, what `{f}_fed_out` publishes. With every `weight` at 1 the two coincide
+numerically, so a model can be written, run and believed for a long time before the
+difference surfaces: it surfaces the day a weight differs, which is also the day it
+matters.
+
+A port, incidentally, declares no rate at all. What a continuous output carries is
+computed by the production sweep and published on `{f}_fed_out`; the only declarable
+figure on a port is `var_fed_default`, the fallback of an output no rule and no
+capacity governs. `flow_rate` is the first **declared** throughput in MUSCADET, and it
+belongs to a component rather than to a port.
+
+What leaves the volume per constituent is
 
 ```
 out_f  =  R . m_f / sum_g ( m_g . w_g )
@@ -1867,7 +1885,7 @@ What is refused, and why:
 | flows arriving from **several producers** | a mixture is composed inside one volume |
 | a producer with **no capacity** behind that output, or **several volumes** | there is no composition to split at |
 | a volume serving the group **and somebody else** | arbitrating a composed share against a per-flow request is not defined |
-| `volumetric_rate` negative or infinite | a direction is the connection's; `inf . share` is `NaN` on a constituent standing at zero |
+| `flow_rate` negative or infinite | a direction is the connection's; `inf . share` is `NaN` on a constituent standing at zero |
 
 The last five are properties of the **connections**, so they are settled at the pre-run
 step and reported there, naming the group, the component and the flows.
@@ -1915,7 +1933,7 @@ MUSCADET ships eight domain-neutral continuous components in `muscadet.kb.contin
 | `CapacityContinuous`     | a volume held over one or more flows: buffer (`ports="both"`), accumulator (`"in"`) or reservoir (`"out"`) |
 | `ConsumerContinuous`     | a continuous input publishing a declared `demand`                             |
 | `ExchangeContinuous`     | one flow in and out, metered by a transfer pair: what crosses is what the declared law computed, given whole (`transfer=`) or inline (`conductance`, `potential_a`, `potential_b`) |
-| `MixturePumpContinuous`  | a terminal machine drawing several constituents together at one `volumetric_rate`: the extractor of a ventilated volume |
+| `MixturePumpContinuous`  | a terminal machine drawing several constituents together at one `flow_rate`: the extractor of a ventilated volume |
 | `SensorContinuous`       | a level read over a measurement link — one publisher, or several combined by `combine="median"` — driving a discrete control output, and optionally republishing what it read (`publish`) so another sensor can vote on it |
 
 A transformer takes its rules as a parameter, so a two-in two-out reaction needs no subclass at all:

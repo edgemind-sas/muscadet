@@ -143,11 +143,11 @@ the dual of what already exists on the production side, where
 `Capacity.split_draw` composes a draw.
 
 ```python
-comp.add_mixture_in(name="extraction", flows=["AIR", "H2"], volumetric_rate=50.0)
+comp.add_mixture_in(name="extraction", flows=["AIR", "H2"], flow_rate=50.0)
 ```
 
 Shipped form, in `muscadet/kb/continuous.py`, name to settle:
-`MixturePumpContinuous(flows=[...], volumetric_rate=..., ports="in"|"both")`.
+`MixturePumpContinuous(flows=[...], flow_rate=..., ports="in"|"both")`.
 
 `ports="both"` needs nothing new on the way out: the machine's outputs are
 ordinary continuous outputs, and the R31 identity transfer carries each
@@ -174,9 +174,25 @@ Checks:
   one to use.
 
 **`R` is a VOLUME rate**, where every other rate in the module (`rate`,
-`fill_rate`, `serve_rate`, `var_demand_default`) is a quantity rate. The
-declaration key must say so, or a modeller writes 50 expecting 50 of matter.
-Hence `volumetric_rate` and not `rate`.
+`fill_rate`, `serve_rate`, `var_demand_default`) is a quantity rate.
+
+The note proposed `volumetric_rate` for that reason. The key shipped as
+**`flow_rate`**, decided by the maintainer on 2026-09-14 for continuity with the
+vocabulary a modeller already has. The name therefore carries neither of the two
+properties that make the notion what it is -- it is ONE rate for the whole group,
+not a rate per flow, and it is a volume rather than a quantity -- so both are
+stated in the field description, in `add_mixture_in`, in `MixturePumpContinuous`,
+in the README and in the changelog, and the "one rate, not one per flow" reading
+is pinned by a test of its own rather than left to the documentation.
+
+Worth recording beside it: **no port declares a rate at all**. What a continuous
+output carries is computed by the production sweep and published on
+`{f}_fed_out`; the only declarable figure on a port is `var_fed_default`, the
+fallback of an output no rule and no capacity governs. On an output the word
+`rate` already covers three different things, two of them dimensionless
+(`{f}_out_rate`, `{f}_out_profile`) and one an observation channel
+(`{f}_rate_out`). This is the first DECLARED throughput in the module, and it
+belongs to a component rather than to a port.
 
 ---
 
@@ -282,7 +298,7 @@ wrong. Five:
 3. **a group naming a discrete flow, a measurement channel or a capacity.** Same
    grounds as `_resolve_rule_flow`: none of the three carries a conserved
    quantity;
-4. **a negative `volumetric_rate`.** A direction is the connection's, as for a
+4. **a negative `flow_rate`.** A direction is the connection's, as for a
    conduit transfer pair (KD1). Zero is legitimate and means a stopped machine;
 5. **a group of one flow is ALLOWED**, and is meaningful: `out = R/w`, a
    volumetric pump on a single-species line. No special case needed.
@@ -326,7 +342,7 @@ documentation.
 note assumed a `ports="both"` shape would need nothing of its own, the R31
 identity transfer carrying each constituent across. It conserves only while the
 outlet asks for at least what the machine draws. Measured on a pump at
-`volumetric_rate=50` behind a load asking 5: drawn 49.16 of air, delivered 5,
+`flow_rate=50` behind a load asking 5: drawn 49.16 of air, delivered 5,
 and **44.16 per unit of time entered no balance**. The group draws the whole
 volumetric rate, what leaves is capped by the demand downstream, and nothing
 bounds the one by the other. Bounding it needs the machine's downstream demand
@@ -339,7 +355,7 @@ Refused by name at declaration, and `MixturePumpContinuous` carries no
 behaviour is triggered by the presence of a group consumer, read off
 `Capacity.serves_a_mixture`, which the pre-run resolution writes. A volume drawn
 per flow keeps the 5.1.0 behaviour byte for byte, which the suite measures both
-ways -- 1627 tests unchanged and green, plus 27 new.
+ways -- 1628 tests unchanged and green, plus 28 new.
 
 **What section 4.5 predicted held.** The composed share does exceed `R` when a
 weight is below 1, and `allocate_output` had to be told: a volume holding

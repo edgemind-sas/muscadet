@@ -79,7 +79,7 @@ class MxFan(muscadet.ObjFlow):
         self.add_mixture_in(
             name="extraction",
             flows=["AIR", "H2"],
-            volumetric_rate=kwargs.get("rate", Q),
+            flow_rate=kwargs.get("rate", Q),
         )
 
 
@@ -251,7 +251,7 @@ def test_the_capability_announces_the_composed_share(phase_one):
 # ----------------------------------------------------------------------
 
 
-def test_a_volumetric_rate_is_split_at_the_weighted_share():
+def test_a_flow_rate_is_split_at_the_weighted_share():
     """out_f = R . m_f / sum_g (m_g . w_g), so sum_f out_f . w_f is exactly R."""
     weights = {"AIR": 1.0, "H2": 0.5}
     rows = trace(build(MxFan, room={"w_h2": weights["H2"]}))
@@ -265,6 +265,21 @@ def test_a_volumetric_rate_is_split_at_the_weighted_share():
         # moves a VOLUME, and that volume is the declared rate.
         moved = row["out_AIR"] * weights["AIR"] + row["out_H2"] * weights["H2"]
         assert moved == pytest.approx(Q, rel=REL)
+
+
+def test_the_rate_is_one_for_the_whole_group_not_one_per_flow():
+    """What the key name does not say, pinned so a refactor cannot lose it.
+
+    ``flow_rate`` reads like a rate per flow beside ``flows=[...]``, and it is
+    not: it is ONE rate for the group. Two flows at ``flow_rate=50`` move 50 of
+    the mixture, not 100. The invariant below is the difference between the two
+    readings, and it is what the whole notion is for.
+    """
+    rows = trace(build(MxFan))
+
+    for row in rows:
+        assert row["out_AIR"] + row["out_H2"] == pytest.approx(Q, rel=REL)
+        assert row["out_AIR"] + row["out_H2"] != pytest.approx(2.0 * Q, rel=1e-3)
 
 
 def test_a_composed_share_above_the_declared_rate_is_still_delivered():
@@ -363,10 +378,10 @@ def test_a_volume_drawn_per_flow_is_left_exactly_as_it_was():
 @pytest.mark.parametrize(
     "kwargs, message",
     [
-        ({"flows": [], "volumetric_rate": 1.0}, "at least one flow"),
-        ({"flows": ["AIR", "AIR"], "volumetric_rate": 1.0}, "must be distinct"),
-        ({"flows": ["AIR"], "volumetric_rate": -1.0}, "zero or positive"),
-        ({"flows": ["AIR"], "volumetric_rate": math.inf}, "must be finite"),
+        ({"flows": [], "flow_rate": 1.0}, "at least one flow"),
+        ({"flows": ["AIR", "AIR"], "flow_rate": 1.0}, "must be distinct"),
+        ({"flows": ["AIR"], "flow_rate": -1.0}, "zero or positive"),
+        ({"flows": ["AIR"], "flow_rate": math.inf}, "must be finite"),
     ],
 )
 def test_a_malformed_group_is_refused_by_name(kwargs, message):
@@ -382,7 +397,7 @@ def test_a_group_naming_something_it_cannot_draw_is_refused():
             super().add_flows(**kwargs)
             self.add_flow_continuous_in(name="AIR")
             self.add_flow_out(name="alarm")
-            self.add_mixture_in(name="g", flows=["alarm"], volumetric_rate=1.0)
+            self.add_mixture_in(name="g", flows=["alarm"], flow_rate=1.0)
 
     class MxRuleClash(muscadet.ObjFlow):
         def add_flows(self, **kwargs):
@@ -392,28 +407,28 @@ def test_a_group_naming_something_it_cannot_draw_is_refused():
             self.add_rules(
                 name="burn", rules=[{"cons": {"AIR": 1.0}, "prod": {"z": 1.0}}]
             )
-            self.add_mixture_in(name="g", flows=["AIR"], volumetric_rate=1.0)
+            self.add_mixture_in(name="g", flows=["AIR"], flow_rate=1.0)
 
     class MxTwoGroups(muscadet.ObjFlow):
         def add_flows(self, **kwargs):
             super().add_flows(**kwargs)
             self.add_flow_continuous_in(name="AIR")
-            self.add_mixture_in(name="g1", flows=["AIR"], volumetric_rate=1.0)
-            self.add_mixture_in(name="g2", flows=["AIR"], volumetric_rate=2.0)
+            self.add_mixture_in(name="g1", flows=["AIR"], flow_rate=1.0)
+            self.add_mixture_in(name="g2", flows=["AIR"], flow_rate=2.0)
 
     class MxNearCapacity(muscadet.ObjFlow):
         def add_flows(self, **kwargs):
             super().add_flows(**kwargs)
             self.add_flow_continuous_in(name="AIR")
             self.add_capacity(name="hopper", flow="AIR", side="in", capacity=10.0)
-            self.add_mixture_in(name="g", flows=["AIR"], volumetric_rate=1.0)
+            self.add_mixture_in(name="g", flows=["AIR"], flow_rate=1.0)
 
     class MxPassThrough(muscadet.ObjFlow):
         def add_flows(self, **kwargs):
             super().add_flows(**kwargs)
             self.add_flow_continuous_in(name="AIR")
             self.add_flow_continuous_out(name="AIR")
-            self.add_mixture_in(name="g", flows=["AIR"], volumetric_rate=1.0)
+            self.add_mixture_in(name="g", flows=["AIR"], flow_rate=1.0)
 
     for cls, message in (
         (MxBadFlow, "not a continuous input flow"),
@@ -571,7 +586,7 @@ class MxCO2Fan(muscadet.ObjFlow):
     def add_flows(self, **kwargs):
         super().add_flows(**kwargs)
         self.add_flow_continuous_in(name="CO2")
-        self.add_mixture_in(name="scrub", flows=["CO2"], volumetric_rate=1.0)
+        self.add_mixture_in(name="scrub", flows=["CO2"], flow_rate=1.0)
 
 
 def test_two_groups_over_disjoint_flows_of_one_volume_are_refused():
@@ -626,7 +641,7 @@ def test_the_kb_machine_ventilates_the_room():
         name="FAN",
         cls="MixturePumpContinuous",
         flows=["AIR", "H2"],
-        volumetric_rate=Q,
+        flow_rate=Q,
     )
     for flow in ("AIR", "H2"):
         system.connect_flow(source=f"S_{flow}", target="ROOM", flow_name=flow)
@@ -651,7 +666,7 @@ def test_the_kb_machine_refuses_to_carry_its_draw_onward():
                 name="PUMP",
                 cls="MixturePumpContinuous",
                 flows=["AIR", "H2"],
-                volumetric_rate=Q,
+                flow_rate=Q,
                 ports="both",
             )
     finally:
@@ -666,7 +681,7 @@ def test_the_kb_machine_refuses_an_unknown_port_shape():
                 name="FAN",
                 cls="MixturePumpContinuous",
                 flows=["AIR"],
-                volumetric_rate=1.0,
+                flow_rate=1.0,
                 ports="sideways",
             )
     finally:
@@ -689,7 +704,7 @@ def test_a_group_survives_the_spec_round_trip():
                     {
                         "name": "extraction",
                         "flows": ["AIR", "H2"],
-                        "volumetric_rate": 50.0,
+                        "flow_rate": 50.0,
                     }
                 ],
             },
@@ -697,7 +712,7 @@ def test_a_group_survives_the_spec_round_trip():
         spec = muscadet.component_spec(comp)
 
         assert spec["mixtures"] == [
-            {"name": "extraction", "flows": ["AIR", "H2"], "volumetric_rate": 50.0}
+            {"name": "extraction", "flows": ["AIR", "H2"], "flow_rate": 50.0}
         ]
 
         # A spec a strict reader can carry: no non-finite literal anywhere.

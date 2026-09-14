@@ -615,8 +615,11 @@ class MixturePumpContinuous(ContinuousComponent):
     flows : list or str
         The constituents drawn together. A single name is accepted and means a
         volumetric pump on a one-species line.
-    volumetric_rate : float, optional
-        The volume moved per unit of time. Defaults to 0, a stopped machine.
+    flow_rate : float, optional
+        ONE rate for the whole machine, and a VOLUME per unit of time rather
+        than a quantity. Not a rate per flow: ``flow_rate=50`` over two
+        constituents moves 50 of the mixture, not 50 of each. Defaults to 0,
+        a stopped machine.
     ports : str, optional
         ``"in"``, the only shape, and the default. Accepted so that a modeller
         writing ``ports="both"`` is told why rather than told the key is
@@ -625,7 +628,7 @@ class MixturePumpContinuous(ContinuousComponent):
         Name of the declared group. Defaults to ``"mixture"``.
     """
 
-    DECLARATION_KEYS = ("flows", "flow", "volumetric_rate", "ports", "name_group")
+    DECLARATION_KEYS = ("flows", "flow", "flow_rate", "ports", "name_group")
 
     #: The one shape this release carries. See the class docstring for what
     #: carrying the mixture onward would take.
@@ -661,7 +664,7 @@ class MixturePumpContinuous(ContinuousComponent):
         self.add_mixture_in(
             name=kwargs.get("name_group", "mixture"),
             flows=[entry["name"] for entry in entries],
-            volumetric_rate=float(kwargs.get("volumetric_rate", 0.0)),
+            flow_rate=float(kwargs.get("flow_rate", 0.0)),
         )
 
 

@@ -15,12 +15,28 @@ Closes issue #4.
 
 ### Added
 
-- **`comp.add_mixture_in(name, flows, volumetric_rate)`**, a set of continuous
+- **`comp.add_mixture_in(name, flows, flow_rate)`**, a set of continuous
   inputs drawn together as one mixture. What each constituent contributes is
   NOT declared and cannot be: it is `R . m_f / sum_g (m_g . w_g)`, fixed by the
-  composition of the volume drawn from. `volumetric_rate` is a VOLUME per unit
-  of time, where every other rate in the module is a quantity rate, and the key
-  is named for it.
+  composition of the volume drawn from.
+
+### Two things `flow_rate` does not say
+
+The key is spelled for continuity with the vocabulary a modeller already has,
+and it carries neither of the two properties that make it what it is.
+
+It is **one rate for the whole group, not a rate per flow**: `flow_rate=50`
+beside `flows=["AIR", "H2"]` moves 50 of the mixture, not 50 of each. And it is
+a **volume** per unit of time, where every other rate in the module is a
+quantity rate. With every `weight` at 1 the two coincide numerically, so the
+difference only surfaces the day a weight differs -- which is also the day it
+matters. Both are stated in the field description, in `add_mixture_in`, in
+`MixturePumpContinuous` and in the README, because the name does not state them.
+
+A port declares no rate at all: what a continuous output carries is computed by
+the production sweep and published on `{f}_fed_out`, and the only declarable
+figure on a port is `var_fed_default`. `flow_rate` is the first DECLARED
+throughput in the module, and it belongs to a component rather than to a port.
 - **`MixturePumpContinuous`**, the shipped form in `muscadet.kb.continuous`: a
   terminal extractor, the eighth continuous component.
 - **`Capacity.mixture_share(flow)`**, **`Capacity.occupied_volume()`** and

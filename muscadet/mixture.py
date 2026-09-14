@@ -39,9 +39,29 @@ the denominator is :meth:`muscadet.capacity.Capacity.occupied_volume`, recompute
 from the ODE levels rather than read off an explicit variable, so it carries no
 one-step lag.
 
-``volumetric_rate`` is named for what it is. Every other rate in the module is a
-quantity rate, and a key called ``rate`` would have a modeller write 50 expecting
-50 of matter to leave.
+What ``flow_rate`` does NOT say, and must be read here
+-----------------------------------------------------
+The key is spelled ``flow_rate`` for continuity with the vocabulary a modeller
+already has. Two things it does not carry, and each is a way to read a model
+wrong:
+
+* **it is a VOLUME per unit of time, not a quantity.** Every other rate in the
+  module is a quantity rate -- ``rate`` on a source, ``fill_rate`` and
+  ``serve_rate`` on a capacity, what ``{f}_fed_out`` publishes. With every
+  ``weight`` at 1 the two coincide numerically, so a model can be written, run
+  and believed for a long time before the difference surfaces: it surfaces the
+  day a weight differs, which is also the day it matters;
+* **it is NOT per flow.** It is ONE rate for the whole group, and that is the
+  point of the notion. ``flow_rate=50`` beside ``flows=["AIR", "H2"]`` does not
+  mean 50 of each: it means 50 of the mixture, split at the composition. The
+  two outlet rates of a ventilated volume are one degree of freedom, not two,
+  and a declaration offering two is the defect this closes.
+
+A port, by the way, declares no rate at all. What a continuous output carries
+is computed by the production sweep and published on ``{f}_fed_out``; the only
+declarable figure on a port is ``var_fed_default``, the fallback of an output no
+rule and no capacity governs. This is the first DECLARED throughput in the
+module, and it belongs to a component rather than to a port.
 
 Where the group is resolved, and why there
 ------------------------------------------
@@ -103,11 +123,14 @@ class MixtureIn(cod3s.ObjCOD3S):
         ),
     )
 
-    volumetric_rate: float = pydantic.Field(
+    flow_rate: float = pydantic.Field(
         ...,
         description=(
-            "The VOLUME moved per unit of time, not a quantity. What each "
-            "constituent contributes to it is the composition's business."
+            "ONE rate for the whole group, and a VOLUME per unit of time rather "
+            "than a quantity. Not a rate per flow: flow_rate=50 over two flows "
+            "moves 50 of the mixture, not 50 of each. What each constituent "
+            "contributes to it is the composition's business, never this "
+            "declaration's."
         ),
     )
 
@@ -132,7 +155,7 @@ class MixtureIn(cod3s.ObjCOD3S):
 
         return names
 
-    @pydantic.field_validator("volumetric_rate")
+    @pydantic.field_validator("flow_rate")
     @classmethod
     def check_rate(cls, value):
         """The rate is a finite, non-negative volume per unit of time.
@@ -148,13 +171,13 @@ class MixtureIn(cod3s.ObjCOD3S):
 
         if math.isnan(value) or value < 0.0:
             raise ValueError(
-                f"volumetric_rate must be zero or positive, got {value}. A "
+                f"flow_rate must be zero or positive, got {value}. A "
                 f"direction is the connection's, never the rate's."
             )
 
         if math.isinf(value):
             raise ValueError(
-                "volumetric_rate must be finite: an unbounded volumetric draw "
+                "flow_rate must be finite: an unbounded volumetric draw "
                 "composes as inf * share, which is NaN on a constituent standing "
                 "at zero. Declare a large finite rate instead."
             )
@@ -164,7 +187,7 @@ class MixtureIn(cod3s.ObjCOD3S):
     def __repr__(self) -> str:
         return (
             f"{self.__class__.__name__} {self.name} "
-            f"[{', '.join(self.flows)}] @ {self.volumetric_rate:g}"
+            f"[{', '.join(self.flows)}] @ {self.flow_rate:g}"
         )
 
     def __str__(self) -> str:
@@ -188,14 +211,14 @@ class MixtureDraw(cod3s.ObjCOD3S):
 
     group: str = pydantic.Field(..., description="Name of the group on that consumer")
 
-    volumetric_rate: float = pydantic.Field(
+    flow_rate: float = pydantic.Field(
         ..., description="The volume the machine moves per unit of time"
     )
 
     def __repr__(self) -> str:
         return (
             f"{self.__class__.__name__} {self.consumer}.{self.group} "
-            f"@ {self.volumetric_rate:g}"
+            f"@ {self.flow_rate:g}"
         )
 
     def __str__(self) -> str:
@@ -293,7 +316,7 @@ def resolve_mixture_groups(system):
         capacity.mixture = MixtureDraw(
             consumer=comp.name(),
             group=group.name,
-            volumetric_rate=group.volumetric_rate,
+            flow_rate=group.flow_rate,
         )
 
         bound.setdefault(producer, {})[capacity.name] = f"{key}.{group.name}"

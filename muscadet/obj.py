@@ -1565,7 +1565,7 @@ class ObjFlow(cod3s.PycComponent):
         """
         return self._capacity_index.get((flow_name, side))
 
-    def add_mixture_in(self, name, flows=None, volumetric_rate=None, **params):
+    def add_mixture_in(self, name, flows=None, flow_rate=None, **params):
         """
         Declares that several continuous inputs are drawn together, as a
         mixture, at ONE volumetric rate (R51).
@@ -1593,11 +1593,15 @@ class ObjFlow(cod3s.PycComponent):
         flows : list or str
             The continuous input flows drawn together. A group of one is
             legitimate and means ``out = R / w``.
-        volumetric_rate : float
-            The VOLUME moved per unit of time, not a quantity. Zero means a
-            stopped machine; it must be finite, an unbounded volumetric draw
-            composing as ``inf * share``, which is ``NaN`` on a constituent
-            standing at zero.
+        flow_rate : float
+            ONE rate for the whole group, and a VOLUME per unit of time rather
+            than a quantity. **Not a rate per flow**: ``flow_rate=50`` over two
+            flows moves 50 of the mixture, not 50 of each. With every ``weight``
+            at 1 a volume rate and a quantity rate coincide numerically, so the
+            difference only surfaces the day a weight differs -- which is also
+            the day it matters. Zero means a stopped machine; it must be finite,
+            an unbounded volumetric draw composing as ``inf * share``, which is
+            ``NaN`` on a constituent standing at zero.
 
         Returns
         -------
@@ -1615,9 +1619,7 @@ class ObjFlow(cod3s.PycComponent):
         if name in self.mixtures:
             raise ValueError(f"Mixture group {name} already declared on {self.name()}")
 
-        group = MixtureIn(
-            name=name, flows=flows, volumetric_rate=volumetric_rate, **params
-        )
+        group = MixtureIn(name=name, flows=flows, flow_rate=flow_rate, **params)
 
         self.check_mixture_flows(group)
 

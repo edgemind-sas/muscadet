@@ -1540,11 +1540,7 @@ class Capacity(cod3s.ObjCOD3S):
         if occupied <= 0.0:
             return 0.0
 
-        share = (
-            float(self.mixture.volumetric_rate)
-            * self.get_quantity(flow_name)
-            / occupied
-        )
+        share = float(self.mixture.flow_rate) * self.get_quantity(flow_name) / occupied
 
         return max(share, 0.0)
 
