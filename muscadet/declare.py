@@ -42,6 +42,42 @@ class; ``params`` is its own declaration (``rate``, ``capacity``, ``activate``
 top, so ``SourceContinuous`` plus one discrete output is a spec and not a
 subclass.
 
+A mode's occurrence law, written twice
+--------------------------------------
+
+A two-state mode declares the numbers of its occurrence law in TWO fields, and
+this is the one rule a second reader of the document has to know:
+
+.. code-block:: json
+
+    {"occ_law":        {"cls": "delay", "time": [4.0]},
+     "occ_param":      [4.0],
+     "occ_param_name": ["occ_time"]}
+
+``occ_law`` carries the NATURE of the law -- exponential, deterministic delay,
+instantaneous draw -- and ``occ_param`` carries ONE ENTRY PER COMMON-CAUSE
+ORDER, which is what the engine wires its transitions to and what an indicator
+names through ``occ_param_name``. Neither is redundant: the vector has no
+nature, and the law has nowhere to hold an order whose entry is a tuple of
+several parameters. The same holds of ``not_occ_law`` / ``not_occ_param`` for
+the return direction, and only for the ``ObjMode2S`` spelling -- an ``ObjFM``
+façade carries its law in its CLASS and writes no law field at all.
+
+**The two are one statement, and a document where they disagree is refused**
+(:func:`_check_law_agreement`), naming the mode, both fields and both values.
+They are not resolved by precedence: ``ObjMode2S`` has one -- the vector wins
+-- but it is muscadet-and-PyCATSHOO's and nothing in the document says so, and
+a reader that takes the typed law would build another system from the very
+same bytes without either run signalling it.
+
+**Read back, the law's parameter is written from the vector** and not from the
+spec the constructor was handed (:func:`_mode_law_spec`), so a document that
+comes out of :func:`system_spec` always says one thing. One consequence worth
+expecting: a law declared with a scalar (``{"cls": "exp", "rate": 0.1}``)
+reads back as the one-entry vector (``{"cls": "exp", "rate": [0.1]}``), which
+is the spelling of ``occ_param`` -- the format has always accepted both and
+now emits one.
+
 Examples
 --------
 >>> comp = build_component(system, {                        # doctest: +SKIP
@@ -63,8 +99,10 @@ import inspect
 import math
 import operator
 import re
+import typing
 
 import cod3s
+import cod3s.pycatshoo.mode_law
 import pydantic
 
 from .capacity import MeasurementOut
@@ -309,6 +347,23 @@ MODE_OPERATORS = {
     ">=": operator.ge,
 }
 
+#: ``{"exp": "rate", "delay": "time", "inst": "prob"}``: which key of an
+#: occurrence law holds its PARAMETER, per ``cls`` tag. The one thing a reader
+#: of a law dict needs in order to compare it with the parameter vector that
+#: writes the same numbers (:attr:`ModeVocabulary.law_fields`).
+#:
+#: DERIVED from cod3s' own discriminated union rather than typed out here, so
+#: a fourth law class does not need this line edited to be understood -- each
+#: law declares its tag as the default of its ``cls`` field and its parameter
+#: as the ``param_field`` class variable the engine itself reads to name the
+#: parameter variables. A law cod3s stops exposing there simply falls out of
+#: the mapping, and the agreement check goes silent on it rather than refusing
+#: a document it cannot read.
+MODE_LAW_PARAM_FIELDS = {
+    law_cls.model_fields["cls"].default: law_cls.param_field
+    for law_cls in typing.get_args(typing.get_args(cod3s.pycatshoo.mode_law.ModeLaw)[0])
+}
+
 
 class ModeVocabulary(pydantic.BaseModel):
     """How one FAMILY of mode classes spells its declaration.
@@ -360,9 +415,28 @@ class ModeVocabulary(pydantic.BaseModel):
     #: order therefore MEANS what the tuple means, and the build converts.
     order_vectors: tuple
 
-    #: The fields holding a ``cod3s.pycatshoo.mode_law.ModeLaw``, which is a
-    #: pydantic model rather than data and is dumped rather than refused.
-    #: Empty for the façade family, whose law is carried by the class itself.
+    #: ``(law key, parameter key)``: the fields holding a
+    #: ``cod3s.pycatshoo.mode_law.ModeLaw``, which is a pydantic model rather
+    #: than data and is dumped rather than refused, EACH PAIRED WITH THE FIELD
+    #: OF :attr:`order_vectors` THAT WRITES THE SAME NUMBERS. Empty for the
+    #: façade family, whose law is carried by the class itself.
+    #:
+    #: **The pairing is what makes the two writings one declaration.** A
+    #: ``delay`` mode declares its four hours twice, as ``occ_law: {"cls":
+    #: "delay", "time": [4.0]}`` and as ``occ_param: [4.0]``, and the engine
+    #: reads the SECOND: the law contributes its NATURE and the per-order
+    #: vector contributes the NUMBERS, so a document saying 4 in one and 5 in
+    #: the other builds a four-hour mode while a reader that takes the typed
+    #: law builds a five-hour one. Neither half can be dropped -- the vector
+    #: has no nature and the law has no place to hold a per-order tuple -- so
+    #: the pairing is written down here, once, and the two directions of the
+    #: declaration use it to stay one statement:
+    #:
+    #: - reading a live mode back, :func:`_mode_law_spec` writes the law's
+    #:   parameter FROM the vector, so what comes out never disagrees with
+    #:   itself whatever the mode was built from;
+    #: - reading a document in, :func:`_check_law_agreement` refuses one whose
+    #:   two writings disagree, naming the mode and both fields.
     law_fields: tuple = ()
 
     #: ``(spec key, attribute, default)`` for the fields carrying one of the
@@ -490,7 +564,7 @@ MODE_VOCABULARY = ModeVocabulary(
         "step": None,
     },
     order_vectors=("occ_param", "not_occ_param"),
-    law_fields=("occ_law", "not_occ_law"),
+    law_fields=(("occ_law", "occ_param"), ("not_occ_law", "not_occ_param")),
 )
 
 #: ``cod3s.ObjEvent``: a two-state event, self-hosted, whose condition is a
@@ -1672,23 +1746,57 @@ def _mode_tempo(comp, direction):
     return getattr(law, "time", None)
 
 
-def _mode_law_spec(law, where):
+def _law_order_value(entry):
+    """The number ONE ORDER of a parameter vector contributes to the law.
+
+    An entry of an order vector is either a scalar or the tuple of that
+    order's parameters (:attr:`ModeVocabulary.order_vectors`). The engine
+    parametrises the transition law with ``params[param_names[0]]`` -- the
+    FIRST of them -- so that is the one the law's own parameter field holds,
+    and any further entry is a variable the law does not read.
+    """
+    if isinstance(entry, (list, tuple)):
+        return entry[0] if entry else None
+    return entry
+
+
+def _mode_law_spec(law, params, where):
     """A declared occurrence law, as data, or a refusal.
 
     ``ModeLaw`` is a pydantic model rather than a mapping, so it is dumped and
     not walked: ``parse_mode_law`` takes the dump back, which is what makes a
     law-driven mode rebuildable at all.
+
+    **The parameter written is the one the mode RUNS ON, not the one it was
+    handed.** ``ObjMode2S`` keeps the law spec exactly as it was given and
+    builds its parameter variables from the paired order vector, which wins
+    whenever it is as long as the targets. So a mode built from ``occ_law:
+    {"cls": "delay", "time": [5.0]}`` and ``occ_param: [4.0]`` occurs at 4,
+    and dumping the law it was handed would write a document claiming 5 --
+    a document that reads back identical and describes another system, which
+    is the one failure the round trip exists to catch. The nature of the law
+    comes from the spec, its numbers from ``params``, and the two writings
+    then say the same thing by construction.
+
+    ``params`` empty is not a disagreement and derives nothing: a self-hosted
+    mode builds no parameter variable at all (``targets=None``), and its law
+    is the only writing it has.
     """
     if law is None:
         return None
 
     try:
-        return _checked_declaration(law.model_dump(), where)
+        dump = law.model_dump()
     except AttributeError as err:  # pragma: no cover - cod3s laws are pydantic
         raise ComponentSpecError(
             f"{where}: holds {type(law).__name__}, which is not an occurrence "
             f"law a mapping can carry"
         ) from err
+
+    if params:
+        dump[law.param_field] = [_law_order_value(entry) for entry in params]
+
+    return _checked_declaration(dump, where)
 
 
 def _self_hosted_automaton_name(comp):
@@ -1777,6 +1885,11 @@ def failure_mode_component_spec(comp):
     occurrence law is a pydantic model rather than a mapping, so it is dumped
     (:func:`_mode_law_spec`) rather than refused.
 
+    An occurrence law is also the one field NOT read back as the mode holds
+    it: its numbers come from the paired parameter vector, which is what the
+    mode runs on. See :attr:`ModeVocabulary.law_fields` for why the two
+    writings exist and :func:`_mode_law_spec` for what that changes.
+
     Parameters
     ----------
     comp : cod3s.ObjFM or cod3s.ObjMode2S
@@ -1794,6 +1907,7 @@ def failure_mode_component_spec(comp):
     """
     where = f"Failure mode {comp.basename()}"
     vocabulary = mode_vocabulary(type(comp), where)
+    law_params = dict(vocabulary.law_fields)
 
     spec = {
         "name": comp.basename(),
@@ -1822,8 +1936,12 @@ def failure_mode_component_spec(comp):
             # The two spellings are a different model, so the distinction is
             # read from the flag rather than from what is left of the list.
             value = None
-        elif key in vocabulary.law_fields:
-            value = _mode_law_spec(getattr(comp, attribute, None), f"{where}, {key}")
+        elif key in law_params:
+            value = _mode_law_spec(
+                getattr(comp, attribute, None),
+                getattr(comp, law_params[key], None) or (),
+                f"{where}, {key}",
+            )
         else:
             value = getattr(comp, attribute, None)
 
@@ -1927,7 +2045,97 @@ def check_failure_mode_spec(spec):
                 f"{where}: {key}={spec[key]!r} is not one of {sorted(MODE_LOGIC)}"
             )
 
+    for law_key, param_key in vocabulary.law_fields:
+        _check_law_agreement(spec, law_key, param_key, where)
+
     return name
+
+
+def _check_law_agreement(spec, law_key, param_key, where):
+    """Refuse a declaration whose law and parameter vector say different numbers.
+
+    The two writings of one statement (:attr:`ModeVocabulary.law_fields`).
+    They are not interchangeable -- the law carries the NATURE, the vector
+    carries the per-order numbers and may carry several per order -- so
+    neither can be dropped, and the document is only one statement as long as
+    they agree.
+
+    **Why this is a refusal and not a precedence rule.** ``ObjMode2S`` has one:
+    a vector as long as the targets wins, a shorter one is replaced by the
+    law's own values. It is unwritten, it is muscadet-and-PyCATSHOO's, and the
+    whole point of the declaration document is that a second engine reads the
+    same thing without being told. A reader that takes the typed law -- the
+    natural first reading, it is the one that says what the law IS -- builds
+    another system from the very same bytes, and nothing in either run says
+    so. So a document whose two writings disagree is not resolved here, it is
+    refused, naming the mode, both fields and both values.
+
+    What is compared is what each writing CONTRIBUTES, per common-cause order:
+    the law's parameter vector against the first entry of each order of the
+    vector (:func:`_law_order_value`), which is the one the engine
+    parametrises the transition with. A scalar is the one-order spelling of a
+    one-entry vector on both sides, so ``4.0`` and ``[4.0]`` agree.
+
+    Silent on everything the engine does not read as a disagreement: a missing
+    key, an empty vector (the self-hosted shape, which builds no parameter
+    variable), a ``None`` entry on both sides (the explicit inactive-order
+    marker). A LENGTH mismatch is a disagreement like any other -- the two
+    writings then do not even declare the same number of orders -- and it is
+    the case where the precedence FLIPS, which is why the refusal derives the
+    number muscadet would have built rather than asserting the usual one:
+    ``ObjMode2S`` replaces a vector SHORTER than its targets by the law's own
+    values, and takes the vector whenever it is as long.
+    """
+    if law_key not in spec or param_key not in spec:
+        return
+
+    law = spec[law_key]
+    params = spec[param_key]
+
+    if not isinstance(law, dict) or law.get("cls") not in MODE_LAW_PARAM_FIELDS:
+        # An unreadable law is not this check's refusal to make: cod3s'
+        # ``parse_mode_law`` names the ``cls`` tags it knows, and saying it
+        # here too would mean maintaining that list in two places.
+        return
+
+    param_field = MODE_LAW_PARAM_FIELDS[law["cls"]]
+    declared = law.get(param_field)
+
+    if declared is None or params is None:
+        return
+
+    law_values = list(declared) if isinstance(declared, list) else [declared]
+    param_values = [
+        _law_order_value(entry)
+        for entry in (params if isinstance(params, list) else [params])
+    ]
+
+    if not law_values or not param_values:
+        return
+
+    if law_values == param_values:
+        return
+
+    if len(param_values) >= len(spec.get("targets") or ()):
+        built, other = param_values, law_values
+        why = (
+            f"{param_key} is as long as the mode's targets, so it is what the "
+            f"automata are wired to"
+        )
+    else:
+        built, other = law_values, param_values
+        why = (
+            f"{param_key} is shorter than the mode's targets, so the engine "
+            f"replaces it by the law's own values"
+        )
+
+    raise ComponentSpecError(
+        f"{where}: {law_key}[{param_field!r}]={law_values!r} and "
+        f"{param_key}={param_values!r} are two writings of the same numbers "
+        f"and they disagree. muscadet would build {built!r} -- {why} -- where "
+        f"the other writing says {other!r}, from the same document. Declare "
+        f"one of them, or make them equal"
+    )
 
 
 def build_failure_mode_component(system, spec):
@@ -2285,6 +2493,14 @@ def build_controller_component(system, spec):
 #: changed meaning is a major. A reader refuses a major it does not know
 #: rather than guessing, because the whole point of this document is that two
 #: engines read the SAME thing.
+#:
+#: **A field whose meaning is PINNED is not a changed meaning.** Refusing a
+#: mode whose ``occ_law`` and ``occ_param`` disagree (see the module docstring)
+#: is not a major: no field moved, no field left, and the documents the rule
+#: refuses are exactly the ones that had no single meaning to begin with --
+#: muscadet read one number out of them and a reader of the typed law read
+#: another. A document that said one thing yesterday says the same thing
+#: today and builds the same system.
 SYSTEM_SPEC_VERSION = "1.0.0"
 
 #: What an indicator declaration carries. Read back concretely rather than as
