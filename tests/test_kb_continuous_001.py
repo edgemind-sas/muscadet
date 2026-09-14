@@ -146,10 +146,10 @@ FULL_DECLARATIONS = {
         capacity=10.0,
         ports="both",
         side="out",
-        # The derivation ``ports`` carries, stated explicitly, which is what
-        # ``side`` is doing on the line above and for the same reason: both are
-        # defaults a montage outside the three shorthands overrides.
-        transmits=True,
+        # No ``transmits`` here, and that absence is the declaration: the
+        # class DERIVES it from ``ports`` and does not accept it, since an
+        # explicit value could only restate the derivation or contradict what
+        # the engine does. Pinned in test_capacity_transmits_001.
         demand=0.0,
         fill_rate=0.0,
         serve_rate=float("inf"),

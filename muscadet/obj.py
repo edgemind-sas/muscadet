@@ -1285,7 +1285,11 @@ class ObjFlow(cod3s.PycComponent):
             and muscadet's own solver takes that branch from the wiring rather
             than from the key -- it is declared so that an engine reading the
             exported document can see it, ``side`` being unable to tell a
-            buffer from a reservoir.
+            buffer from a reservoir. Declare it False only of a volume nothing
+            crosses, since the solver will transit one that something does
+            whatever the key says: this is the level at which a component
+            declaring RULES states a route its ports do not show, and
+            ``CapacityContinuous`` derives it instead of accepting it.
 
         Returns
         -------

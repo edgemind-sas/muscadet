@@ -106,26 +106,6 @@ def allocation_params(kwargs):
     return {key: kwargs[key] for key in ALLOCATION_KEYS if key in kwargs}
 
 
-def and_list(names):
-    """``a``, ``a and b``, ``a, b and c``: an enumeration a sentence can carry.
-
-    ``" and ".join`` reads as a conjunction up to two terms and as a stutter
-    past them, and the accumulator refusal below reached three the day
-    ``transmits`` joined the two keys it already named.
-
-    Local rather than shared with the platform importer, which builds the
-    same sentence about the same volume: its parse layer imports no muscadet
-    by design -- ``muscadet.common`` would pull PyCATSHOO into a layer that
-    runs without it -- so it restates what it needs, as it already does for
-    ``CONTROL_AGGREGATIONS``. Its own list stops at two keys, where the join
-    is right.
-    """
-    names = list(names)
-    if len(names) < 3:
-        return " and ".join(names)
-    return f"{', '.join(names[:-1])} and {names[-1]}"
-
-
 class ContinuousComponent(muscadet.ObjFlow):
     """Shared base of the shipped components: a CHECKED declaration.
 
@@ -415,6 +395,20 @@ CAPACITY_PORTS = {"both": "out", "in": "in", "out": "out"}
 #: what muscadet already computes is not a coincidence and is measured: the
 #: empty branch of ``Capacity.serve_limit`` bounds itself by the inflow, which
 #: on a class declaring no input and no rule is zero.
+#:
+#: **Derived and never declared**, which is where this parts company with
+#: ``side`` and where a first cut got it wrong by taking the two for a pair.
+#: This class declares no rule, so the ports are the whole of the route
+#: through the volume and ``ports`` settles the question completely: an
+#: explicit value could only restate this table or contradict it. And a
+#: contradiction is not a modelling choice here, because muscadet's solver
+#: transits whatever the key says -- ``CapacityContinuous(ports="both",
+#: transmits=False)`` was accepted for a day, and measured, it served its
+#: consumer 1.0 while writing ``transmits: false`` into the document. That is
+#: the divergence between the two engines this whole field exists to close,
+#: written by the shipped class itself. ``ObjFlow.add_capacity`` keeps the key:
+#: a component that declares RULES has a route the ports do not show, and the
+#: platform importer needs it to write a reservoir.
 CAPACITY_TRANSMITS = {"both": True, "in": False, "out": False}
 
 
@@ -463,16 +457,10 @@ class CapacityContinuous(ContinuousComponent):
         ``"both"`` (default), ``"in"`` or ``"out"``.
     side : str, optional
         Side the capacity itself sits on. Defaults to the one ``ports``
-        implies.
-    transmits : bool, optional
-        Whether the volume passes on what it does not hold back. Defaults to
-        the one ``ports`` implies (:data:`CAPACITY_TRANSMITS`): a buffer
-        transits, a reservoir and an accumulator do not, having no second port
-        to transit toward. Declared here rather than left to be guessed,
-        because ``side`` cannot carry it -- ``"both"`` and ``"out"`` are both
-        ``side="out"`` -- and an engine reading the exported document would
-        otherwise have to infer a buffer from the presence of an input flow of
-        the same name.
+        implies, and unlike the transit below this one is a real choice: on
+        ``ports="both"`` the flow is carried on both sides, so placing the
+        volume upstream of the rules rather than downstream is something a
+        model may mean.
     demand : float, optional
         Demand claimed on every input, for an accumulator. Defaults to 0.
     control : str, optional
@@ -521,7 +509,6 @@ class CapacityContinuous(ContinuousComponent):
         "capacity",
         "ports",
         "side",
-        "transmits",
         "demand",
         "fill_rate",
         "serve_rate",
@@ -545,26 +532,20 @@ class CapacityContinuous(ContinuousComponent):
         serve_cond = kwargs.get("serve_cond")
         control = kwargs.get("control")
 
-        # ``transmits`` joins the two: it says what a volume holding nothing
-        # still passes on, so on a shape that passes nothing on it is the same
-        # dead declaration. Only an explicit one offends -- the derived default
-        # is False on this shape and says exactly what is true of it.
         commanded = [
             key
             for key, value in (
                 ("serve_rate", math.isfinite(serve_rate)),
                 ("serve_cond", bool(serve_cond)),
-                ("transmits", bool(kwargs.get("transmits"))),
             )
             if value
         ]
 
         if ports == "in" and commanded:
-            # The subject VARIES since the message names the offending keys
-            # rather than the two it used to list whatever was declared, so
-            # the verb and the pronoun follow it. A refusal a modeller reads
+            # The subject is built from what was actually declared, so the
+            # verb and the pronoun agree with it: a refusal a modeller reads
             # is prose, and "serve_rate govern" is not.
-            keys = and_list(commanded)
+            keys = " and ".join(commanded)
             alone = len(commanded) == 1
             raise ValueError(
                 f"{keys} govern{'s' if alone else ''} what a capacity "
@@ -603,7 +584,7 @@ class CapacityContinuous(ContinuousComponent):
             ],
             capacity=kwargs.get("capacity"),
             side=kwargs.get("side", CAPACITY_PORTS[ports]),
-            transmits=bool(kwargs.get("transmits", CAPACITY_TRANSMITS[ports])),
+            transmits=CAPACITY_TRANSMITS[ports],
             content_init=kwargs.get("content_init"),
             fill_rate=float(kwargs.get("fill_rate", 0.0)),
             serve_rate=serve_rate,

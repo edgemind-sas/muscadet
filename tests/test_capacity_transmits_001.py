@@ -26,9 +26,18 @@ sharing a word.
 
 **Its default is True**, which is what every capacity did before the field
 existed, so no model moves and a document written at 1.0.0 rebuilds unchanged.
-``CapacityContinuous`` derives it from ``ports`` exactly as it derives ``side``:
+
+``CapacityContinuous`` DERIVES it from ``ports`` and does not accept it:
 transit needs two ports, one to receive at and one to pass on to, so a buffer
-transits and a reservoir and an accumulator do not.
+transits and a reservoir and an accumulator do not. It is not an overridable
+default the way ``side`` is, and taking the two for a pair is the mistake this
+module was written with: this class declares no rule, so the ports settle the
+question and an explicit value could only restate the derivation or contradict
+it. The contradiction is the one that matters -- the solver transits whatever
+the key says, so ``ports="both", transmits=False`` served its consumer 1.0
+while writing ``transmits: false`` into the document, which is this ticket's
+own divergence produced by the shipped class. ``ObjFlow.add_capacity`` keeps
+the key, where a component declaring RULES has a route the ports do not show.
 
 PyCATSHOO forbids more than one live system per process, so each scenario is
 built, driven, inspected and deleted before the next one starts; the fixture
@@ -124,21 +133,36 @@ def run_derivation(obs):
             system.deleteSys()
 
 
-def run_explicit_override(obs):
-    """The derivation is a default, as ``side``'s is, and says so by giving way."""
-    system = muscadet.System(name="CtOverride")
-    try:
-        tank = build_tank(system, "out", transmits=True)
-        obs["override_transmits"] = tank.capacities["tank"].transmits
-    finally:
-        system.deleteSys()
+#: Every (``ports``, value) pair a modeller could write on the class. All four
+#: are refused: see :func:`run_the_key_is_not_declarable`.
+CT_DECLARED = (("both", False), ("both", True), ("out", True), ("in", False))
 
-    system = muscadet.System(name="CtOverrideRefusal")
+
+def run_the_key_is_not_declarable(obs):
+    """The class derives the key and refuses to be told it.
+
+    ``ports="both"`` with ``transmits=False`` is the pair that matters, and it
+    was accepted for a day: measured then, it built, served its consumer 1.0
+    and wrote ``transmits: false`` into the document -- the very divergence
+    between the two engines this field exists to close, written by the shipped
+    class itself.
+    """
+    system = muscadet.System(name="CtNotDeclarable")
     try:
-        build_tank(system, "in", transmits=True)
-        obs["accumulator_error"] = None
-    except ValueError as err:
-        obs["accumulator_error"] = err
+        for index, (ports, value) in enumerate(CT_DECLARED):
+            try:
+                system.add_component(
+                    name=f"T{index}",
+                    cls="CapacityContinuous",
+                    flow="q",
+                    capacity=CT_VOLUME,
+                    capacity_name="tank",
+                    ports=ports,
+                    transmits=value,
+                )
+                obs[f"declared_{ports}_{value}"] = None
+            except ValueError as err:
+                obs[f"declared_{ports}_{value}"] = str(err)
     finally:
         system.deleteSys()
 
@@ -148,26 +172,21 @@ def run_explicit_override(obs):
 #: what was declared where it used to be a fixed pair.
 #:
 #: ``serve_cond`` names no port here on purpose: the refusal fires before the
-#: condition is resolved, which is what lets the third key join the list
+#: condition is resolved, which is what lets a second key join the list
 #: without a control port having to exist.
 CT_REFUSALS = (
-    ("one", dict(transmits=True), "transmits governs what"),
     ("ceiling", dict(serve_rate=40.0), "serve_rate governs what"),
+    ("command", dict(serve_cond=["cmd"]), "serve_cond governs what"),
     (
         "two",
-        dict(serve_rate=40.0, transmits=True),
-        "serve_rate and transmits govern what",
-    ),
-    (
-        "three",
-        dict(serve_rate=40.0, serve_cond=["cmd"], transmits=True),
-        "serve_rate, serve_cond and transmits govern what",
+        dict(serve_rate=40.0, serve_cond=["cmd"]),
+        "serve_rate and serve_cond govern what",
     ),
 )
 
 
 def run_refusal_wordings(obs):
-    """The four sentences the refusal builds, collected verbatim."""
+    """The sentences the refusal builds, collected verbatim."""
     system = muscadet.System(name="CtRefusalWordings")
     try:
         for index, (label, extra, _) in enumerate(CT_REFUSALS):
@@ -252,7 +271,7 @@ def the_run():
     obs = {}
 
     run_derivation(obs)
-    run_explicit_override(obs)
+    run_the_key_is_not_declarable(obs)
     run_refusal_wordings(obs)
     run_buffered_scenario(obs)
     run_round_trip(obs)
@@ -297,24 +316,49 @@ def test_the_kb_derives_the_key_from_ports(the_run):
     ), "every shape ports names must say whether it transits"
 
 
-def test_an_explicit_value_gives_way_to_no_derivation(the_run):
-    """A montage the three shorthands do not cover states the key itself."""
-    assert the_run["override_transmits"] is True
+def test_what_the_document_declares_is_what_the_component_is_wired_for(the_run):
+    """The derivation read off the BUILD, not off a second copy of the table.
 
-
-def test_transit_declared_on_a_volume_with_no_way_out_is_refused(the_run):
-    """An accumulator releases nothing, so a declared transit would be inert.
-
-    The refusal ``serve_rate`` and ``serve_cond`` already carry (R-15), for the
-    same reason and through the same list: the volume declares no output and no
-    rule, so nothing downstream would ever read the key.
+    This class declares no rule, so the ports are the whole of the route
+    through the volume: it transits exactly when its held flow is carried on
+    both sides. Checking the table against the component that was built is
+    what makes the document true rather than merely consistent with itself.
     """
-    error = the_run["accumulator_error"]
+    for ports in ("both", "in", "out"):
+        spec = the_run[f"{ports}_spec"]
+        sides = {flow["cls"] for flow in spec["flows"]}
+        crosses = sides == {"FlowContinuousIn", "FlowContinuousOut"}
 
-    assert error is not None, "a transit nothing can read must be refused"
-    assert "transmits" in str(error)
-    assert "releases nothing" in str(error)
-    assert "ports='both'" in str(error)
+        assert spec["capacities"][0]["transmits"] is crosses, (
+            f"ports={ports}: the document says "
+            f"{spec['capacities'][0]['transmits']} of a component carrying "
+            f"{sorted(sides)}"
+        )
+
+
+def test_the_key_is_derived_and_the_class_refuses_to_be_told_it(the_run):
+    """An explicit value could only restate the derivation, or lie.
+
+    Where ``side`` takes an override because ``ports="both"`` leaves a real
+    choice -- the volume upstream of the rules or downstream -- this leaves
+    none: no rule, so the ports settle it. And the contradiction is not a
+    modelling choice a model may mean, because the solver transits whatever
+    the key says. ``ports="both", transmits=False`` was accepted for a day and
+    measured: consumer served 1.0, document ``transmits: false``. A document
+    that lies about the engine that wrote it is the one thing this field
+    exists to prevent.
+    """
+    for ports, value in CT_DECLARED:
+        message = the_run[f"declared_{ports}_{value}"]
+
+        assert (
+            message is not None
+        ), f"ports={ports}, transmits={value}: the class took a key it derives"
+        assert "'transmits'" in message
+        assert "does not accept declaration key" in message
+        # And it says what it does accept, ``ports`` included, which is what
+        # the modeller has to reach for instead.
+        assert "ports" in message
 
 
 def test_the_refusal_reads_as_a_sentence_whatever_it_names(the_run):
@@ -322,24 +366,23 @@ def test_the_refusal_reads_as_a_sentence_whatever_it_names(the_run):
 
     The message was FIXED while it listed the two keys it knew, and therefore
     always plural and always right. Built from what was actually declared, it
-    said "serve_rate govern" on one key, and "a and b and c" on three -- a
-    list pretending to be a conjunction. A refusal a modeller reads is prose.
+    said "serve_rate govern" on one key. A refusal a modeller reads is prose.
+
+    The neighbouring refusal in the platform importer carried the same
+    disagreement and is pinned in ``test_cod3s_platform_continuous.py``.
     """
     for label, _, subject in CT_REFUSALS:
         message = the_run[f"refusal_{label}"]
 
         assert message is not None, f"{label}: nothing was refused"
         assert subject in message, f"{label}: {message}"
-        assert " and serve_cond and " not in message, f"{label}: stutters"
 
-    # The pronoun agrees too, and the offending keys are repeated at the end
-    # in the same enumeration, which is where the reader is told what to drop.
-    assert "would ever read it." in the_run["refusal_one"]
-    assert the_run["refusal_one"].endswith("drop transmits")
-    assert "would ever read them." in the_run["refusal_three"]
-    assert the_run["refusal_three"].endswith(
-        "drop serve_rate, serve_cond and transmits"
-    )
+    # The pronoun agrees too, and the offending keys are repeated at the end,
+    # which is where the reader is told what to drop.
+    assert "would ever read it." in the_run["refusal_ceiling"]
+    assert the_run["refusal_ceiling"].endswith("drop serve_rate")
+    assert "would ever read them." in the_run["refusal_two"]
+    assert the_run["refusal_two"].endswith("drop serve_rate and serve_cond")
 
 
 # ----------------------------------------------------------------------

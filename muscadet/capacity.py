@@ -436,7 +436,14 @@ class Capacity(cod3s.ObjCOD3S):
             "one capped, while this one says only WHETHER the branch is there "
             "at all. A volume declaring False is a pure store -- it serves "
             "what it holds and nothing more -- which is what a reservoir with "
-            "no way in and an accumulator with no way out already are in fact."
+            "no way in and an accumulator with no way out already are in fact. "
+            "DECLARE IT FALSE ONLY OF A VOLUME NOTHING CROSSES: muscadet's own "
+            "solver takes the branch from the wiring and not from this field "
+            "(serve_limit), so a False on a volume it does transit is not a "
+            "way to stop it -- it is a document saying something the engine "
+            "that wrote it does not do, which is the one failure this field "
+            "exists to prevent. muscadet.kb.continuous.CapacityContinuous "
+            "derives it rather than accepting it for exactly that reason."
         ),
     )
 
