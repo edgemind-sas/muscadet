@@ -134,6 +134,12 @@ POINT_TRANSITION_INSTANT_OBSERVATION: typing.Final[str] = (
     "transition_instant_observation"
 )
 
+#: How finely a continuous threshold crossing is located, and who names that
+#: resolution.
+POINT_CONTINUOUS_CROSSING_RESOLUTION: typing.Final[str] = (
+    "continuous_crossing_resolution"
+)
+
 #: The end date an armed non-deterministic transition carries in an interactive
 #: session, before the operator has planned one.
 POINT_ARMED_TRANSITION_DATE: typing.Final[str] = "armed_transition_date"
@@ -223,6 +229,37 @@ SEMANTIC_POINTS: typing.Final[typing.Tuple[SemanticPoint, ...]] = (
         ),
     ),
     SemanticPoint(
+        name=POINT_CONTINUOUS_CROSSING_RESOLUTION,
+        rule=(
+            "A study DECLARES the resolution at which the continuous part of "
+            "its model is to be watched, through the pdmp_dt of its "
+            "simulation section. An episode longer than that resolution is "
+            "seen; one shorter than it may not be. HOW an engine honours the "
+            "request -- a fixed integration grid, an adaptive step with event "
+            "location, anything else -- is the engine's own business, and "
+            "nothing here says the number is a step size."
+        ),
+        rationale=(
+            "On a continuous model the resolution decides what EXISTS in a "
+            "trajectory, not merely how precisely it is dated: a threshold is "
+            "crossed between two evaluations or it is not. Measured on the "
+            "reference solver, a wider step costs no integration accuracy -- "
+            "integrated quantities stayed within 1e-5 of a fine reference up "
+            "to 0.25 -- and yet an episode shorter than the step DISAPPEARS, "
+            "with nothing raised anywhere. No engine can pick that threshold "
+            "on the analyst's behalf, because the shortest phenomenon worth "
+            "seeing is known in the study and nowhere else. Making it a "
+            "request the study states, rather than a number whichever solver "
+            "runs happens to sit on, is also the only form under which two "
+            "engines can be asked for the same thing."
+        ),
+        source=(
+            "cod3s.specs.study_yaml.SimulationConfig.pdmp_dt (cod3s 1.17.0, "
+            "the ref muscadet embeds), which carries the measure; muscadet "
+            "pyproject.toml (cod3s pin)"
+        ),
+    ),
+    SemanticPoint(
         name=POINT_ARMED_TRANSITION_DATE,
         rule=(
             "In an interactive session an armed non-deterministic transition "
@@ -281,7 +318,7 @@ SEMANTIC_POINTS: typing.Final[typing.Tuple[SemanticPoint, ...]] = (
 #:
 #: Both engines appear on both sides of the line, and that is worth noticing
 #: rather than a coincidence: the reference engine is the one that fails the
-#: first point, and the engine that fails the last three is the one that gets
+#: first point, and the engine that fails every other one is the one that gets
 #: the first one right. A registry where one engine only ever deviates would be
 #: a comparison dressed as a rule.
 DEVIATIONS: typing.Final[typing.Tuple[Deviation, ...]] = (
@@ -308,6 +345,46 @@ DEVIATIONS: typing.Final[typing.Tuple[Deviation, ...]] = (
             "COD3S Platform ADR-2026-09-01-multi-moteur-simulation-raichu, "
             "decision 9; ADR-2026-09-08-muscadet-facade-portable-deux-moteurs, "
             "decision 8"
+        ),
+    ),
+    Deviation(
+        engine=ENGINE_RAICHU,
+        point=POINT_CONTINUOUS_CROSSING_RESOLUTION,
+        behaviour=(
+            "Samples no grid to set a resolution on: it integrates "
+            "adaptively and LOCATES a crossing. Every accepted step is "
+            "scanned at sub_samples interior points of its dense output, the "
+            "earliest sign change is bracketed, and the bracket is bisected "
+            "down to tol_event. There is therefore no base integration step "
+            "to receive the request, and the parameter is accepted without "
+            "being read (pyraichu.muscadet_engine._DIVERGENT_PARAMETERS)."
+        ),
+        consequence=(
+            "Nothing at all on a purely DISCRETE model, which is the whole "
+            "boolean corpus: there is no continuous state to watch, so the "
+            "request governs nothing on either engine. On a CONTINUOUS model "
+            "the answer is NOT 'less accurate'. It is that the resolution at "
+            "which a short episode is seen is no longer the one the study "
+            "asked for: it is this engine's own, fixed by max_step and "
+            "sub_samples (0.1 and 16 by default, hence a scan spacing no "
+            "coarser than 0.00625) and reachable only as a keyword of the "
+            "run, beside the parameters. On those defaults it happens to be "
+            "FINER than the 0.02 the platform corpus writes, which is what "
+            "makes the gap easy to miss: what is lost is not precision but "
+            "the link -- asking for 0.002 to catch a short episode buys "
+            "nothing here, and asking for 1.0 costs nothing. Two engines "
+            "compared on a continuous model are compared at two resolutions, "
+            "one declared and one defaulted, and only the declared one moves "
+            "when the analyst changes their mind."
+        ),
+        compensation=None,
+        source=(
+            "muscadet conformance ticket 5cee0a73, 2026-09-14, measured on "
+            "the COD3S Platform reference corpus, which writes pdmp_dt in "
+            "every study's simulation section whether or not it was set "
+            "(DEFAULT_PDMP_DT, 0.02); "
+            "pyraichu.muscadet_engine._DIVERGENT_PARAMETERS; "
+            "raichu_numeric::SolverParams defaults"
         ),
     ),
     Deviation(

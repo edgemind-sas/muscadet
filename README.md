@@ -2358,7 +2358,7 @@ Departs from muscadet on 1 point:
     compensated by   : nothing; it reaches the result
     source           : COD3S Platform ADR-2026-09-01-multi-moteur-simulation-raichu, decision 9; [...]
 
-Honours: armed_transition_date, interactive_step_granularity, advance_to_date
+Honours: continuous_crossing_resolution, armed_transition_date, interactive_step_granularity, advance_to_date
 
 Informational. muscadet refuses no run on the strength of this record; whether an engine can carry a study is the capability matrix's question, and it is asked elsewhere.
 ```
@@ -2402,6 +2402,7 @@ clean bill of health -- `is_assessed` is what tells the two apart.
 | Point | Engine | Does it otherwise |
 |---|---|---|
 | `transition_instant_observation` | `pycatshoo` | reads the state *before* the transitions due at that instant |
+| `continuous_crossing_resolution` | `raichu` | locates a crossing instead of stepping a grid, so `pdmp_dt` reaches nothing |
 | `armed_transition_date` | `raichu` | samples the law as soon as the transition is armed |
 | `interactive_step_granularity` | `raichu` | one step draws a single transition instead of resolving the instant |
 | `advance_to_date` | `raichu` | has no `isimu_step_to` primitive; the date is reached by repeating steps |
@@ -2411,6 +2412,18 @@ library, so the gap is a known limit of the reference engine rather than a
 defect to fix. It only shows when a **deterministic** transition falls exactly
 on an observation instant, which commensurable durations make ordinary: a mode
 with a 1000 h delay observed at 1000 h.
+
+The second is the only one about the **continuous** calculation, and it is the
+other entry nothing compensates. A study declares the resolution it wants its
+continuous part watched at, through `pdmp_dt`; RAICHU has no base step to set,
+because it locates a crossing by scanning and bisecting rather than by
+sampling a grid, so the request is accepted and never read. On a purely
+discrete model that costs nothing -- there is nothing for it to govern on
+either engine. On a continuous one the resolution becomes RAICHU's own
+(`max_step`, `sub_samples`), which its defaults make *finer* than the 0.02 a
+platform study writes: what is lost is not precision but the link, since
+asking for a finer resolution buys nothing and asking for a coarser one costs
+nothing.
 
 The last three are compensated by the COD3S Platform's interactive worker, so
 a platform user never meets them. **A library user driving the engine directly
