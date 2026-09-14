@@ -439,7 +439,13 @@ def test_the_generic_engine_round_trips_with_its_declared_laws():
     ``parse_mode_law``: without that, the mode would be refused as a live
     object and no ObjMode2S could cross at all."""
     result = run_probe(_MODE2S_ROUND_TRIP)
-    assert result["declared"]["occ_law"] == {"cls": "exp", "rate": 0.1}
+    # Declared ``rate=0.1``, read back ``rate=[0.1]``: the law's parameter is
+    # written FROM the per-order vector the mode's automata are wired to, not
+    # from the scalar the constructor was handed, so the two writings of that
+    # number are the same list rather than two spellings that have to be
+    # reconciled by whoever reads the document.
+    assert result["declared"]["occ_law"] == {"cls": "exp", "rate": [0.1]}
+    assert result["declared"]["occ_param"] == [0.1]
     # The self-hosted shape crosses whole: ``targets`` stays null rather than
     # collapsing to the empty list the engine normalises it into, and the
     # automaton comes back under the name it was given and not the mode's.
@@ -680,8 +686,14 @@ def test_the_generic_two_state_engine_declares_itself_in_its_own_spelling(the_ru
     spec = the_run["spec"]["components"]["C__engine"]
     assert spec["cls"] == "ObjMode2S"
     assert spec["mode_name"] == "engine"
-    assert spec["occ_law"] == {"cls": "exp", "rate": 0.1}
-    assert spec["not_occ_law"] == {"cls": "delay", "time": 3.0}
+    # One spelling for the law's parameter, the per-order vector, whatever the
+    # constructor was handed: it is read back from ``occ_param``, so it says
+    # what the mode RUNS ON. The system above declares this mode with the
+    # scalars ``rate=0.1`` and ``time=3``.
+    assert spec["occ_law"] == {"cls": "exp", "rate": [0.1]}
+    assert spec["occ_param"] == [0.1]
+    assert spec["not_occ_law"] == {"cls": "delay", "time": [3.0]}
+    assert spec["not_occ_param"] == [3.0]
     assert spec["occ_effects"] == {"f_fed_available_out": False}
     # The façade's spelling has no business on a class that does not take it.
     assert not [key for key in spec if key.startswith(("failure_", "repair_"))]
