@@ -3,8 +3,9 @@
 Three properties are checked here, and only the first is about content.
 
 1. **The divergences are declared and legible.** The observation gap at a
-   transition instant, and the three interactive ones, with what muscadet
-   defines opposite what the engine does instead.
+   transition instant, the three interactive ones, and the resolution a study
+   asks for on its continuous part, with what muscadet defines opposite what
+   the engine does instead.
 
 2. **Reading it costs nothing.** No system, no engine, no run -- which is why
    this module builds nothing and therefore carries no ``test_delete``, exactly
@@ -41,6 +42,7 @@ from muscadet.conformance import (
     ENGINE_RAICHU,
     POINT_ADVANCE_TO_DATE,
     POINT_ARMED_TRANSITION_DATE,
+    POINT_CONTINUOUS_CROSSING_RESOLUTION,
     POINT_INTERACTIVE_STEP_GRANULARITY,
     POINT_TRANSITION_INSTANT_OBSERVATION,
     ConformanceRegistryError,
@@ -351,7 +353,7 @@ def test_a_shell_prints_the_record_of_the_chosen_engine():
 
     assert completed.returncode == 0, completed.stderr
 
-    for point in CR_INTERACTIVE_POINTS:
+    for point in CR_INTERACTIVE_POINTS + (POINT_CONTINUOUS_CROSSING_RESOLUTION,):
         assert point in completed.stdout
 
     assert "capability matrix" in completed.stdout
@@ -423,7 +425,180 @@ def test_the_advance_to_a_date_entry_says_why_it_is_not_a_matrix_line():
 
 
 # ----------------------------------------------------------------------
-# 5. The registry holds together
+# 5. The integration step a study asks for, and the engine that has none
+# ----------------------------------------------------------------------
+
+
+def test_the_requested_resolution_is_a_point_muscadet_decided():
+    """The first point on the CONTINUOUS calculation rather than on an instant.
+
+    What muscadet decides is deliberately not "the solver steps at pdmp_dt",
+    which would be transcribing the reference engine: it is that the STUDY
+    requests a resolution and an engine honours the request however it likes.
+    Written down because a reader of the registry could not otherwise tell
+    that the question had even been asked.
+    """
+    point = conformance.semantic_point(POINT_CONTINUOUS_CROSSING_RESOLUTION)
+
+    assert "pdmp_dt" in point.rule
+    assert "REQUESTED BY THE STUDY" in point.rule
+
+    # The rule prescribes no mechanism, which is what leaves an adaptive
+    # engine free to be conformant rather than red by construction.
+    assert "its own business" in point.rule
+
+    assert point.rationale
+    assert "pdmp_dt" in point.source
+
+
+def test_the_rule_is_a_floor_and_says_what_it_does_not_promise():
+    """One-sided on purpose, and the asymmetry is load-bearing.
+
+    "At least this finely" is a rule an engine can be judged against. An
+    equality could not be: an adaptive engine watches at a spacing that moves
+    with the trajectory, so it would be non-conformant for being BETTER. The
+    other half has to be written too -- below the floor muscadet promises
+    nothing -- or a reader takes the absence of a short episode for its
+    non-occurrence, which is the misreading the whole point exists against.
+    """
+    rule = conformance.semantic_point(POINT_CONTINUOUS_CROSSING_RESOLUTION).rule
+
+    assert "FLOOR" in rule
+    assert "at least that finely" in rule
+    assert "is not evidence that it did not happen" in rule
+
+
+def test_the_rule_owns_up_to_re_reading_the_upstream_field():
+    """muscadet widens ``pdmp_dt``, and says so where the reader meets it.
+
+    cod3s declares the field as the base integration step of its PDMP solver
+    and its own runner applies it as exactly that, so a reader who knows cod3s
+    would otherwise meet a flat contradiction with no explanation. The
+    widening is the decision this point exists to make -- a step size is a
+    mechanism only one solver family has, and read that way the number means
+    nothing to an engine built otherwise -- so the rationale carries it rather
+    than leaving it between the lines.
+    """
+    point = conformance.semantic_point(POINT_CONTINUOUS_CROSSING_RESOLUTION)
+
+    assert "WIDENS" in point.rationale
+    assert "base integration step" in point.rationale
+    assert "setDt" in point.rationale
+
+    # And the re-reading is shown to be free where it can be checked: on a
+    # fixed grid of dt the two readings coincide.
+    assert "coincide" in point.rationale
+    assert "setDt" in point.source
+
+
+def test_raichu_locates_a_crossing_instead_of_stepping_a_grid():
+    """The behaviour, and where the accepted-and-unread parameter lands."""
+    declared = conformance.deviations(
+        ENGINE_RAICHU, POINT_CONTINUOUS_CROSSING_RESOLUTION
+    )
+
+    assert len(declared) == 1
+
+    deviation = declared[0]
+
+    assert "LOCATES a crossing" in deviation.behaviour
+    assert "_DIVERGENT_PARAMETERS" in deviation.behaviour
+
+
+def test_the_consequence_separates_a_discrete_model_from_a_continuous_one():
+    """Two readers, two answers, and the entry owes both.
+
+    A purely discrete study -- the whole boolean corpus -- loses nothing: no
+    continuous state, nothing for the request to govern, on either engine.
+    Saying only that would hide the real gap; saying only "it is less precise"
+    would be false, since this engine's own defaults are finer than the 0.02
+    the platform writes. What changes is that the resolution stops following
+    the study.
+    """
+    deviation = conformance.deviations(
+        ENGINE_RAICHU, POINT_CONTINUOUS_CROSSING_RESOLUTION
+    )[0]
+
+    assert "DISCRETE" in deviation.consequence
+    assert "CONTINUOUS" in deviation.consequence
+    assert "max_step" in deviation.consequence
+
+
+def test_the_floor_is_reported_as_met_by_accident_on_both_sides():
+    """The entry owes the case where the floor HOLDS as much as the one where
+    it does not.
+
+    Once the rule is a floor, this engine's defaults clear it for the 0.02 a
+    platform study writes and miss it for a study asking 0.002 -- and it does
+    both without ever reading the request, which is why it is one deviation
+    and not a conformance that depends on the number. An entry that only
+    reported the failing side would read as "RAICHU is too coarse", which is
+    false on the corpus as it stands and would be argued away the first time
+    someone measured it.
+    """
+    deviation = conformance.deviations(
+        ENGINE_RAICHU, POINT_CONTINUOUS_CROSSING_RESOLUTION
+    )[0]
+
+    assert "BY ACCIDENT" in deviation.consequence
+
+    # The side where it holds, and the side where it does not, each named
+    # with the number that decides it.
+    assert "0.02" in deviation.consequence
+    assert "0.002" in deviation.consequence
+    assert "FINER" in deviation.consequence
+
+
+def test_nothing_restores_the_resolution_the_study_asked_for():
+    """``compensation`` is None, and that is a measurement, not a shrug.
+
+    RAICHU's own resolution knobs travel as keywords of the run, beside the
+    parameters; no conversion turns the study's request into them, so nothing
+    puts muscadet's meaning back before a number is read.
+    """
+    deviation = conformance.deviations(
+        ENGINE_RAICHU, POINT_CONTINUOUS_CROSSING_RESOLUTION
+    )[0]
+
+    assert deviation.compensation is None
+    assert "nothing; it reaches the result" in conformance.describe(ENGINE_RAICHU)
+
+
+def test_the_reference_engine_is_named_as_honouring_the_request():
+    """PyCATSHOO applies the step, so it carries no entry -- and that reads.
+
+    Through :func:`conformant_points` rather than through the absence of a
+    deviation, for the same reason as the observation point above: an absence
+    is also what an unassessed engine looks like.
+    """
+    assert (
+        conformance.deviations(ENGINE_PYCATSHOO, POINT_CONTINUOUS_CROSSING_RESOLUTION)
+        == ()
+    )
+    assert POINT_CONTINUOUS_CROSSING_RESOLUTION in conformance.conformant_points(
+        ENGINE_PYCATSHOO
+    )
+
+
+def test_the_declared_resolution_refuses_nothing():
+    """The point of the whole registry, on the entry that most invites a refusal.
+
+    Refusing ``pdmp_dt`` engine side is where this started, and it stopped
+    every study the platform writes -- continuous and discrete alike, since a
+    cod3s parameter object writes the key whether or not it was set. Nothing
+    added here may reintroduce that, so the slug appears in no capability
+    marker and the registry still answers an unknown engine permissively.
+    """
+    importer = (CR_PACKAGE_ROOT / "importers" / "cod3s_platform.py").read_text()
+
+    assert "_SUPPORTS_CONTINUOUS_CROSSING_RESOLUTION" not in importer
+    assert "pdmp_dt" not in importer
+
+    assert conformance.deviations("an-engine-nobody-wrote") == ()
+
+
+# ----------------------------------------------------------------------
+# 6. The registry holds together
 # ----------------------------------------------------------------------
 
 
@@ -475,7 +650,7 @@ def test_an_entry_is_frozen():
 
 
 # ----------------------------------------------------------------------
-# 6. An engine muscadet cannot know declares itself
+# 7. An engine muscadet cannot know declares itself
 # ----------------------------------------------------------------------
 
 
