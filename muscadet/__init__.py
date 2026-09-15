@@ -29,21 +29,27 @@ from .declare import (
     component_build_order,
     component_references,
     component_spec,
+    declared_events,
     system_spec,
 )
 from .engine import (
     ENGINE_ENTRY_POINT_GROUP,
     REFERENCE_ENGINE,
+    RUN_TARGETS,
     Engine,
     EngineAlreadyRegisteredError,
     EngineError,
     EngineRunnerMissingError,
+    RunTargetError,
     UnknownEngineError,
+    check_run_targets,
     get_engine,
     is_reference_engine,
     register_engine,
     registered_engines,
     reset_engines,
+    run_target_names,
+    run_targets,
     unregister_engine,
 )
 from .flow import (

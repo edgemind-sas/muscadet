@@ -2002,10 +2002,28 @@ def check_failure_mode_spec(spec):
 
     unknown = sorted(set(spec) - vocabulary.keys)
     if unknown:
+        # The one unknown key worth an address rather than a list. Declaring a
+        # sequence target ON the event is the first thing anyone tries, it is
+        # what the engines' own model files do, and the refusal used to stop at
+        # "not a key of this class" -- which is true and leaves the reader with
+        # nowhere to put it. Only ``target``, and ``targets`` on an event whose
+        # vocabulary has no such key: a mode's ``targets`` are the components
+        # it acts upon and are a declaration in the ordinary way.
+        misplaced = "target" in unknown or (
+            "targets" in unknown and vocabulary is EVENT_VOCABULARY
+        )
         raise ComponentSpecError(
             f"{where}: unknown key(s) {', '.join(unknown)}. A "
             f"{spec['cls']} declaration carries: "
             f"{', '.join(sorted(vocabulary.keys))}"
+            + (
+                ". A SEQUENCE target is not something an event declares: it is "
+                "a parameter of the run, travelling beside the document as "
+                "muscadet.engine.RUN_TARGETS, because one system is run both "
+                "with it and without it"
+                if misplaced
+                else ""
+            )
         )
 
     field_keys = {key for key, _ in vocabulary.fields}
@@ -2678,6 +2696,16 @@ def system_spec(system):
     whatever one intends to compute on them. The COD3S Platform already draws
     this line, between its model export and its study.
 
+    **Where a sequence target travels instead**, since "not here" was once the
+    whole answer and left it nowhere at all: beside the document, as the run
+    keyword :data:`muscadet.engine.RUN_TARGETS`, which names each target by the
+    name of its event and is read against this declaration by
+    :func:`muscadet.engine.run_targets`. :func:`declared_events` is the reader
+    that says which names this document offers. The line is unchanged and the
+    reason is now demonstrable rather than asserted: one system runs twice, a
+    free-cycling campaign and a first-occurrence campaign, and it is one
+    system -- so one document, and two sets of run parameters.
+
     **What comes back survives ``json.dumps``, and that is checked rather than
     intended.** Every section above has its own refusal and each names the
     declaration it read, which is what a modeller needs; none of them can say
@@ -2986,6 +3014,65 @@ def check_system_spec(spec):
         missing = [k for k in ("component", subject_key) if not entry.get(k)]
         if missing:
             raise SystemSpecError(f"indicator {entry!r}: missing {missing}")
+
+
+def declared_events(spec):
+    """Every EVENT a system declaration holds, in the order the document writes.
+
+    The one place muscadet answers "does this name designate an event", and it
+    answers it from the DOCUMENT alone. That is what a sequence target needs:
+    the seam hands an engine a declaration and the targets of the run beside it
+    (:func:`muscadet.engine.run_targets`), so the question "is ``PANNE_OND`` an
+    event of this system" has to be answerable without a live system anywhere.
+
+    An event is recognised by the VOCABULARY its class speaks
+    (:data:`EVENT_VOCABULARY`), not by the spelling of the class name, so a
+    modeller's own subclass of ``cod3s.ObjEvent`` is one -- exactly as
+    :func:`failure_mode_component_spec` wrote it as one. The three families of
+    :data:`MODE_VOCABULARIES` are otherwise indistinguishable in a document:
+    all three are a :data:`COMPONENT_KIND_TWO_STATE_MODE`, and only this one
+    observes a condition, which is what a target reaches.
+
+    The kind is read from the key rather than through :func:`component_kind`,
+    because here an unreadable entry is not this function's to refuse: a
+    two-state mode always writes its kind out (the default is
+    :data:`COMPONENT_KIND_FLOW`), so the key is exact, and a ``cls`` naming no
+    known class is simply not an event. A declaration nobody can build is
+    :func:`check_system_spec`'s to refuse, with a message about the class --
+    where a refusal raised here would talk about a target instead.
+
+    Parameters
+    ----------
+    spec : dict
+        A system declaration, as :func:`system_spec` produces it.
+
+    Returns
+    -------
+    tuple of str
+        The names of the event components, in document order. Empty for
+        anything that is not a readable declaration, a system holding no event
+        and a document holding no ``components`` being the same answer here.
+    """
+    components = spec.get("components") if isinstance(spec, dict) else None
+
+    if not isinstance(components, dict):
+        return ()
+
+    events = []
+
+    for name, comp_spec in components.items():
+        if not isinstance(comp_spec, dict):
+            continue
+        if comp_spec.get(COMPONENT_KIND_KEY) != COMPONENT_KIND_TWO_STATE_MODE:
+            continue
+        try:
+            _, vocabulary = _mode_class(comp_spec.get("cls"), f"Component {name!r}")
+        except ComponentSpecError:
+            continue
+        if vocabulary is EVENT_VOCABULARY:
+            events.append(str(name))
+
+    return tuple(events)
 
 
 def build_system(spec, system=None):
