@@ -101,7 +101,13 @@ CONSTRUCTOR_KEYS = (
 #:   imported channel, so they follow both;
 #: - ``rules`` refuse a capacity name and a measurement channel name in a
 #:   ``cons`` map, which is only refusable once those exist;
-#: - ``transfers`` last: a conduit refuses a flow a rule already consumes.
+#: - ``transfers`` next to last: a conduit refuses a flow a rule already
+#:   consumes.
+#: - ``mixtures`` last, for the same reason one step further (R51): a group
+#:   refuses a flow a rule set consumes, a transfer pair names, or a near-side
+#:   capacity buffers, so all three have to exist before it is declared. The
+#:   refusal is therefore as order-dependent as the conduit's is, and a
+#:   hand-written ``add_flows`` declaring its rules after its groups escapes it.
 #:
 #: The two controller sections are declared by :class:`muscadet.ObjCtrl`, which
 #: is a PEER of ``ObjFlow`` and not a subclass of it (R39), so no single
@@ -125,6 +131,7 @@ DECLARATION_SECTIONS = (
     ("measurements_out", "add_measurement_out"),
     ("rules", "add_rules"),
     ("transfers", "add_transfer"),
+    ("mixtures", "add_mixture_in"),
 )
 
 #: The sections declared AFTER ``set_flows()``. An automaton's effects are
@@ -887,6 +894,7 @@ def component_spec(comp):
             "measurements_out": dump_all(comp.measurements_out, "measurement out"),
             "rules": dump_all(comp.rule_sets, "rule set"),
             "transfers": transfers,
+            "mixtures": dump_all(comp.mixtures, "mixture group"),
         }
     )
 

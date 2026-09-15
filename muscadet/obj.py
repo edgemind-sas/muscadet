@@ -181,6 +181,7 @@ from .flow_continuous import (
     FlowContinuousIn,
     FlowContinuousOut,
 )
+from .mixture import MixtureIn
 from .profile import build_profile
 from .rules import (
     Rule,
@@ -304,6 +305,12 @@ class ObjFlow(cod3s.PycComponent):
         # get_capacity_of_flow answers KTD13's counterparty substitution from.
         # Built by register_capacity, at declaration time.
         self._capacity_index = {}
+
+        # Mixture groups this component draws, keyed by group name, in
+        # declaration order (R51). Declared with add_mixture_in; bound to the
+        # volume that composes for them at the pre-run step, by
+        # muscadet.mixture.resolve_mixture_groups.
+        self.mixtures = {}
 
         # Measurement links this component imports, keyed by channel name.
         self.measurements_in = {}
@@ -1557,6 +1564,150 @@ class ObjFlow(cod3s.PycComponent):
         per flow per equation evaluation.
         """
         return self._capacity_index.get((flow_name, side))
+
+    def add_mixture_in(self, name, flows=None, flow_rate=None, **params):
+        """
+        Declares that several continuous inputs are drawn together, as a
+        mixture, at ONE volumetric rate (R51).
+
+        This is the declaration a ventilation extractor, a pump on a line
+        carrying a mixture or a compressor is written with. What leaves the
+        volume per constituent is NOT declared here and cannot be: it is
+        ``R . m_f / sum_g (m_g . w_g)``, fixed by the composition of the volume
+        drawn from. Declaring two independent per-flow demands instead gives a
+        model two degrees of freedom where the physics has one, which is the
+        defect of issue #4.
+
+        The flows must already be declared, so call this AFTER the
+        ``add_flow_continuous_in`` calls of ``add_flows``.
+
+        **Nothing is resolved here.** Which volume composes for the group is a
+        property of the CONNECTIONS, so it is settled at the pre-run step by
+        :func:`muscadet.mixture.resolve_mixture_groups`, which refuses by name a
+        group whose flows do not all arrive from one capacity of one producer.
+
+        Parameters
+        ----------
+        name : str
+            Group name. Must be unique on the component.
+        flows : list or str
+            The continuous input flows drawn together. A group of one is
+            legitimate and means ``out = R / w``.
+        flow_rate : float
+            ONE rate for the whole group, and a VOLUME per unit of time rather
+            than a quantity. **Not a rate per flow**: ``flow_rate=50`` over two
+            flows moves 50 of the mixture, not 50 of each. With every ``weight``
+            at 1 a volume rate and a quantity rate coincide numerically, so the
+            difference only surfaces the day a weight differs -- which is also
+            the day it matters. Zero means a stopped machine; it must be finite,
+            an unbounded volumetric draw composing as ``inf * share``, which is
+            ``NaN`` on a constituent standing at zero.
+
+        Returns
+        -------
+        muscadet.mixture.MixtureIn
+            The declared group, also kept on :attr:`mixtures`.
+
+        Raises
+        ------
+        ValueError
+            If the group name is already taken, if a named flow is not a
+            continuous input of this component, or if a named flow is already
+            spoken for by a rule set, a transfer pair, a capacity or another
+            group of this component.
+        """
+        if name in self.mixtures:
+            raise ValueError(f"Mixture group {name} already declared on {self.name()}")
+
+        group = MixtureIn(name=name, flows=flows, flow_rate=flow_rate, **params)
+
+        self.check_mixture_flows(group)
+
+        self.mixtures[name] = group
+
+        return group
+
+    def check_mixture_flows(self, group):
+        """Refuse a mixture group naming something it cannot draw (R51).
+
+        Four refusals, and each of them is a declaration that would otherwise be
+        silently inert or silently doubled:
+
+        * a flow that is not a continuous INPUT of this component. A discrete
+          flow carries no quantity, a measurement channel carries a reading, and
+          an output is not drawn;
+        * a flow another group already names. Two volumetric rates over one flow
+          have no composition to share;
+        * a flow a rule set CONSUMES or a transfer pair names. The group already
+          claims the whole of that input, so the second claim would be served
+          out of a budget nothing arbitrates;
+        * a flow a capacity of THIS component buffers on the way in. The group's
+          demand is what the volume upstream is asked for, and a second volume
+          on the near side of it is a claim of its own;
+        * a flow this component also carries as a continuous OUTPUT. A machine
+          that draws a mixture and passes it on destroys matter the moment its
+          outlet asks for less than it draws, and nothing in this release bounds
+          the volumetric rate by what the machine can place: closing that needs
+          the machine's downstream demand to reach the volume that holds the
+          composition, which is a mechanism of its own. Measured before the
+          refusal landed, a pump at rate 50 behind a load asking 5 drew 49.16 of
+          air, delivered 5, and 44.16 per unit of time entered no balance.
+        """
+        where = f"mixture group {group.name} of {self.name()}"
+
+        for flow_name in group.flows:
+            flow = self.flows_continuous_in.get(flow_name)
+
+            if flow is None:
+                raise ValueError(
+                    f"{where}: {flow_name} is not a continuous input flow. A "
+                    f"mixture is drawn over continuous inputs; a discrete flow "
+                    f"carries no quantity and a measurement channel no matter."
+                )
+
+            for other in self.mixtures.values():
+                if flow_name in other.flows:
+                    raise ValueError(
+                        f"{where}: {flow_name} is already drawn by group "
+                        f"{other.name}. One input is drawn at one rate."
+                    )
+
+            for set_key, rule_set in self.rule_sets.items():
+                if flow_name in rule_set.consumed_flows:
+                    raise ValueError(
+                        f"{where}: {flow_name} is consumed by rule set "
+                        f"{set_key}. A mixture group claims the whole of its "
+                        f"input, so a rule consuming it too would be served out "
+                        f"of a budget nothing arbitrates."
+                    )
+
+            for pair in self.transfers.values():
+                if flow_name in (pair.source, pair.target):
+                    raise ValueError(
+                        f"{where}: {flow_name} is named by transfer pair "
+                        f"{pair.name}, for the same reason a rule may not "
+                        f"consume it."
+                    )
+
+            if flow_name in self.flows_continuous_out:
+                raise ValueError(
+                    f"{where}: {flow_name} is also a continuous OUTPUT of this "
+                    f"component. A machine drawing a mixture and carrying it "
+                    f"onward destroys matter as soon as its outlet asks for "
+                    f"less than it draws: the group draws the whole volumetric "
+                    f"rate, while what leaves is capped by the demand "
+                    f"downstream, and nothing bounds the one by the other. "
+                    f"Measured on a pump at rate 50 behind a load asking 5: "
+                    f"44.16 per unit of time recorded by no balance. Declare a "
+                    f"terminal extractor instead."
+                )
+
+            if self.get_capacity_of_flow(flow_name, "in") is not None:
+                raise ValueError(
+                    f"{where}: {flow_name} is buffered by a capacity of this "
+                    f"component on the way in. A group asks the volume it draws "
+                    f"FROM; a second volume on the near side claims on its own."
+                )
 
     def add_measurement_in(self, name, **params):
         """

@@ -4,6 +4,97 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 5.4.0 (2026-09-15)
+
+A volume holding several constituents can be **ventilated**: a machine declares
+one volumetric rate, and the volume composes it. Additive on every side -- a
+model that declares no machine derives the same order, evaluates the same
+sweeps and produces the same numbers as it did in 5.1.0.
+
+Closes issue #4.
+
+### Added
+
+- **`comp.add_mixture_in(name, flows, flow_rate)`**, a set of continuous
+  inputs drawn together as one mixture. What each constituent contributes is
+  NOT declared and cannot be: it is `R . m_f / sum_g (m_g . w_g)`, fixed by the
+  composition of the volume drawn from.
+
+### Two things `flow_rate` does not say
+
+The key is spelled for continuity with the vocabulary a modeller already has,
+and it carries neither of the two properties that make it what it is.
+
+It is **one rate for the whole group, not a rate per flow**: `flow_rate=50`
+beside `flows=["AIR", "H2"]` moves 50 of the mixture, not 50 of each. And it is
+a **volume** per unit of time, where every other rate in the module is a
+quantity rate. With every `weight` at 1 the two coincide numerically, so the
+difference only surfaces the day a weight differs -- which is also the day it
+matters. Both are stated in the field description, in `add_mixture_in`, in
+`MixturePumpContinuous` and in the README, because the name does not state them.
+
+A port declares no rate at all: what a continuous output carries is computed by
+the production sweep and published on `{f}_fed_out`, and the only declarable
+figure on a port is `var_fed_default`. `flow_rate` is the first DECLARED
+throughput in the module, and it belongs to a component rather than to a port.
+- **`MixturePumpContinuous`**, the shipped form in `muscadet.kb.continuous`: a
+  terminal extractor, the eighth continuous component.
+- **`Capacity.mixture_share(flow)`**, **`Capacity.occupied_volume()`** and
+  **`Capacity.serves_a_mixture`**: the split, its denominator, and the predicate
+  the three sweeps branch on.
+- **`muscadet.mixture`**, holding `MixtureIn`, `MixtureDraw`,
+  `MixtureGroupError` and `resolve_mixture_groups`. The three classes and the
+  error are exported from the package root.
+- A `mixtures` section in `muscadet.declare`, last in `DECLARATION_SECTIONS`,
+  so a group refuses a flow a rule set, a transfer pair or a near-side capacity
+  already claims.
+
+### Why a machine and not a field on the capacity
+
+The two outlet rates of a ventilated volume are ONE degree of freedom, not two:
+`out_AIR = R (1 - x)` and `out_H2 = R x`. Written as two independent per-flow
+demands -- the only thing a consumer could declare before -- the model gets two.
+Measured on a room fed 50 of air and 2 of hydrogen behind an outlet asking 25 of
+each: the hydrogen share stayed at **exactly zero** for the whole run, and the
+room's air content rose from 90 to 340 over ten time units.
+
+The rate belongs to a machine rather than to the volume because a room does not
+decide its own ventilation; two fans on one room are two components, where a
+field on the capacity is one number for the whole volume; a pump fails, derates
+and is commanded, which a component already knows how to do; and the same object
+serves a pipe carrying a mixture. The composition stays in the capacity, which
+is the only thing that knows it.
+
+Measured against the closed forms, both phases, to the fifth decimal, at weights
+`1/1` and `1/0.5`.
+
+### Where the group is resolved
+
+A PyCATSHOO message box carries a float, so the fact that several demands are
+ONE demand cannot travel on `{f}_demand`. It is resolved structurally at the
+**pre-run step**, which already walks the whole connection graph, and BEFORE any
+equation is registered: the engine refuses to register an equation it already
+holds and offers no removal, so a model refused after registration could never
+be retried.
+
+### What is refused
+
+Five refusals at declaration and five at the pre-run step, each naming the group,
+the component and the flow. The one worth reading twice: **a group flow that is
+also a continuous output of the same machine**. Such a machine destroys matter
+the moment its outlet asks for less than it draws, nothing here bounding the
+volumetric rate by what the machine can place. Measured before the refusal
+landed: a pump at rate 50 behind a load asking 5 drew 49.16 of air, delivered 5,
+and 44.16 per unit of time entered no balance. `MixturePumpContinuous` therefore
+carries no `ports="both"`, and says so by name rather than reporting an unknown
+key.
+
+### Not closed
+
+A machine that carries its draw onward. Bounding the volumetric rate by what the
+machine can place needs its downstream demand to reach the volume that holds the
+composition, which is a mechanism of its own.
+
 ## 5.1.0 (2026-09-07)
 
 The COD3S Platform bridge carries the two fields 5.0.0 added to a capacity.

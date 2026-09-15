@@ -592,6 +592,82 @@ class ConsumerContinuous(ContinuousComponent):
             )
 
 
+class MixturePumpContinuous(ContinuousComponent):
+    """A machine moving a MIXTURE at one declared volumetric rate (R51).
+
+    The shipped form of :meth:`muscadet.ObjFlow.add_mixture_in`: a ventilation
+    extractor, a pump on a line carrying several constituents, a compressor.
+    What it declares is a volume per unit of time; what leaves the volume it
+    draws from, per constituent, is that volume's composition times the rate and
+    is not declarable here.
+
+    **A terminal extractor is the only shape this release carries.** A machine
+    that also passed the mixture on would destroy matter the moment its outlet
+    asked for less than it draws: the group draws the whole volumetric rate,
+    what leaves is capped by the demand downstream, and nothing bounds the one
+    by the other. Measured before the refusal landed, a pump at rate 50 behind a
+    load asking 5 drew 49.16 of air, delivered 5, and 44.16 per unit of time was
+    recorded by no balance. Bounding it needs the machine's downstream demand to
+    reach the volume that holds the composition, which is a mechanism of its own.
+
+    Parameters
+    ----------
+    flows : list or str
+        The constituents drawn together. A single name is accepted and means a
+        volumetric pump on a one-species line.
+    flow_rate : float, optional
+        ONE rate for the whole machine, and a VOLUME per unit of time rather
+        than a quantity. Not a rate per flow: ``flow_rate=50`` over two
+        constituents moves 50 of the mixture, not 50 of each. Defaults to 0,
+        a stopped machine.
+    ports : str, optional
+        ``"in"``, the only shape, and the default. Accepted so that a modeller
+        writing ``ports="both"`` is told why rather than told the key is
+        unknown.
+    name_group : str, optional
+        Name of the declared group. Defaults to ``"mixture"``.
+    """
+
+    DECLARATION_KEYS = ("flows", "flow", "flow_rate", "ports", "name_group")
+
+    #: The one shape this release carries. See the class docstring for what
+    #: carrying the mixture onward would take.
+    MIXTURE_PORTS = ("in",)
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+
+        ports = kwargs.get("ports", "in")
+
+        if ports == "both":
+            raise ValueError(
+                f"Object {self.name()}: a mixture machine carrying its draw "
+                f"onward is not available. It would destroy matter as soon as "
+                f"its outlet asked for less than it draws, nothing here "
+                f"bounding the volumetric rate by what the machine can place. "
+                f"Declare a terminal extractor, ports='in'."
+            )
+
+        if ports not in self.MIXTURE_PORTS:
+            raise ValueError(
+                f"Object {self.name()}: ports must be one of "
+                f"{', '.join(self.MIXTURE_PORTS)}, got {ports!r}"
+            )
+
+        entries = flow_declarations(
+            kwargs.get("flows", kwargs.get("flow")), default_name=DEFAULT_FLOW
+        )
+
+        for entry in entries:
+            self.add_flow_continuous_in(name=entry["name"])
+
+        self.add_mixture_in(
+            name=kwargs.get("name_group", "mixture"),
+            flows=[entry["name"] for entry in entries],
+            flow_rate=float(kwargs.get("flow_rate", 0.0)),
+        )
+
+
 class SensorContinuous(ContinuousComponent):
     """A capacity level read over a measurement link, driving a control port.
 

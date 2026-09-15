@@ -568,6 +568,18 @@ class Capacity(cod3s.ObjCOD3S):
         None, exclude=True, repr=False, description="Backend 'full' state"
     )
 
+    mixture: typing.Any = pydantic.Field(
+        None,
+        exclude=True,
+        repr=False,
+        description=(
+            "The mixture group drawing this volume as ONE fluid (R51), a "
+            "muscadet.mixture.MixtureDraw bound at the pre-run step and written "
+            "by nothing else. None on every volume served per flow, which is "
+            "every volume declared before this notion existed."
+        ),
+    )
+
     #: Memoised :attr:`flow_names`. A private attribute rather than a field: it
     #: is derived from ``flows`` and must never reach a dump.
     _flow_names: typing.Optional[typing.List[str]] = pydantic.PrivateAttr(default=None)
@@ -1463,6 +1475,74 @@ class Capacity(cod3s.ObjCOD3S):
     # ------------------------------------------------------------------
     # Extraction (R35)
     # ------------------------------------------------------------------
+
+    @property
+    def serves_a_mixture(self) -> bool:
+        """True when a volumetric machine draws this volume as one fluid (R51).
+
+        The predicate the three sweeps branch on. A volume nobody draws as a
+        mixture keeps the per-flow behaviour it always had, transit short-circuit
+        included, which is what makes this notion cost nothing to a model written
+        before it.
+        """
+        return self.mixture is not None
+
+    def occupied_volume(self) -> float:
+        """The volume the contents occupy: the sum of quantity times weight.
+
+        The denominator of the volumetric split (R51), and numerically the same
+        thing as ``current_fill() * capacity`` -- written out rather than formed
+        from that quotient, because the split has no business dividing by a
+        volume it is about to multiply back.
+
+        Recomputed from the ODE levels, never read off ``var_fill``, for the
+        reason :meth:`current_fill` gives: that variable is EXPLICIT and written
+        by the capacity equation, so reading it back from another equation of the
+        same step lags one integration step behind the levels.
+        """
+        return sum(
+            self.var_qty[entry.name].value() * entry.weight for entry in self.flows
+        )
+
+    def mixture_share(self, flow_name) -> float:
+        """What a volumetric draw of ``R`` takes of one constituent (R51).
+
+        ``R . m_f / sum_g (m_g . w_g)``, so that ``sum_f share_f . w_f`` is
+        exactly ``R``: the machine moves a volume, and the composition decides
+        what that volume is made of.
+
+        With every weight at 1 this is ``R`` times the raw share, which is what
+        :meth:`split_draw` composes a stock draw at -- the two agree there, and
+        that agreement is what makes the whole draw idempotent once the request
+        is composed.
+
+        An EMPTY volume takes nothing, rather than dividing by zero: what arrives
+        then accumulates for one step and is composed at the step after. A volume
+        with no composition has no mixture to serve, and passing the inflow
+        straight through is exactly the short-circuit this notion removes.
+
+        Clamped at zero: a level standing a ``dtCond``-sized residue below zero
+        between a bound crossing and its reset map would otherwise turn into a
+        negative rate, and the sign of a draw is not a direction here.
+        """
+        # Before the group, as serve_ceiling does: a typo in a held flow name must
+        # not become a diagnostic that depends on what the volume is drawn by.
+        self.flow_entry(flow_name)
+
+        if self.mixture is None:
+            raise ValueError(
+                f"Capacity {self.name} is not drawn as a mixture: no volumetric "
+                f"rate to compose. Declare add_mixture_in on the consumer."
+            )
+
+        occupied = self.occupied_volume()
+
+        if occupied <= 0.0:
+            return 0.0
+
+        share = float(self.mixture.flow_rate) * self.get_quantity(flow_name) / occupied
+
+        return max(share, 0.0)
 
     def split_draw(self, quantity) -> typing.Dict[str, float]:
         """Split a draw over the held flows, at their **raw** quantity share.
