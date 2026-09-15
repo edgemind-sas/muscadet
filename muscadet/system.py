@@ -4,7 +4,13 @@ import re
 import cod3s
 
 from .capacity import MEASUREMENT_LEVEL, MEASUREMENT_RATE, MEASUREMENT_RATIO
-from .engine import is_reference_engine, isimu_start_on, simulate_on
+from .engine import (
+    check_run_targets,
+    is_reference_engine,
+    isimu_start_on,
+    run_target_names,
+    simulate_on,
+)
 from .flow_continuous import (
     RATE_OBSERVATION_IN_SUFFIX,
     RATE_OBSERVATION_OUT_SUFFIX,
@@ -575,7 +581,64 @@ class System(cod3s.PycSystem):
     # Run entry points -- both must go through the pre-run step
     # ------------------------------------------------------------------
 
-    def simulate(self, *args, engine=None, **kwargs):
+    def declare_run_targets(self, targets):
+        """Declare a run's sequence targets on the reference engine.
+
+        The direct path's half of :data:`~muscadet.engine.RUN_TARGETS`. The
+        seam hands the names to an engine beside the document and lets it
+        translate them (:func:`muscadet.engine.run_targets`); here there is no
+        document to hand over, so the names are resolved against the live
+        system and declared the way PyCATSHOO takes them -- ``addTarget``, on a
+        state, which is what ``cod3s.PycSystem.add_targets`` does for an
+        ``ObjEvent`` and the only shape of target this vocabulary names.
+
+        **The occurrence state is read from the event, not assumed.** An event
+        names its own states (``occ_state_name``), and cod3s' own helper hard
+        codes ``occ``: a modeller who renamed the state would get a target on a
+        state that does not exist, which is the silent campaign this whole
+        vocabulary exists to stop.
+
+        Resolving against the live system rather than against the declaration
+        is deliberate on this path: the two answer the same question, but
+        reading the system back as a document to check a name would make
+        ``targets=`` refuse models that PyCATSHOO runs perfectly well and whose
+        declaration is merely not writable yet. What is shared between the two
+        paths is the vocabulary and the sentence a bad name gets, not the
+        lookup.
+
+        Parameters
+        ----------
+        targets : sequence of str, or None
+            The events this run stops at, by name.
+
+        Returns
+        -------
+        tuple of str
+            What was declared, empty for a free-cycling run.
+
+        Raises
+        ------
+        muscadet.engine.RunTargetError
+            When a name designates no event of this system.
+        """
+        names = check_run_targets(
+            run_target_names(targets),
+            [
+                name
+                for name, comp in self.comp.items()
+                if isinstance(comp, cod3s.ObjEvent)
+            ],
+            self.comp,
+        )
+
+        for name in names:
+            comp = self.comp[name]
+            state = getattr(comp, "occ_state_name", None) or "occ"
+            self.addTarget(name, f"{name}.{state}", "ST")
+
+        return names
+
+    def simulate(self, *args, engine=None, targets=None, **kwargs):
         """Batch (Monte Carlo) run, preceded by the pre-run step.
 
         ``engine`` is where the run happens. Saying nothing, or naming
@@ -586,6 +649,15 @@ class System(cod3s.PycSystem):
         declaration and handed over, and everything else -- ``simu_params``
         included -- travels beside it, untouched.
 
+        ``targets`` names the feared events this run stops at, and it is the
+        one run parameter muscadet spells itself
+        (:data:`~muscadet.engine.RUN_TARGETS`). It is honoured on BOTH paths,
+        which is what makes it a vocabulary rather than a hole shaped like one
+        engine: the reference path declares each target on the live system
+        (:meth:`declare_run_targets`), the seam hands the names over beside the
+        document. Saying nothing runs the free-cycling campaign this method has
+        always run.
+
         The pre-run step runs whatever the engine, and that is deliberate: what
         it derives is muscadet's semantics, not PyCATSHOO's, down to the cycle
         refusals of :mod:`muscadet.ordering`. Skipping it for a foreign engine
@@ -594,10 +666,11 @@ class System(cod3s.PycSystem):
         """
         self.prerun()
         if is_reference_engine(engine):
+            self.declare_run_targets(targets)
             return super().simulate(*args, **kwargs)
-        return simulate_on(engine, self, *args, **kwargs)
+        return simulate_on(engine, self, *args, targets=targets, **kwargs)
 
-    def isimu_start(self, *args, engine=None, **kwargs):
+    def isimu_start(self, *args, engine=None, targets=None, **kwargs):
         """Interactive session start, preceded by the pre-run step.
 
         ``cod3s.PycSystem.isimu_start`` never touches ``prepare_simu``, so a
@@ -608,11 +681,19 @@ class System(cod3s.PycSystem):
         declaration on purpose: a model that behaved differently one step at a
         time than in bulk is a divergence nothing would report, and a
         demonstration is given interactively.
+
+        ``targets`` is read and declared here exactly as in :meth:`simulate`,
+        for the same reason: a keyword accepted by one entry point and refused
+        by the other would make a demonstration and a campaign disagree about
+        what the run is. What a stepped session then DOES with a target is the
+        engine's own -- a target ends a trajectory, and a session that is
+        stepped by hand has no trajectory to end.
         """
         self.prerun()
         if is_reference_engine(engine):
+            self.declare_run_targets(targets)
             return super().isimu_start(*args, **kwargs)
-        return isimu_start_on(engine, self, *args, **kwargs)
+        return isimu_start_on(engine, self, *args, targets=targets, **kwargs)
 
     def startInteractive(self, *args, **kwargs):
         """Enter interactive mode, preceded by the pre-run step.

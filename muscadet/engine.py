@@ -40,6 +40,35 @@ Run parameters travel BESIDE the declaration, not inside it, because they are
 the configuration of a run and not the description of a system: two systems
 carrying the same declaration are the same system, whatever one intends to
 compute on them.
+
+The SEQUENCE TARGETS of a run, and why they are a parameter
+------------------------------------------------------------
+A target is a feared event a trajectory stops at: the run ends there, the
+indicators latch at the first occurrence, and the sequence of transitions that
+led to it is what a minimal-sequence campaign reads. Both engines have the
+notion and neither could be told about it -- the declaration leaves targets out
+on purpose, and a run carried no vocabulary for them -- so the study's feared
+event reached nobody, and a campaign that stopped at nothing came back with an
+empty answer on a run that exited cleanly.
+
+:data:`RUN_TARGETS` is that vocabulary, and it is a parameter of the run rather
+than a section of the document. The choice is not a preference, it is what the
+same model being run twice makes of it: a study runs a free-cycling campaign
+for its availability figures and a first-occurrence campaign for its sequences,
+on ONE system. As a section of the document those two runs would carry two
+different declarations, and the sentence this module opens on -- two systems
+carrying the same declaration are the same system -- would stop being true of
+the two runs of a single study. The reference engine says the same thing from
+the other side: PyCATSHOO declares a target on the live system, with
+``addTarget``, and never in a model file.
+
+What travels is the NAME OF THE EVENT, which is how a study names it. The
+translation into an engine's own shape -- an automaton and the state that ends
+the trajectory -- belongs to the engine, which already resolves an event that
+way for a state indicator. muscadet reads the names against the declaration
+before the engine sees them (:func:`run_targets`), so a target naming nothing
+is refused here, by name, rather than silently producing the empty answer the
+vocabulary exists to prevent.
 """
 
 import importlib.metadata
@@ -47,7 +76,7 @@ from typing import Any, Callable, Dict, Optional, Tuple
 
 import pydantic
 
-from .declare import check_system_spec, system_spec
+from .declare import check_system_spec, declared_events, system_spec
 
 #: The engine muscadet carries in its own body: PyCATSHOO, through ``cod3s``.
 #: Selecting it, or selecting nothing, takes the direct path. It is deliberately
@@ -66,6 +95,22 @@ RUN_BATCH = "simulate"
 RUN_INTERACTIVE = "isimu_start"
 RUN_KINDS = (RUN_BATCH, RUN_INTERACTIVE)
 
+#: The one run parameter muscadet spells itself: the sequence targets of a run,
+#: named by the name of the event each one is reached at. Everything else a run
+#: carries is the engine's own vocabulary, travelling untouched; this one is
+#: muscadet's, because the name it carries is a name of the DECLARATION and
+#: muscadet is the only layer that can say whether the declaration holds it.
+#:
+#: **It is not what a mode's ``targets`` are, and the collision is worth
+#: knowing**: in a component declaration, ``targets`` names the components a
+#: failure mode acts upon (:data:`muscadet.declare.COMPONENT_REFERENCE_KEYS`).
+#: Here it names the feared events a RUN stops at. The two never meet -- one is
+#: a key of a component, the other a keyword of a run -- and the name is kept
+#: because it is the one the study, ``cod3s.PycSystem.add_targets`` and the
+#: engines all use. Renaming it here would leave muscadet the only layer
+#: spelling it differently.
+RUN_TARGETS = "targets"
+
 
 class EngineError(ValueError):
     """Base for everything that can go wrong selecting or registering an engine."""
@@ -77,6 +122,17 @@ class UnknownEngineError(EngineError):
 
 class EngineAlreadyRegisteredError(EngineError):
     """The name is taken, or reserved for the reference engine."""
+
+
+class RunTargetError(EngineError):
+    """A run declared a sequence target its system cannot offer.
+
+    Raised before any engine is reached, and raised the same way on both run
+    paths, because the failure it replaces is the expensive kind: a target
+    naming nothing does not fail, it produces a campaign that stops at nothing,
+    indicators that never latch and an empty list of sequences, on a run that
+    ends cleanly. Wrong numbers that look right.
+    """
 
 
 class EngineRunnerMissingError(EngineError):
@@ -325,10 +381,182 @@ def system_declaration(system) -> dict:
     return spec
 
 
-def run_on_engine(kind: str, name: str, system, *args, **kwargs) -> Any:
-    """Read ``system`` back as a declaration and run it on the engine ``name``."""
+def run_target_names(targets) -> Tuple[str, ...]:
+    """The names a run declares as its sequence targets, read on their own.
+
+    The vocabulary and nothing else: what a target IS here is the name of an
+    event, so this says only that a list of names was given and returns it
+    without repetitions, in the order it was written. Confronting those names
+    with a system is :func:`run_targets` on the seam, and the reference path's
+    own business on the direct path -- the two resolve against different
+    things, a document and a live system, and this is what they share.
+
+    ``None`` is "this run declares no target", and so is an empty list: a run
+    with no target is a free-cycling one, which is the ordinary case and not
+    something to refuse.
+
+    A single string is refused rather than accepted as one name. It is
+    iterable, so taking it would read one target per letter: the study whose
+    single feared event is ``PANNE_OND`` would run against targets named
+    ``P``, ``A``, ``N``..., none of which exists, and be refused for a list of
+    reasons that never mentions the one mistake made.
+
+    Parameters
+    ----------
+    targets : sequence of str, or None
+        The event names this run stops at.
+
+    Returns
+    -------
+    tuple of str
+
+    Raises
+    ------
+    RunTargetError
+        When what was given is not a list of names.
+    """
+    if targets is None:
+        return ()
+
+    if isinstance(targets, str):
+        raise RunTargetError(
+            f"{RUN_TARGETS}={targets!r} is one string where a run declares a "
+            f"LIST of event names: pass [{targets!r}], a bare name being read "
+            f"one target per letter"
+        )
+
+    if not isinstance(targets, (list, tuple)):
+        raise RunTargetError(
+            f"{RUN_TARGETS} is the list of events a run stops at, got "
+            f"{type(targets).__name__}"
+        )
+
+    names: list = []
+
+    for entry in targets:
+        if not isinstance(entry, str) or not entry:
+            raise RunTargetError(
+                f"{RUN_TARGETS} names each target by the name of its event, "
+                f"got {entry!r}"
+            )
+        if entry not in names:
+            names.append(entry)
+
+    return tuple(names)
+
+
+def check_run_targets(names, events, components) -> Tuple[str, ...]:
+    """Every name designates an event, or the first one that does not is refused.
+
+    The half of :data:`RUN_TARGETS` that both run paths share, and the reason
+    it takes the events rather than going to look for them: the two paths look
+    them up in two different places -- the declaration on the seam, the live
+    system on the direct PyCATSHOO path -- and a modeller moving a study from
+    one engine to the other must not be told two different stories about the
+    same typo.
+
+    A name that is a component of something else gets a different sentence from
+    a name nobody declared. The two mistakes are one keystroke apart and a
+    world apart to repair: one is a misspelling, the other is a target set on a
+    block rather than on the event that observes it.
+
+    Parameters
+    ----------
+    names : sequence of str
+        Already read as a vocabulary by :func:`run_target_names`.
+    events : sequence of str
+        Every event this system offers, in the order worth showing.
+    components : container of str
+        Every component of the system, events included. Only membership is
+        read, so a mapping, a set or a list all serve.
+
+    Returns
+    -------
+    tuple of str
+
+    Raises
+    ------
+    RunTargetError
+        On the first name that designates no event.
+    """
+    events = tuple(events)
+    known = list(events) or ["<none>"]
+
+    for name in names:
+        if name in events:
+            continue
+        if name in components:
+            raise RunTargetError(
+                f"{name!r} is a component of this system but not an event, and "
+                f"a sequence target is reached at an event's occurrence. The "
+                f"events this system declares are {known}"
+            )
+        raise RunTargetError(
+            f"{name!r} is not a component of this system, so a run stopping at "
+            f"it would stop at nothing. The events this system declares are "
+            f"{known}"
+        )
+
+    return tuple(names)
+
+
+def run_targets(spec, targets) -> Tuple[str, ...]:
+    """The sequence targets of a run, read against the declaration they name.
+
+    The seam's half of :data:`RUN_TARGETS`: the names are checked to designate
+    events of the very document about to be handed over, so an engine receives
+    targets it can resolve or the run does not start. What the engine is then
+    left to do is the translation into its own shape -- the automaton and the
+    state that ends a trajectory -- which is a thing only it can spell.
+
+    Parameters
+    ----------
+    spec : dict
+        The system declaration the run is about to be given.
+    targets : sequence of str, or None
+        The event names this run stops at.
+
+    Returns
+    -------
+    tuple of str
+
+    Raises
+    ------
+    RunTargetError
+        When a name is not a list entry, or designates no event of ``spec``.
+    """
+    names = run_target_names(targets)
+
+    if not names:
+        return ()
+
+    return check_run_targets(
+        names,
+        declared_events(spec),
+        spec.get("components") or {} if isinstance(spec, dict) else {},
+    )
+
+
+def run_on_engine(kind: str, name: str, system, *args, targets=None, **kwargs) -> Any:
+    """Read ``system`` back as a declaration and run it on the engine ``name``.
+
+    ``targets`` is :data:`RUN_TARGETS`, the one run parameter muscadet spells
+    itself: the events this run stops at, checked against the declaration and
+    handed to the engine as a keyword of the run, beside the document.
+
+    A run declaring none is given none -- the keyword is not passed at all
+    rather than passed empty -- so an engine that knows nothing of targets
+    keeps running every campaign that does not ask for one, and only a caller
+    who really asks for a target meets an engine that cannot serve it.
+    """
     engine = get_engine(name)
-    return engine.run(kind, system_declaration(system), *args, **kwargs)
+    spec = system_declaration(system)
+    declared = run_targets(spec, targets)
+
+    if declared:
+        kwargs[RUN_TARGETS] = declared
+
+    return engine.run(kind, spec, *args, **kwargs)
 
 
 def simulate_on(name: str, system, *args, **kwargs) -> Any:

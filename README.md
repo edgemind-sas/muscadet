@@ -594,6 +594,32 @@ analyser.printFilteredSeq(100, "sequences.xml", "PySeq.xsl")
 
 The code for this example is available [here](examples/rbd_06/rbd_06.py).
 
+#### Declaring the targets of a run, on any engine
+
+`addTarget` above is PyCATSHOO's own, and a model that calls it runs on PyCATSHOO and nowhere else. A run declares its targets to **muscadet** instead with the `targets` keyword, which names each one by **the name of its event**:
+
+```python
+my_rbd.add_component(
+    cls="ObjEvent",
+    name="TOP_EVENT",
+    cond=[[{"attr": "is_ok_fed_in", "obj": "T", "value": False}]],
+)
+
+my_rbd.simulate(
+    {"nb_runs": 10, "schedule": [{"start": 0, "end": 24, "nvalues": 1000}]},
+    targets=["TOP_EVENT"],          # the campaign stops at the first occurrence
+)
+my_rbd.simulate(..., engine="raichu", targets=["TOP_EVENT"])   # same words, other engine
+```
+
+Three things follow from where it travels, which is **beside** the declaration and never inside it:
+
+- **the same system runs both campaigns.** A study reads its availability figures off a free-cycling run and its sequences off a first-occurrence run, and those are one model with two run configurations — so a target is a run parameter, exactly as `nb_runs` is, and an exported document (`system_spec`) carries no `targets` section for either run;
+- **the name is all that travels.** Turning `TOP_EVENT` into an automaton and the state that ends a trajectory is each engine's own business, and the two engines spell it differently;
+- **a target naming no event is refused before the run starts**, with `RunTargetError`, and told whether the name is unknown or is a component of another kind. That refusal is the point of the keyword: a target that reaches nobody does not fail, it produces a campaign that stops at nothing, indicators that never latch and an empty list of sequences, on a run that ends cleanly.
+
+`addTarget` stays available and stays PyCATSHOO's: a target on a **variable** with a comparison, like the `"VAR", "!=", 1` above, has no counterpart in this vocabulary — declare the equivalent `ObjEvent` and name it.
+
 ## Flow class names: canonical and legacy
 
 Everything above declares *discrete* flows — boolean signals that are either fed or not. Since MUSCADET 2.0 the discrete flow classes carry an explicit `Discrete` in their name, so that they read as one family beside the continuous one introduced in the next chapter.
