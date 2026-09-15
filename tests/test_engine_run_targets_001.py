@@ -150,6 +150,37 @@ def a_registered_engine():
 # ---------------------------------------------------------------------------
 
 
+class TestTheParagraphThatExcludesTargetsSaysWhereTheyGo:
+    """The one sentence this whole ticket came out of, held to its address.
+
+    ``system_spec`` says targets are deliberately not in the document, and for
+    years that was the whole answer: "not here", with nowhere else named. The
+    paragraph now carries the address of where they DO travel, and this is what
+    keeps it carrying one -- a rewrite that drops the pointer puts the next
+    reader back exactly where the door was missing from.
+    """
+
+    def test_it_names_the_run_parameter(self):
+        paragraph = " ".join((muscadet.system_spec.__doc__ or "").split())
+        assert "Deliberately NOT included" in paragraph, (
+            "the paragraph that excludes targets from the document was "
+            "rewritten; check that whatever replaced it still says where a "
+            "sequence target travels instead"
+        )
+        assert "muscadet.engine.RUN_TARGETS" in paragraph
+        assert "run_targets" in paragraph
+
+    def test_the_seam_says_why_it_is_a_parameter_and_not_a_section(self):
+        """The decision, and the reason, in the module that owns the seam.
+
+        Read with the line breaks taken out: what is pinned is the sentence,
+        not where the wrapping happens to fall.
+        """
+        seam = " ".join((muscadet.engine.__doc__ or "").split())
+        assert "RUN_TARGETS" in seam
+        assert "a parameter of the run rather than a section of the document" in seam
+
+
 class TestTheVocabularyIsReadableOnItsOwn:
     """What a run says when it declares targets, before any system is involved."""
 
