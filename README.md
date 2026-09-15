@@ -1783,7 +1783,7 @@ What a pair may not name: a measurement channel (it carries a reading and no qua
 ### Ventilating a mixture: one volumetric rate, composed at the volume
 
 A capacity holding several constituents has a **composition**, and `split_draw` already
-composes a stock draw at it. What had no expression until 5.2.0 is the other half: a
+composes a stock draw at it. What had no expression until 5.4.0 is the other half: a
 machine that moves a *volume* of that mixture, whatever it is made of. A ventilation
 extractor, a pump on a line carrying several species, a compressor.
 

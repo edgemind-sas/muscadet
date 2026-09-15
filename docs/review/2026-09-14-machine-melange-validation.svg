@@ -11,7 +11,7 @@
   </defs>
 
   <text x="36" y="46" font-size="22" font-weight="600" fill="#263238">Ventiler un mélange : le montage, sa configuration, l'attendu et l'obtenu</text>
-  <text x="36" y="72" font-size="13.5" fill="#546e7a">Validation de la machine volumétrique multi-flux (issue #4, muscadet 5.2.0). Tous les chiffres sont mesurés sur le code livré, moteur compris, pas recopiés d'une note.</text>
+  <text x="36" y="72" font-size="13.5" fill="#546e7a">Validation de la machine volumétrique multi-flux (issue #4, muscadet 5.4.0). Tous les chiffres sont mesurés sur le code livré, moteur compris, pas recopiés d'une note.</text>
   <text x="36" y="92" font-size="13.5" fill="#546e7a">Une salle de V = 90 d'air, alimentée en air à Q = 50 et en hydrogène à q = 2, vidée par un extracteur qui déplace R = 50 de volume par unité de temps.</text>
   <text x="36" y="112" font-size="13.5" fill="#546e7a">Bleu plein : l'air. Orange tireté : l'hydrogène. Gris : le mélange.</text>
 
@@ -237,7 +237,7 @@
   <line x1="54" y1="1232" x2="712" y2="1232" stroke="#ef9a9a" stroke-width="1"/>
   <text x="54" y="1280" font-size="12" fill="#37474f">La teneur ne monte jamais : l'hydrogène traverse la salle dans le pas où il arrive.</text>
   <text x="54" y="1298" font-size="12" fill="#37474f">Et l'air s'accumule, parce qu'il entre à 50 et ne peut sortir qu'à 25.</text>
-  <text x="54" y="1326" font-size="12" font-weight="600" fill="#b71c1c">Ces chiffres sont TOUJOURS ceux de 5.2.0 sur ce montage.</text>
+  <text x="54" y="1326" font-size="12" font-weight="600" fill="#b71c1c">Ces chiffres sont TOUJOURS ceux de 5.4.0 sur ce montage.</text>
   <text x="54" y="1344" font-size="12" fill="#37474f">Le comportement par flux est juste pour un tampon mono-flux et n'a pas bougé :</text>
   <text x="54" y="1362" font-size="12" fill="#37474f">c'est la présence d'une machine qui déclenche la composition, rien d'autre.</text>
 

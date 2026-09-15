@@ -17,7 +17,7 @@ at the end.
 
 Companion figure: `docs/review/2026-09-13-capacite-melange-ventile.svg`.
 
-**Implemented in 5.2.0.** `muscadet/mixture.py`, `Capacity.mixture_share`, the
+**Implemented in 5.4.0.** `muscadet/mixture.py`, `Capacity.mixture_share`, the
 four sweep touch points, `MixturePumpContinuous`, and
 `tests/test_mixture_ventilation_001.py`. Two things moved between this note and
 the code, both measured during the work and both recorded in section 9 below.
