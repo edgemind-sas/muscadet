@@ -2,10 +2,10 @@
 
 An engine reading a muscadet declaration can emit two kinds of indicator: the
 ones the document DECLARES, and a set it GENERATES, one per observable
-variable, named ``{component}_{variable}``. Which of the two a model got used
-to depend on the route that assembled it -- on whether a continuous construct
-happened to sit somewhere in the model -- so removing a tank from a model
-removed the observations of everything else in it, and nothing said so.
+variable, named ``{component}_{variable}``. Which of the two a model received
+used to depend on the route that assembled it -- on whether a continuous
+construct happened to sit somewhere in the model -- so removing a tank from a
+model removed the observations of everything else in it, and nothing said so.
 
 The engine closed that with a model-level key
 (:data:`muscadet.declare.GENERATED_INDICATORS`), absent meaning false. This
@@ -16,8 +16,10 @@ Two arbitrations are pinned here rather than left to reading the code:
 
 * **The key is written on every document**, whatever its value, as
   ``transmits`` is on a capacity. Writing it only when it departs from the
-  default would leave the platform's reference fingerprints untouched, which
-  is a genuine cost paid once; it would also put a reader back in front of a
+  default would have saved next to nothing, measured rather than assumed: no
+  document of this format is versioned anywhere in the platform that consumes
+  it, so the key appears in documents produced on the fly and in no file
+  anyone has to re-bless. It would also put a reader back in front of a
   document that says nothing and a default it cannot see, which is the exact
   silence this key was introduced to break.
 * **A system says true when its author says nothing; a document says false.**

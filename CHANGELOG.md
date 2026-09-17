@@ -30,10 +30,30 @@ behind, or rolled back alone -- therefore fails silently rather than loudly:
 the engine simply ignores what the model asked for. Raise the `pyraichu` pin
 before this one, and lower it after.
 
-This chantier has already paid the other half of the same defect once, with the
-`mixtures` section: a key muscadet wrote on every component, a reader whose
-vocabulary was closed, and no document of the release readable at all. That
-one, at least, was loud.
+### A second reader is needed, and 0.28.0 does not carry it
+
+**0.28.0 reads this key and refuses every document that carries it**, which is
+every document muscadet has written since 5.4.0. muscadet writes a `mixtures`
+section on each component, and the reader refuses an unknown component key by
+name. Measured on 2026-09-17, on the published line and not on a tree of our
+own: `mixtures` appears **zero** times in `pyraichu/declare.py` at the public
+tags `v0.27.0` and `v0.28.0` and on `origin/main`, and a campaign run on the
+published wheel dies on
+
+```
+pyraichu.declare.ComponentSpecError: Component SRC: unknown declaration key
+'mixtures'; it accepts automata, capacities, cls, create_default_out_automata,
+description, failure_modes, flows, kind, label, measurements_in,
+measurements_out, metadata, name, params, rules, source_cls, transfers
+```
+
+So pinning this release beside `pyraichu` 0.28.0 does not give "the key read",
+it gives **no readable document at all**. That half is loud, where the one
+above is silent, and it is the obstacle of this sequence rather than a
+precaution about it: the reader of `mixtures` exists on the cod3s-raichu
+feature line and has never been published. Whoever raises these two pins
+verifies **both** readers inside the wheel, by its content and never by its
+version number.
 
 ### Added
 
@@ -56,11 +76,21 @@ one, at least, was loud.
 ### What is written, and what a document without the key means
 
 The key is written on **every** document, whatever its value, as `transmits` is
-on a capacity. Writing it only when it departs from the default would leave the
-platform's reference fingerprints untouched -- a real cost, paid once, and it
-is the cost this takes -- but it would also leave a reader in front of a
-document that says nothing and a default it cannot see, which is the silence
-this key exists to break.
+on a capacity.
+
+What writing it only when it departs from the default would have saved was
+measured rather than assumed, and it is close to nothing: **no document of this
+format is versioned anywhere in the platform that consumes it.** Searched on
+2026-09-17 across three platform trees, every JSON file outside the
+environments, for one carrying `components` beside `connections`: none. The
+reference corpus holds the translator's own `*.study_yaml.json` and the result
+tables beside them, and the two locks that touch the declaration do not see a
+model-level key either (one compares an export to its own re-export, the other
+an artefact map indexed by component, flow and mode). What changes is one head
+key in each document produced on the fly, and no file anyone has to re-bless.
+
+What it would have cost is the silence this key exists to break: a reader in
+front of a document that says nothing, and a default it cannot see.
 
 A system says **true** when its author says nothing; a **document** without the
 key means **false**. The asymmetry is the one `pyraichu.muscadet.System`
@@ -85,6 +115,15 @@ run through `pyraichu.muscadet_engine`:
 | `generated_indicators: true` | with the model key | the same 16, same values |
 | `generated_indicators: false` | with the model key | 1, the declared one |
 | key absent | with the model key | 1, the declared one |
+
+And on the platform side, where nothing was expected to move and nothing does:
+a system built by `PlatformExportBuilder` from its `minimal_export.json`
+fixture exports `generated_indicators: true` at version `1.0.2`, one head key
+more in a document produced at run time. What reaches `indicators.csv` is built
+from the study's own indicator entries and not from what the engine emits, so a
+generated estimate adds no row there; an entry that used to pass with a `warn`
+for want of an estimate and now finds one is a catch-up towards the golden, not
+a drift.
 
 ### Changed
 
