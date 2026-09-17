@@ -4,28 +4,36 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
-## Unreleased
+## 5.6.0 (2026-09-17)
 
 A model declares whether it wants the **generated indicator set** -- one
 indicator per observable variable, named `{component}_{variable}` -- beside the
 indicators it declares itself. The key travels in the document, so it reaches
 whichever engine runs the model.
 
-### Do not publish this line before the reader is on a wheel
+### The reader came first, and it stays first for whoever pins
 
-**Order, and it is not a precaution.** A published `pyraichu` carrying the
-reader of `generated_indicators` comes FIRST; a muscadet release carrying this
-key comes after. The key is written on every document muscadet exports, and the
-model level is an open vocabulary on both sides: measured on 2026-09-17 against
-a pyraichu that predates the reader, a document asking for the generated set is
-accepted, the key is dropped without a word, and the study observes what that
-reader would have given it anyway. Published in the wrong order, the failure is
-therefore silent rather than loud -- an engine one release older simply ignores
-what the model asked for.
+**Order, and it is not a precaution.** A `pyraichu` carrying the reader of
+`generated_indicators` comes FIRST; a muscadet carrying this key comes after.
+That order was honoured here: `pyraichu` 0.28.0, whose `pyraichu/indicators.py`
+carries `GENERATED_INDICATORS` and the one reading of it, was published on
+2026-09-17 at 09:35 UTC, and this tag was cut after it.
+
+The constraint outlives the publication, because it binds whoever PINS as much
+as whoever releases. The key is written on every document muscadet exports, and
+the model level is an open vocabulary on both sides: measured on 2026-09-17
+against a pyraichu that predates the reader, a document asking for the
+generated set is accepted, the key is dropped without a word, and the study
+observes what that reader would have given it anyway. An installation that
+pins this muscadet beside a `pyraichu` older than 0.28.0 -- an engine pin left
+behind, or rolled back alone -- therefore fails silently rather than loudly:
+the engine simply ignores what the model asked for. Raise the `pyraichu` pin
+before this one, and lower it after.
 
 This chantier has already paid the other half of the same defect once, with the
 `mixtures` section: a key muscadet wrote on every component, a reader whose
-vocabulary was closed, and no document of the release readable at all.
+vocabulary was closed, and no document of the release readable at all. That
+one, at least, was loud.
 
 ### Added
 
