@@ -372,6 +372,15 @@ def output_capability(comp, flow_name, produced):
     if capacity is None:
         return produced
 
+    # A volume drawn as a MIXTURE could deliver its composed share and nothing
+    # else (R51), which is the rule of this module applied to a third bound:
+    # every capability is computed by the function the production sweep honours.
+    # Announcing ``serve_limit`` here instead would tell every consumer
+    # downstream that a room can pour, when what leaves it is a fraction of one
+    # volumetric rate.
+    if capacity.serves_a_mixture:
+        return min(capacity.mixture_share(flow_name), capacity.serve_ceiling(flow_name))
+
     if capacity.serves_from_stock(flow_name):
         # ``serve_limit`` answers exactly this on that branch, and would re-run
         # the predicate to find out: the answer is already known here.

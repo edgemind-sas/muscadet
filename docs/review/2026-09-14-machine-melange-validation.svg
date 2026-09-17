@@ -1,0 +1,260 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1480 1416" width="1480" height="1416" font-family="system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif">
+
+  <rect x="0" y="0" width="1480" height="1416" fill="#ffffff"/>
+  <defs>
+    <marker id="ma" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#1565c0"/></marker>
+    <marker id="mh" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#e65100"/></marker>
+    <marker id="mg" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+      <path d="M 0 0 L 10 5 L 0 10 z" fill="#455a64"/></marker>
+  </defs>
+
+  <text x="36" y="46" font-size="22" font-weight="600" fill="#263238">Ventiler un mélange : le montage, sa configuration, l'attendu et l'obtenu</text>
+  <text x="36" y="72" font-size="13.5" fill="#546e7a">Validation de la machine volumétrique multi-flux (issue #4, muscadet 5.4.0). Tous les chiffres sont mesurés sur le code livré, moteur compris, pas recopiés d'une note.</text>
+  <text x="36" y="92" font-size="13.5" fill="#546e7a">Une salle de V = 90 d'air, alimentée en air à Q = 50 et en hydrogène à q = 2, vidée par un extracteur qui déplace R = 50 de volume par unité de temps.</text>
+  <text x="36" y="112" font-size="13.5" fill="#546e7a">Bleu plein : l'air. Orange tireté : l'hydrogène. Gris : le mélange.</text>
+
+  <!-- ==================== 1 : LE MONTAGE ET SA CONFIGURATION ==================== -->
+  <rect x="36" y="132" width="1408" height="326" rx="8" fill="#fafafa" stroke="#90a4ae" stroke-width="1.3"/>
+  <text x="54" y="160" font-size="15" font-weight="700" fill="#263238">1 &#183; Le montage et la configuration des composants</text>
+
+  <rect x="60" y="188" width="132" height="52" rx="5" fill="#ffffff" stroke="#1565c0" stroke-width="1.5"/>
+  <text x="72" y="208" font-size="12.5" font-weight="700" fill="#263238">S_AIR</text>
+  <text x="72" y="224" font-size="10.5" fill="#546e7a">SourceContinuous</text>
+  <text x="72" y="236" font-size="11" font-weight="600" fill="#1565c0">rate = 50</text>
+
+  <rect x="60" y="268" width="132" height="52" rx="5" fill="#ffffff" stroke="#e65100" stroke-width="1.5"/>
+  <text x="72" y="288" font-size="12.5" font-weight="700" fill="#263238">S_H2</text>
+  <text x="72" y="304" font-size="10.5" fill="#546e7a">SourceContinuous</text>
+  <text x="72" y="316" font-size="11" font-weight="600" fill="#e65100">rate = 2</text>
+
+  <rect x="252" y="192" width="196" height="126" rx="6" fill="#e3f2fd" stroke="#00695c" stroke-width="1.8"/>
+  <rect x="253" y="296" width="194" height="21" fill="#ffe0b2"/>
+  <text x="350" y="216" font-size="13" font-weight="700" fill="#263238" text-anchor="middle">ROOM</text>
+  <text x="350" y="236" font-size="11.5" fill="#37474f" text-anchor="middle">une capacité, deux constituants</text>
+  <text x="350" y="258" font-size="12" font-weight="600" fill="#263238" text-anchor="middle">V = 90 d'air à t = 0</text>
+  <text x="350" y="280" font-size="11.5" fill="#37474f" text-anchor="middle">teneur  x = H2 / (AIR + H2)</text>
+  <text x="350" y="311" font-size="10.5" font-weight="600" fill="#e65100" text-anchor="middle">hydrogène</text>
+
+  <rect x="508" y="212" width="178" height="86" rx="5" fill="#e8f5e9" stroke="#2e7d32" stroke-width="1.8"/>
+  <text x="597" y="236" font-size="12.5" font-weight="700" fill="#263238" text-anchor="middle">FAN</text>
+  <text x="597" y="254" font-size="10.5" fill="#546e7a" text-anchor="middle">MixturePumpContinuous</text>
+  <text x="597" y="274" font-size="12" font-weight="600" fill="#1b5e20" text-anchor="middle">flow_rate = 50</text>
+  <text x="597" y="290" font-size="10.5" fill="#bf360c" text-anchor="middle">UN débit pour le groupe, en volume</text>
+
+  <line x1="196" y1="214" x2="248" y2="220" stroke="#1565c0" stroke-width="2" marker-end="url(#ma)"/>
+  <text x="206" y="207" font-size="11" font-weight="600" fill="#1565c0">50</text>
+  <line x1="196" y1="294" x2="248" y2="288" stroke="#e65100" stroke-width="2" stroke-dasharray="6 4" marker-end="url(#mh)"/>
+  <text x="206" y="308" font-size="11" font-weight="600" fill="#e65100">2</text>
+  <line x1="452" y1="255" x2="504" y2="255" stroke="#455a64" stroke-width="2.6" marker-end="url(#mg)"/>
+  <text x="478" y="246" font-size="11" font-weight="600" fill="#37474f" text-anchor="middle">50</text>
+
+  <text x="60" y="352" font-size="12" fill="#37474f">L'extracteur déclare UN débit de volume. Ce que chaque constituant y met n'est pas déclarable :</text>
+  <text x="60" y="370" font-size="12" fill="#37474f">c'est la teneur de la salle qui le décide, et la salle est seule à la connaître.</text>
+  <text x="60" y="436" font-size="12" font-weight="600" fill="#bf360c">flow_rate = 50 sur deux flux, ce n'est pas 50 par flux : c'est 50 de mélange. Et c'est un volume, pas une quantité.</text>
+  <text x="60" y="396" font-size="12" font-weight="600" fill="#bf360c">fill_rate = inf : l'air est soufflé dans la salle, il n'est pas aspiré par elle.</text>
+  <text x="60" y="414" font-size="12" fill="#37474f">Au défaut fill_rate = 0, la salle ne demanderait à ses sources que ce qu'elle relâche.</text>
+
+  <rect x="720" y="174" width="352" height="166" rx="5" fill="#ffffff" stroke="#00695c" stroke-width="1.3"/>
+  <text x="734" y="196" font-size="12" font-weight="700" fill="#00695c">ROOM</text>
+  <text x="734" y="218" xml:space="preserve" font-size="10.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">add_capacity(</text>
+  <text x="734" y="234" xml:space="preserve" font-size="10.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">    name="room",</text>
+  <text x="734" y="250" xml:space="preserve" font-size="10.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">    flows=[AIR w=1, H2 w=1],</text>
+  <text x="734" y="266" xml:space="preserve" font-size="10.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">    side="out", capacity=1e5,</text>
+  <text x="734" y="282" xml:space="preserve" font-size="10.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">    content_init={AIR: 90, H2: 0},</text>
+  <text x="734" y="298" xml:space="preserve" font-size="10.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#bf360c">    fill_rate=math.inf)</text>
+  <text x="734" y="324" font-size="10.5" fill="#546e7a">un seul volume, donc une seule composition</text>
+
+  <rect x="1092" y="174" width="332" height="96" rx="5" fill="#ffffff" stroke="#2e7d32" stroke-width="1.3"/>
+  <text x="1106" y="196" font-size="12" font-weight="700" fill="#1b5e20">FAN</text>
+  <text x="1106" y="218" xml:space="preserve" font-size="10.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">add_mixture_in(</text>
+  <text x="1106" y="234" xml:space="preserve" font-size="10.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">    name="extraction",</text>
+  <text x="1106" y="250" xml:space="preserve" font-size="10.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">    flows=["AIR", "H2"],</text>
+  <text x="1106" y="266" xml:space="preserve" font-size="10.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#1b5e20">    flow_rate=50.0)</text>
+
+  <rect x="1092" y="284" width="332" height="86" rx="5" fill="#ffffff" stroke="#90a4ae" stroke-width="1.3"/>
+  <text x="1106" y="306" font-size="12" font-weight="700" fill="#546e7a">Les deux sources</text>
+  <text x="1106" y="328" xml:space="preserve" font-size="10.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#1565c0">SourceContinuous(flow="AIR", rate=50)</text>
+  <text x="1106" y="344" xml:space="preserve" font-size="10.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#e65100">SourceContinuous(flow="H2",  rate=2)</text>
+  <text x="1106" y="362" font-size="10.5" fill="#546e7a">aucun automate, aucun mode de défaillance</text>
+
+  <text x="720" y="396" font-size="12" fill="#37474f">Aucune demande par constituant n'est déclarée nulle part : c'est tout l'objet de la machine.</text>
+  <text x="720" y="414" font-size="12" fill="#37474f">Le groupe est lié à la salle au pas de pré-exécution, avant qu'aucune équation ne soit enregistrée.</text>
+
+  <!-- ==================== 2 : ATTENDU ==================== -->
+  <rect x="36" y="478" width="694" height="248" rx="8" fill="#fffde7" stroke="#f9a825" stroke-width="1.3"/>
+  <text x="54" y="506" font-size="15" font-weight="700" fill="#5d4037">2 &#183; Ce que la physique impose</text>
+  <text x="54" y="532" xml:space="preserve" font-size="12" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">sorties   out_AIR = R (1 - x)        out_H2 = R x</text>
+  <text x="54" y="554" xml:space="preserve" font-size="12" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">bilans    dm_AIR/dt = Q x     dm_H2/dt = q - Q x     dM/dt = q</text>
+  <text x="54" y="576" xml:space="preserve" font-size="12" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">teneur    dx/dt = [ q - (Q+q) x ] / M(t)        M(t) = V + q t</text>
+  <text x="54" y="604" xml:space="preserve" font-size="12" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#1b5e20">phase 1   x(t) = q/(Q+q) . [1 - (V/(V+qt))^((Q+q)/q)]</text>
+  <text x="54" y="624" xml:space="preserve" font-size="12" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#1b5e20">phase 2   x(t) = x0 . exp(- R t / M0)      tau = M0/R = 1,8692</text>
+  <text x="54" y="654" font-size="12" fill="#5d4037">Deux choses contre-intuitives. Le plateau de teneur vaut q/(Q+q) = 0,03846 et ne dépend PAS de R :</text>
+  <text x="54" y="672" font-size="12" fill="#5d4037">c'est le rapport des débits d'entrée. Et le total n'est pas conservé en phase 1, il croît de q,</text>
+  <text x="54" y="690" font-size="12" fill="#5d4037">puisque dM/dt = Q + q - R. La constante de temps de la phase 2 est M0/R, pas V/R : l'hydrogène</text>
+  <text x="54" y="708" font-size="12" fill="#5d4037">déjà présent compte dans le volume qu'on dilue.</text>
+
+  <!-- ==================== 3 : PARTAGE PONDERE ==================== -->
+  <rect x="750" y="478" width="694" height="248" rx="8" fill="#e8f5e9" stroke="#2e7d32" stroke-width="1.3"/>
+  <text x="768" y="506" font-size="15" font-weight="700" fill="#1b5e20">3 &#183; La règle de partage, et son invariant</text>
+  <rect x="768" y="518" width="658" height="42" rx="4" fill="#ffffff"/>
+  <text x="788" y="546" xml:space="preserve" font-size="15" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-weight="600" fill="#1b5e20">sortie_f  =  R . m_f  /  somme_g ( m_g . w_g )</text>
+  <text x="768" y="580" font-size="12" fill="#263238">Vérification avec des poids différents, AIR à 1 et H2 à 0,5, sur le même montage :</text>
+
+  <line x1="768" y1="566" x2="1426" y2="566" stroke="#a5d6a7" stroke-width="1"/>
+  <text x="790" y="610" font-size="11.5" font-weight="700" fill="#546e7a">t</text>
+  <text x="880" y="610" font-size="11.5" font-weight="700" fill="#546e7a">teneur</text>
+  <text x="1030" y="610" font-size="11.5" font-weight="700" fill="#546e7a">H2 tenu</text>
+  <text x="1200" y="610" font-size="11.5" font-weight="700" fill="#546e7a">volume extrait, somme des sortie_f . w_f</text>
+  <line x1="768" y1="592" x2="1426" y2="592" stroke="#a5d6a7" stroke-width="1"/>
+  <text x="790" y="638" xml:space="preserve" font-size="12" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238"> 1</text>
+  <text x="880" y="638" xml:space="preserve" font-size="12" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">0,01675</text>
+  <text x="1030" y="638" xml:space="preserve" font-size="12" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">1,5374</text>
+  <text x="1200" y="638" xml:space="preserve" font-size="12" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-weight="600" fill="#1b5e20">50,0000</text>
+  <text x="790" y="658" xml:space="preserve" font-size="12" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238"> 5</text>
+  <text x="880" y="658" xml:space="preserve" font-size="12" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">0,03606</text>
+  <text x="1030" y="658" xml:space="preserve" font-size="12" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">3,4891</text>
+  <text x="1200" y="658" xml:space="preserve" font-size="12" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-weight="600" fill="#1b5e20">50,0000</text>
+  <text x="790" y="678" xml:space="preserve" font-size="12" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">10</text>
+  <text x="880" y="678" xml:space="preserve" font-size="12" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">0,03829</text>
+  <text x="1030" y="678" xml:space="preserve" font-size="12" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">3,9034</text>
+  <text x="1200" y="678" xml:space="preserve" font-size="12" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-weight="600" fill="#1b5e20">50,0000</text>
+  <line x1="768" y1="662" x2="1426" y2="662" stroke="#a5d6a7" stroke-width="1"/>
+  <text x="768" y="710" font-size="12" fill="#263238">Le volume extrait vaut exactement le débit déclaré. Avec tous les poids à 1, la règle redevient la part brute de split_draw.</text>
+
+  <!-- ==================== 4 : RESULTATS ==================== -->
+  <rect x="36" y="746" width="1408" height="330" rx="8" fill="#fafafa" stroke="#90a4ae" stroke-width="1.3"/>
+  <text x="54" y="774" font-size="15" font-weight="700" fill="#263238">4 &#183; Attendu et obtenu, sur le code livré</text>
+
+  <text x="54" y="804" font-size="13" font-weight="700" fill="#1b5e20">Phase 1 &#183; l'hydrogène est alimenté à q = 2</text>
+  <line x1="54" y1="788" x2="716" y2="788" stroke="#b0bec5" stroke-width="1"/>
+  <text x="66" y="832" font-size="11" font-weight="700" fill="#546e7a">t</text>
+  <text x="110" y="832" font-size="11" font-weight="700" fill="#546e7a">teneur att.</text>
+  <text x="210" y="832" font-size="11" font-weight="700" fill="#546e7a">teneur obt.</text>
+  <text x="320" y="832" font-size="11" font-weight="700" fill="#546e7a">H2 att.</text>
+  <text x="400" y="832" font-size="11" font-weight="700" fill="#546e7a">H2 obt.</text>
+  <text x="480" y="832" font-size="11" font-weight="700" fill="#546e7a">total M</text>
+  <text x="560" y="832" font-size="11" font-weight="700" fill="#546e7a">sortie AIR + H2</text>
+  <line x1="54" y1="814" x2="716" y2="814" stroke="#b0bec5" stroke-width="1"/>
+
+  <text x="66" y="860" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238"> 1</text>
+  <text x="110" y="860" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#546e7a">0,01674</text>
+  <text x="210" y="860" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-weight="600" fill="#1b5e20">0,01674</text>
+  <text x="320" y="860" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#546e7a">1,5403</text>
+  <text x="400" y="860" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-weight="600" fill="#1b5e20">1,5403</text>
+  <text x="480" y="860" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">92,000</text>
+  <text x="560" y="860" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">49,163 + 0,8371</text>
+
+  <text x="66" y="882" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238"> 5</text>
+  <text x="110" y="882" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#546e7a">0,03598</text>
+  <text x="210" y="882" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-weight="600" fill="#1b5e20">0,03598</text>
+  <text x="320" y="882" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#546e7a">3,5977</text>
+  <text x="400" y="882" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-weight="600" fill="#1b5e20">3,5977</text>
+  <text x="480" y="882" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">100,000</text>
+  <text x="560" y="882" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">48,201 + 1,7988</text>
+
+  <text x="66" y="904" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">10</text>
+  <text x="110" y="904" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#546e7a">0,03825</text>
+  <text x="210" y="904" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-weight="600" fill="#1b5e20">0,03825</text>
+  <text x="320" y="904" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#546e7a">4,2078</text>
+  <text x="400" y="904" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-weight="600" fill="#1b5e20">4,2078</text>
+  <text x="480" y="904" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">110,000</text>
+  <text x="560" y="904" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">48,087 + 1,9127</text>
+  <line x1="54" y1="888" x2="716" y2="888" stroke="#b0bec5" stroke-width="1"/>
+  <text x="54" y="934" font-size="11.5" fill="#37474f">La sortie totale vaut 50,000 à chaque pas, et le total M croît bien de 2 par unité de temps.</text>
+
+  <text x="750" y="804" font-size="13" font-weight="700" fill="#1b5e20">Phase 2 &#183; alimentation coupée, départ à H2 = 3,4615</text>
+  <line x1="750" y1="788" x2="1426" y2="788" stroke="#b0bec5" stroke-width="1"/>
+  <text x="762" y="832" font-size="11" font-weight="700" fill="#546e7a">t</text>
+  <text x="806" y="832" font-size="11" font-weight="700" fill="#546e7a">teneur att.</text>
+  <text x="906" y="832" font-size="11" font-weight="700" fill="#546e7a">teneur obt.</text>
+  <text x="1020" y="832" font-size="11" font-weight="700" fill="#546e7a">H2 att.</text>
+  <text x="1100" y="832" font-size="11" font-weight="700" fill="#546e7a">H2 obt.</text>
+  <text x="1182" y="832" font-size="11" font-weight="700" fill="#546e7a">total M</text>
+  <text x="1272" y="832" font-size="11" font-weight="700" fill="#546e7a">sortie AIR + H2</text>
+  <line x1="750" y1="814" x2="1426" y2="814" stroke="#b0bec5" stroke-width="1"/>
+
+  <text x="762" y="860" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238"> 1</text>
+  <text x="806" y="860" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#546e7a">0,02169</text>
+  <text x="906" y="860" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-weight="600" fill="#1b5e20">0,02169</text>
+  <text x="1020" y="860" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#546e7a">2,0274</text>
+  <text x="1100" y="860" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-weight="600" fill="#1b5e20">2,0274</text>
+  <text x="1182" y="860" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">93,462</text>
+  <text x="1272" y="860" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">48,915 + 1,0846</text>
+
+  <text x="762" y="882" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238"> 5</text>
+  <text x="806" y="882" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#546e7a">0,00255</text>
+  <text x="906" y="882" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-weight="600" fill="#1b5e20">0,00255</text>
+  <text x="1020" y="882" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#546e7a">0,2385</text>
+  <text x="1100" y="882" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-weight="600" fill="#1b5e20">0,2385</text>
+  <text x="1182" y="882" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">93,462</text>
+  <text x="1272" y="882" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">49,872 + 0,1276</text>
+
+  <text x="762" y="904" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">10</text>
+  <text x="806" y="904" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#546e7a">0,00018</text>
+  <text x="906" y="904" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-weight="600" fill="#1b5e20">0,00018</text>
+  <text x="1020" y="904" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#546e7a">0,0164</text>
+  <text x="1100" y="904" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-weight="600" fill="#1b5e20">0,0164</text>
+  <text x="1182" y="904" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">93,462</text>
+  <text x="1272" y="904" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">49,991 + 0,0088</text>
+  <line x1="750" y1="888" x2="1426" y2="888" stroke="#b0bec5" stroke-width="1"/>
+  <text x="750" y="934" font-size="11.5" fill="#37474f">Ici le total est constant : ce qui sort vaut ce qui entre, et la teneur décroît en exponentielle pure.</text>
+
+  <rect x="54" y="952" width="1372" height="118" rx="6" fill="#e8f5e9" stroke="#2e7d32" stroke-width="1.3"/>
+  <text x="70" y="976" font-size="13" font-weight="700" fill="#1b5e20">Lecture</text>
+  <text x="70" y="998" font-size="12.5" fill="#263238">Attendu et obtenu coïncident à la cinquième décimale sur les deux phases, sans aucun ajustement : la solution analytique n'entre nulle part dans le modèle,</text>
+  <text x="70" y="1018" font-size="12.5" fill="#263238">qui ne connaît que la composition de son volume et un débit déclaré. Le reste de la validation vit dans tests/test_mixture_ventilation_001.py, 28 essais :</text>
+  <text x="70" y="1038" font-size="12.5" fill="#263238">les deux formes closes, le partage pondéré et son invariant, une part composée SUPÉRIEURE au débit déclaré quand un poids est sous 1, un volume vide qui</text>
+  <text x="70" y="1056" font-size="12.5" fill="#263238">se remplit d'abord, le plafond de décharge qui plafonne encore, les dix refus, la forme de KB et le tour de la déclaration en données.</text>
+
+  <!-- ==================== 5 : AVANT / APRES ET REFUS ==================== -->
+  <rect x="36" y="1096" width="694" height="284" rx="8" fill="#ffebee" stroke="#c62828" stroke-width="1.3"/>
+  <text x="54" y="1124" font-size="15" font-weight="700" fill="#b71c1c">5 &#183; Le même modèle sans machine, deux demandes de 25</text>
+  <text x="54" y="1146" font-size="12" fill="#37474f">C'est la seule chose qu'un consommateur savait déclarer avant, et c'est le défaut de l'issue.</text>
+  <line x1="54" y1="1132" x2="712" y2="1132" stroke="#ef9a9a" stroke-width="1"/>
+  <text x="70" y="1176" font-size="11" font-weight="700" fill="#546e7a">t</text>
+  <text x="130" y="1176" font-size="11" font-weight="700" fill="#546e7a">teneur</text>
+  <text x="240" y="1176" font-size="11" font-weight="700" fill="#546e7a">H2 tenu</text>
+  <text x="350" y="1176" font-size="11" font-weight="700" fill="#546e7a">AIR tenu</text>
+  <text x="470" y="1176" font-size="11" font-weight="700" fill="#546e7a">sortie AIR + H2</text>
+  <line x1="54" y1="1158" x2="712" y2="1158" stroke="#ef9a9a" stroke-width="1"/>
+  <text x="70" y="1204" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238"> 1</text>
+  <text x="130" y="1204" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-weight="600" fill="#b71c1c">0,00000</text>
+  <text x="240" y="1204" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">0,0000</text>
+  <text x="350" y="1204" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">115,0</text>
+  <text x="470" y="1204" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">25,000 + 2,0000</text>
+  <text x="70" y="1226" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238"> 5</text>
+  <text x="130" y="1226" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-weight="600" fill="#b71c1c">0,00000</text>
+  <text x="240" y="1226" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">0,0000</text>
+  <text x="350" y="1226" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">215,0</text>
+  <text x="470" y="1226" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">25,000 + 2,0000</text>
+  <text x="70" y="1248" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">10</text>
+  <text x="130" y="1248" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" font-weight="600" fill="#b71c1c">0,00000</text>
+  <text x="240" y="1248" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">0,0000</text>
+  <text x="350" y="1248" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">340,0</text>
+  <text x="470" y="1248" xml:space="preserve" font-size="11.5" font-family="ui-monospace, 'SF Mono', Menlo, Consolas, monospace" fill="#263238">25,000 + 2,0000</text>
+  <line x1="54" y1="1232" x2="712" y2="1232" stroke="#ef9a9a" stroke-width="1"/>
+  <text x="54" y="1280" font-size="12" fill="#37474f">La teneur ne monte jamais : l'hydrogène traverse la salle dans le pas où il arrive.</text>
+  <text x="54" y="1298" font-size="12" fill="#37474f">Et l'air s'accumule, parce qu'il entre à 50 et ne peut sortir qu'à 25.</text>
+  <text x="54" y="1326" font-size="12" font-weight="600" fill="#b71c1c">Ces chiffres sont TOUJOURS ceux de 5.4.0 sur ce montage.</text>
+  <text x="54" y="1344" font-size="12" fill="#37474f">Le comportement par flux est juste pour un tampon mono-flux et n'a pas bougé :</text>
+  <text x="54" y="1362" font-size="12" fill="#37474f">c'est la présence d'une machine qui déclenche la composition, rien d'autre.</text>
+
+  <rect x="750" y="1096" width="694" height="284" rx="8" fill="#fff3e0" stroke="#ef6c00" stroke-width="1.3"/>
+  <text x="768" y="1124" font-size="15" font-weight="700" fill="#bf360c">6 &#183; Ce qui est refusé, et où</text>
+  <text x="768" y="1148" font-size="12" font-weight="700" fill="#546e7a">À la déclaration, sur le composant</text>
+  <text x="768" y="1168" font-size="12" fill="#263238">&#8226; un flux qui n'est pas une entrée continue</text>
+  <text x="768" y="1186" font-size="12" fill="#263238">&#8226; un flux qu'une règle consomme, qu'une paire de transfert nomme,</text>
+  <text x="782" y="1204" font-size="12" fill="#263238">ou qu'une capacité du composant tamponne en amont</text>
+  <text x="768" y="1222" font-size="12" fill="#263238">&#8226; un flux qui est AUSSI une sortie continue de la machine</text>
+  <text x="768" y="1240" font-size="12" fill="#263238">&#8226; un débit négatif, ou infini</text>
+
+  <text x="768" y="1268" font-size="12" font-weight="700" fill="#546e7a">Au pas de pré-exécution, sur les connexions</text>
+  <text x="768" y="1288" font-size="12" fill="#263238">&#8226; des flux arrivant de plusieurs producteurs</text>
+  <text x="768" y="1306" font-size="12" fill="#263238">&#8226; un producteur sans capacité derrière cette sortie, ou avec plusieurs volumes</text>
+  <text x="768" y="1324" font-size="12" fill="#263238">&#8226; un volume qui sert le groupe ET quelqu'un d'autre</text>
+  <text x="768" y="1342" font-size="12" fill="#263238">&#8226; deux groupes sur un même volume</text>
+  <text x="768" y="1366" font-size="11.5" fill="#bf360c">Le troisième de la première liste est le seul périmètre retiré : une machine qui repasse son tirage détruirait de la matière.</text>
+
+</svg>
