@@ -620,6 +620,25 @@ Three things follow from where it travels, which is **beside** the declaration a
 
 `addTarget` stays available and stays PyCATSHOO's: a target on a **variable** with a comparison, like the `"VAR", "!=", 1` above, has no counterpart in this vocabulary — declare the equivalent `ObjEvent` and name it.
 
+#### Declaring what a model observes, beyond what it names
+
+An engine reading a muscadet declaration can emit two kinds of indicator: the ones the document **declares**, and a set it **generates**, one per observable variable and named `{component}_{variable}`. Which of the two a model got used to depend on the route that assembled it, so a model said nothing about it and observed whatever that route happened to emit. A system declares it instead:
+
+```python
+system = muscadet.System(name="feed")                              # asks for the generated set
+system = muscadet.System(name="feed", generated_indicators=False)  # observes what it declares, and that alone
+system.generated_indicators = False                                # or said later, before the export
+```
+
+- **A system that says nothing asks for the generated set**, which is what every muscadet model has always been observed by. A **document** that says nothing means the opposite, the declared indicators and nothing else. The two are not in conflict: `system_spec` writes the key on **every** document it exports, so what a model wants is read off the document rather than off a default nobody can see.
+- **The key is `generated_indicators`, spelled as the reading engine spells it.** The model level of the format is an open vocabulary on both sides: a key spelled otherwise is accepted, dropped, and reported by nobody, so the model would simply observe less than it asked for.
+- **Only `True` or `False`.** `"false"` is a string Python reads as true, and it is refused where it is written.
+
+```python
+system.generated_indicators = True
+muscadet.declare.system_spec(system)["generated_indicators"]   # True, in the exported document
+```
+
 ## Flow class names: canonical and legacy
 
 Everything above declares *discrete* flows — boolean signals that are either fed or not. Since MUSCADET 2.0 the discrete flow classes carry an explicit `Discrete` in their name, so that they read as one family beside the continuous one introduced in the next chapter.

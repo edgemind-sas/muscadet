@@ -510,9 +510,18 @@ def test_the_spec_version_is_a_patch_increment():
 
     A reader controls the major alone, so a document written at 1.0.0 is still
     read here, and a reader that ignores the key behaves exactly as it did.
+
+    Read as an interval rather than as the literal ``"1.0.1"`` this test was
+    written with: ``transmits`` arrived AT 1.0.1, and the next optional key
+    carrying a default (``generated_indicators``, at 1.0.2) is a patch of the
+    same kind. Pinned to the literal, this test turned that second patch into a
+    failure naming the capacity field, which is neither where the change was
+    nor what the claim is about.
     """
-    assert declare.SYSTEM_SPEC_VERSION == "1.0.1"
-    assert declare.SYSTEM_SPEC_VERSION.split(".")[0] == "1"
+    version = tuple(int(part) for part in declare.SYSTEM_SPEC_VERSION.split("."))
+
+    assert version[0] == 1
+    assert version >= (1, 0, 1)
 
 
 # ----------------------------------------------------------------------

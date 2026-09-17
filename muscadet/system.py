@@ -4,6 +4,7 @@ import re
 import cod3s
 
 from .capacity import MEASUREMENT_LEVEL, MEASUREMENT_RATE, MEASUREMENT_RATIO
+from .declare import GENERATED_INDICATORS_DEFAULT, checked_generated_indicators
 from .engine import (
     check_run_targets,
     is_reference_engine,
@@ -190,6 +191,16 @@ class System(cod3s.PycSystem):
     :data:`~muscadet.ordering.CAPACITY_ORDER_BASE`, so they integrate last.
     ``_capacity_equation_order_next`` below is what makes the capacity unit's
     provisional counter draw from that top band instead of from 0.
+
+    What the model wants observed
+    -----------------------------
+    :attr:`generated_indicators` is the one thing a system says about its own
+    observation rather than about its behaviour: whether an engine reading its
+    declaration emits the indicator set it generates, one per observable
+    variable, beside the indicators the system declares. It is model scale, so
+    it travels IN the document
+    (:data:`muscadet.declare.GENERATED_INDICATORS`), where a target -- a
+    property of one run -- travels beside it.
     """
 
     #: Read by ``muscadet.capacity.allocate_capacity_equation_order`` at
@@ -200,6 +211,48 @@ class System(cod3s.PycSystem):
     #: Read here resolves to the class attribute; the first allocation writes an
     #: instance attribute, so systems never share a counter.
     _capacity_equation_order_next = CAPACITY_ORDER_BASE
+
+    # ------------------------------------------------------------------
+    # What the model wants OBSERVED
+    # ------------------------------------------------------------------
+
+    def __init__(
+        self, name, generated_indicators=GENERATED_INDICATORS_DEFAULT, **kwrds
+    ):
+        """A system, and what it wants observed.
+
+        ``generated_indicators`` is the model-scale intention
+        (:data:`muscadet.declare.GENERATED_INDICATORS`): whether an engine
+        reading this system's declaration emits the indicator set it GENERATES,
+        one per observable variable, beside the ones the system declares
+        itself. :func:`muscadet.declare.system_spec` writes it into every
+        document, so it travels to whichever engine runs the model.
+
+        **This override exists because a keyword is otherwise lost in
+        silence.** ``cod3s.PycSystem.__init__(self, name, **kwrds)`` accepts
+        and drops every keyword it does not know, so ``System(name="S",
+        generated_indicators=False)`` would look like an API, do nothing, and
+        say nothing -- the exact failure mode this key was introduced to close,
+        reproduced in the surface meant to close it.
+        """
+        super().__init__(name, **kwrds)
+        self.generated_indicators = generated_indicators
+
+    @property
+    def generated_indicators(self):
+        """Whether this system wants the generated indicator set.
+
+        A property rather than a plain attribute so the refusal lands where the
+        mistake is made: ``system.generated_indicators = "false"`` is a string
+        Python reads as true and its author reads as false, and caught at the
+        assignment it names the line that wrote it, where caught at export time
+        it names a document nobody typed.
+        """
+        return getattr(self, "_generated_indicators", GENERATED_INDICATORS_DEFAULT)
+
+    @generated_indicators.setter
+    def generated_indicators(self, value):
+        self._generated_indicators = checked_generated_indicators(value)
 
     # ------------------------------------------------------------------
     # PDMP manager ownership

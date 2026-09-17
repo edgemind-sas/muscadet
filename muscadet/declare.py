@@ -2531,7 +2531,61 @@ def build_controller_component(system, spec):
 #: 1.0.1 adds ``transmits`` on a capacity, which carries a default: a reader
 #: that ignores the key behaves exactly as it did at 1.0.0, and a 1.0.0
 #: document rebuilds here unchanged, its capacities taking the default.
-SYSTEM_SPEC_VERSION = "1.0.1"
+#:
+#: 1.0.2 adds :data:`GENERATED_INDICATORS` at the MODEL level, on the same
+#: reading: optional, carrying a default, so a reader that ignores it builds
+#: exactly the system it built at 1.0.1 -- the key says what is OBSERVED, and
+#: muscadet's own engine observes the declared indicators either way -- and a
+#: 1.0.1 document rebuilds here unchanged, taking the default of the format
+#: (absent means false).
+SYSTEM_SPEC_VERSION = "1.0.2"
+
+
+#: The model-level key by which a declaration says whether it wants the
+#: indicator set an engine GENERATES -- one per observable variable, named
+#: ``{component}_{variable}`` -- beside the indicators the document declares
+#: itself.
+#:
+#: **It is spelled exactly as the reader spells it**, and that identity is the
+#: whole reason for writing the intention down instead of leaving it to a
+#: convention: ``pyraichu.indicators.GENERATED_INDICATORS`` is this same
+#: string, and the model level is an OPEN vocabulary on both sides -- a key
+#: nobody knows is accepted and then dropped, in silence. A document asking for
+#: its observations under any other spelling would run, observe only what it
+#: declared, and say nothing about the request it lost.
+#:
+#: **Absent means false**, and false means the model observes what it declared
+#: and nothing else. That is the reading of the FORMAT, shared with the engine
+#: that reads it, and it is what leaves every document written before this key
+#: existed meaning exactly what it meant. What the muscadet AUTHORING surface
+#: defaults to is a different question, and it has a different answer:
+#: :data:`GENERATED_INDICATORS_DEFAULT`.
+#:
+#: **Before releasing a muscadet that writes this key**, read the ordering
+#: constraint in ``CHANGELOG.md`` ("Do not publish this line before the reader
+#: is on a wheel"): a reader that predates the key accepts it and drops it in
+#: silence, so a release published ahead of the engine's does not fail, it
+#: observes less than the model asked for and says nothing.
+GENERATED_INDICATORS = "generated_indicators"
+
+#: What a muscadet SYSTEM wants when its author says nothing: **true**, the
+#: generated set beside whatever the system declares.
+#:
+#: True here and false in the document format is not a contradiction, it is
+#: the same distinction ``pyraichu.muscadet.System`` settled on for the other
+#: authoring surface of this format: a system built object by object is the
+#: muscadet authoring surface, whose models have always been observed variable
+#: by variable, while a document is read as it is written and a document that
+#: asks for nothing gets nothing. Choosing false here would have cost every
+#: existing muscadet model its observations at the first run on an engine that
+#: reads this key, silently -- which is the regression this key exists to
+#: prevent, not one to inflict from the other side.
+#:
+#: The default is never what a document carries, because
+#: :func:`system_spec` writes the key on EVERY document (see there): the two
+#: authoring surfaces of this format write what they want rather than leaving
+#: a reader to a default it cannot see.
+GENERATED_INDICATORS_DEFAULT = True
 
 #: What an indicator declaration carries. Read back concretely rather than as
 #: the pattern the modeller typed: ``add_indicator`` takes regexes and expands
@@ -2586,6 +2640,58 @@ _INDICATOR_KINDS = {
 
 class SystemSpecError(ValueError):
     """A system declaration that cannot be read or cannot be built."""
+
+
+def generated_indicators(spec):
+    """Whether a system declaration asks for the generated indicator set.
+
+    The one reading of :data:`GENERATED_INDICATORS` on this side of the seam,
+    and deliberately the same one the engine applies on the other
+    (``pyraichu.indicators.generated_indicators``): what a model observes must
+    not depend on which of the two read the key.
+
+    Only a genuine boolean is honoured. The string ``"false"`` is true to
+    Python and false to whoever wrote it, so it is refused rather than
+    resolved -- at the author's door, where the message can still name the
+    document, instead of in an engine reporting on its own internals.
+
+    Parameters
+    ----------
+    spec : dict
+        A system declaration, as :func:`system_spec` produces it.
+
+    Returns
+    -------
+    bool
+        False for a declaration that does not carry the key, which is what the
+        format says a document without it means.
+
+    Raises
+    ------
+    SystemSpecError
+        When the key carries anything but ``True`` or ``False``.
+    """
+    return checked_generated_indicators(
+        spec.get(GENERATED_INDICATORS, False) if isinstance(spec, dict) else False
+    )
+
+
+def checked_generated_indicators(value):
+    """``value`` itself, once it is a boolean; the refusal otherwise.
+
+    Split from :func:`generated_indicators` because the same answer is read in
+    two places that do not both have a document in hand: from the key of a
+    declaration, and from the attribute of a live system on its way into one
+    (:func:`system_spec`). One refusal, one sentence, whichever side asked.
+    """
+    if not isinstance(value, bool):
+        raise SystemSpecError(
+            f"{GENERATED_INDICATORS!r} says whether the model wants the "
+            f"indicator set an engine generates beside the declared ones, so "
+            f"it is true or false; got {value!r}"
+        )
+
+    return value
 
 
 def _anchor(name):
@@ -2698,6 +2804,29 @@ def system_spec(system):
     described nowhere else, so dropping either would not lose decoration but
     the model. Each entry says which it is (:data:`COMPONENT_KIND_KEY`).
 
+    ``generated_indicators`` says what the model wants OBSERVED beyond the
+    indicators it declares, and it belongs here for the reason a target does
+    not: it is a property of the description, true of every run of this
+    system, and two systems carrying the same declaration must observe the
+    same things or the document is not what the seam claims it is. See
+    :data:`GENERATED_INDICATORS` for the key and
+    :data:`GENERATED_INDICATORS_DEFAULT` for what a system wants when nobody
+    said.
+
+    **It is written on every document, whatever its value**, exactly as
+    ``transmits`` is on a capacity, and the alternative -- writing it only when
+    it departs from the default -- was weighed and left. What it would buy is
+    documents that do not move: every reference fingerprint of the platform
+    corpus shifts the day this key appears in each of them, and that is a real
+    cost, paid once and visible. What it would cost is the whole point of
+    having a key: a document that says nothing forces its reader to a default
+    it cannot see, which is precisely the silent divergence this key was
+    introduced to close -- what a model observed used to depend on which route
+    assembled it, and nothing in the document said so. The engine's own
+    muscadet-compatible writer states the key on every document it writes, for
+    that same reason; a format whose two writers disagree about when to speak
+    would put the divergence back one level up.
+
     Deliberately NOT included: targets and simulation parameters. Those are the
     configuration of a RUN, handed to ``simulate()``, not the description of a
     system. Two systems carrying the same declaration are the same system,
@@ -2746,6 +2875,9 @@ def system_spec(system):
             },
             "connections": system_connections(system),
             "indicators": system_indicators(system),
+            GENERATED_INDICATORS: checked_generated_indicators(
+                getattr(system, "generated_indicators", GENERATED_INDICATORS_DEFAULT)
+            ),
         },
         "$",
         SystemSpecError,
@@ -2972,6 +3104,12 @@ def check_system_spec(spec):
             f"muscadet, which reads {SYSTEM_SPEC_VERSION.split('.')[0]}.x"
         )
 
+    # Read for its refusal alone: a value that is not a boolean is a document
+    # whose author asked for something nobody can honour, and the engine that
+    # would refuse it next reports on its own vocabulary rather than on this
+    # document.
+    generated_indicators(spec)
+
     components = spec.get("components")
     if not isinstance(components, dict):
         raise SystemSpecError(
@@ -3129,6 +3267,12 @@ def build_system(spec, system=None):
         from muscadet.system import System
 
         system = System(name=spec.get("name") or "system")
+
+    # The DOCUMENT decides, including when it says nothing: a declaration
+    # carrying no :data:`GENERATED_INDICATORS` means false, and a system
+    # rebuilt from it must re-export false rather than the authoring default
+    # of the class, which would quietly upgrade what an old document observes.
+    system.generated_indicators = generated_indicators(spec)
 
     for name in component_build_order(spec["components"]):
         comp_spec = spec["components"][name]
