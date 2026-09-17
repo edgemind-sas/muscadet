@@ -4,28 +4,56 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
-## Unreleased
+## 5.6.0 (2026-09-17)
 
 A model declares whether it wants the **generated indicator set** -- one
 indicator per observable variable, named `{component}_{variable}` -- beside the
 indicators it declares itself. The key travels in the document, so it reaches
 whichever engine runs the model.
 
-### Do not publish this line before the reader is on a wheel
+### The reader came first, and it stays first for whoever pins
 
-**Order, and it is not a precaution.** A published `pyraichu` carrying the
-reader of `generated_indicators` comes FIRST; a muscadet release carrying this
-key comes after. The key is written on every document muscadet exports, and the
-model level is an open vocabulary on both sides: measured on 2026-09-17 against
-a pyraichu that predates the reader, a document asking for the generated set is
-accepted, the key is dropped without a word, and the study observes what that
-reader would have given it anyway. Published in the wrong order, the failure is
-therefore silent rather than loud -- an engine one release older simply ignores
-what the model asked for.
+**Order, and it is not a precaution.** A `pyraichu` carrying the reader of
+`generated_indicators` comes FIRST; a muscadet carrying this key comes after.
+That order was honoured here: `pyraichu` 0.28.0, whose `pyraichu/indicators.py`
+carries `GENERATED_INDICATORS` and the one reading of it, was published on
+2026-09-17 at 09:35 UTC, and this tag was cut after it.
 
-This chantier has already paid the other half of the same defect once, with the
-`mixtures` section: a key muscadet wrote on every component, a reader whose
-vocabulary was closed, and no document of the release readable at all.
+The constraint outlives the publication, because it binds whoever PINS as much
+as whoever releases. The key is written on every document muscadet exports, and
+the model level is an open vocabulary on both sides: measured on 2026-09-17
+against a pyraichu that predates the reader, a document asking for the
+generated set is accepted, the key is dropped without a word, and the study
+observes what that reader would have given it anyway. An installation that
+pins this muscadet beside a `pyraichu` older than 0.28.0 -- an engine pin left
+behind, or rolled back alone -- therefore fails silently rather than loudly:
+the engine simply ignores what the model asked for. Raise the `pyraichu` pin
+before this one, and lower it after.
+
+### A second reader is needed, and 0.28.0 does not carry it
+
+**0.28.0 reads this key and refuses every document that carries it**, which is
+every document muscadet has written since 5.4.0. muscadet writes a `mixtures`
+section on each component, and the reader refuses an unknown component key by
+name. Measured on 2026-09-17, on the published line and not on a tree of our
+own: `mixtures` appears **zero** times in `pyraichu/declare.py` at the public
+tags `v0.27.0` and `v0.28.0` and on `origin/main`, and a campaign run on the
+published wheel dies on
+
+```
+pyraichu.declare.ComponentSpecError: Component SRC: unknown declaration key
+'mixtures'; it accepts automata, capacities, cls, create_default_out_automata,
+description, failure_modes, flows, kind, label, measurements_in,
+measurements_out, metadata, name, params, rules, source_cls, transfers
+```
+
+So pinning this release beside `pyraichu` 0.28.0 does not give "the key read",
+it gives **no readable document at all**. That half is loud, where the one
+above is silent, and it is the obstacle of this sequence rather than a
+precaution about it: the reader of `mixtures` exists on the cod3s-raichu
+feature line and has never been published. Whoever raises these two pins
+verifies **both** readers inside the wheel, by its content and never by its
+version number.
 
 ### Added
 
@@ -48,11 +76,21 @@ vocabulary was closed, and no document of the release readable at all.
 ### What is written, and what a document without the key means
 
 The key is written on **every** document, whatever its value, as `transmits` is
-on a capacity. Writing it only when it departs from the default would leave the
-platform's reference fingerprints untouched -- a real cost, paid once, and it
-is the cost this takes -- but it would also leave a reader in front of a
-document that says nothing and a default it cannot see, which is the silence
-this key exists to break.
+on a capacity.
+
+What writing it only when it departs from the default would have saved was
+measured rather than assumed, and it is close to nothing: **no document of this
+format is versioned anywhere in the platform that consumes it.** Searched on
+2026-09-17 across three platform trees, every JSON file outside the
+environments, for one carrying `components` beside `connections`: none. The
+reference corpus holds the translator's own `*.study_yaml.json` and the result
+tables beside them, and the two locks that touch the declaration do not see a
+model-level key either (one compares an export to its own re-export, the other
+an artefact map indexed by component, flow and mode). What changes is one head
+key in each document produced on the fly, and no file anyone has to re-bless.
+
+What it would have cost is the silence this key exists to break: a reader in
+front of a document that says nothing, and a default it cannot see.
 
 A system says **true** when its author says nothing; a **document** without the
 key means **false**. The asymmetry is the one `pyraichu.muscadet.System`
@@ -77,6 +115,15 @@ run through `pyraichu.muscadet_engine`:
 | `generated_indicators: true` | with the model key | the same 16, same values |
 | `generated_indicators: false` | with the model key | 1, the declared one |
 | key absent | with the model key | 1, the declared one |
+
+And on the platform side, where nothing was expected to move and nothing does:
+a system built by `PlatformExportBuilder` from its `minimal_export.json`
+fixture exports `generated_indicators: true` at version `1.0.2`, one head key
+more in a document produced at run time. What reaches `indicators.csv` is built
+from the study's own indicator entries and not from what the engine emits, so a
+generated estimate adds no row there; an entry that used to pass with a `warn`
+for want of an estimate and now finds one is a catch-up towards the golden, not
+a drift.
 
 ### Changed
 

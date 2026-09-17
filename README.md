@@ -622,7 +622,7 @@ Three things follow from where it travels, which is **beside** the declaration a
 
 #### Declaring what a model observes, beyond what it names
 
-An engine reading a muscadet declaration can emit two kinds of indicator: the ones the document **declares**, and a set it **generates**, one per observable variable and named `{component}_{variable}`. Which of the two a model got used to depend on the route that assembled it, so a model said nothing about it and observed whatever that route happened to emit. A system declares it instead:
+An engine reading a muscadet declaration can emit two kinds of indicator: the ones the document **declares**, and a set it **generates**, one per observable variable and named `{component}_{variable}`. Which of the two a model received used to depend on the route that assembled it, so a model said nothing about it and observed whatever that route happened to emit. A system declares it instead:
 
 ```python
 system = muscadet.System(name="feed")                              # asks for the generated set

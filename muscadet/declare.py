@@ -2815,17 +2815,28 @@ def system_spec(system):
 
     **It is written on every document, whatever its value**, exactly as
     ``transmits`` is on a capacity, and the alternative -- writing it only when
-    it departs from the default -- was weighed and left. What it would buy is
-    documents that do not move: every reference fingerprint of the platform
-    corpus shifts the day this key appears in each of them, and that is a real
-    cost, paid once and visible. What it would cost is the whole point of
-    having a key: a document that says nothing forces its reader to a default
-    it cannot see, which is precisely the silent divergence this key was
-    introduced to close -- what a model observed used to depend on which route
-    assembled it, and nothing in the document said so. The engine's own
-    muscadet-compatible writer states the key on every document it writes, for
-    that same reason; a format whose two writers disagree about when to speak
-    would put the divergence back one level up.
+    it departs from the default -- was weighed and left.
+
+    What that alternative would buy is smaller than it looks, and it was
+    measured rather than assumed: **no document of this format is versioned
+    anywhere in the platform that consumes it.** Searched 2026-09-17 across
+    three platform trees, every JSON file outside the environments, for one
+    carrying ``components`` beside ``connections``: none. What its reference
+    corpus holds is the translator's own study files and the result tables
+    beside them, and its two locks that touch the declaration do not see this
+    key either -- one compares an export to its own re-export, which gains the
+    key on both sides at once, the other an artefact map indexed by component,
+    flow and mode, which a model-level key does not enter. So the key appears
+    in documents produced on the fly, and in no file anyone has to re-bless.
+
+    What the alternative would cost is the whole point of having a key: a
+    document that says nothing forces its reader to a default it cannot see,
+    which is precisely the silent divergence this key was introduced to close
+    -- what a model observed used to depend on which route assembled it, and
+    nothing in the document said so. The engine's own muscadet-compatible
+    writer states the key on every document it writes, for that same reason; a
+    format whose two writers disagree about when to speak would put the
+    divergence back one level up.
 
     Deliberately NOT included: targets and simulation parameters. Those are the
     configuration of a RUN, handed to ``simulate()``, not the description of a
