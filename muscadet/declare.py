@@ -2561,11 +2561,12 @@ SYSTEM_SPEC_VERSION = "1.0.2"
 #: defaults to is a different question, and it has a different answer:
 #: :data:`GENERATED_INDICATORS_DEFAULT`.
 #:
-#: **Before releasing a muscadet that writes this key**, read the ordering
-#: constraint in ``CHANGELOG.md`` ("Do not publish this line before the reader
-#: is on a wheel"): a reader that predates the key accepts it and drops it in
-#: silence, so a release published ahead of the engine's does not fail, it
-#: observes less than the model asked for and says nothing.
+#: **Before pinning a muscadet that writes this key**, read the ordering
+#: constraint in ``CHANGELOG.md`` ("The reader came first, and it stays first
+#: for whoever pins"): a reader that predates the key accepts it and drops it
+#: in silence, so an engine older than the one that reads it does not fail, it
+#: observes less than the model asked for and says nothing. The key is
+#: published from 5.6.0, and ``pyraichu`` reads it from 0.28.0.
 GENERATED_INDICATORS = "generated_indicators"
 
 #: What a muscadet SYSTEM wants when its author says nothing: **true**, the
