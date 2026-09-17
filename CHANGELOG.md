@@ -4,6 +4,48 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 5.5.0 (2026-09-17)
+
+A run declares the events it stops at, beside the document rather than inside
+it. This is also the first tag to carry both published lines: the ventilated
+mixture of 5.4.0 and the 5.2.0 to 5.3.1 line it had been cut away from.
+
+### Added
+
+- **`muscadet.engine.RUN_TARGETS`** (`"targets"`), the one run parameter the
+  seam spells. `system.simulate({...}, engine=..., targets=[...])` and
+  `isimu_start` take it alike, and it reaches PyCATSHOO through
+  `System.declare_run_targets` and its `addTarget`.
+- **`muscadet.engine.RunTargetError`**, the typed refusal. Names are checked
+  against `muscadet.declare.declared_events` before any engine is reached, and
+  a name that designates something else is refused for what it designates
+  rather than reported missing.
+
+### A parameter of the run, not a section of the declaration
+
+`system_spec` is unchanged: a declaration still carries no `targets` section,
+and a model that names none exports exactly what it exported before. What a run
+stops at belongs to the run, because two campaigns over one model must be free
+to disagree about it.
+
+### The two lines are joined
+
+5.4.0 was cut from the 5.1.0-era base and knew nothing of 5.2.0 through 5.3.1:
+no `muscadet/engine.py`, so no interface over more than one engine and no
+system declaration into JSON, and an embedded cod3s ref still at 1.16.1. A
+consumer pinning muscadet 5.4.0 beside cod3s 1.17.0 got uv's `conflicting URLs
+for package cod3s` and could pin neither. That is the 5.3.0 accident, one
+number higher, and it left `add_mixture_in` published but unreachable.
+
+Nothing is dropped to repair it. `add_mixture_in` arrives here whole, with its
+own tests, and the embedded cod3s ref stays at 1.17.0. The merge of the two
+lines touched the two release files only, `CHANGELOG.md` and
+`muscadet/version.py`; every other file merged without conflict.
+
+Validated by the full suite on the merged tree: 1934 passed, 2 skipped, against
+1906 passed on the run-targets line alone and the 28 tests the mixture line
+brings with it.
+
 ## 5.4.0 (2026-09-15)
 
 A volume holding several constituents can be **ventilated**: a machine declares
