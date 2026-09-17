@@ -20,6 +20,8 @@ from .capacity import (
 )
 from .declare import (
     COMPONENT_REFERENCE_KEYS,
+    GENERATED_INDICATORS,
+    GENERATED_INDICATORS_DEFAULT,
     ComponentSpecError,
     SystemSpecError,
     build_component,
@@ -30,6 +32,7 @@ from .declare import (
     component_references,
     component_spec,
     declared_events,
+    generated_indicators,
     system_spec,
 )
 from .engine import (

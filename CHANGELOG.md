@@ -4,6 +4,94 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 5.6.0 (2026-09-17)
+
+A model declares whether it wants the **generated indicator set** -- one
+indicator per observable variable, named `{component}_{variable}` -- beside the
+indicators it declares itself. The key travels in the document, so it reaches
+whichever engine runs the model.
+
+### The reader came first, and it stays first for whoever pins
+
+**Order, and it is not a precaution.** A `pyraichu` carrying the reader of
+`generated_indicators` comes FIRST; a muscadet carrying this key comes after.
+That order was honoured here: `pyraichu` 0.28.0, whose `pyraichu/indicators.py`
+carries `GENERATED_INDICATORS` and the one reading of it, was published on
+2026-09-17 at 09:35 UTC, and this tag was cut after it.
+
+The constraint outlives the publication, because it binds whoever PINS as much
+as whoever releases. The key is written on every document muscadet exports, and
+the model level is an open vocabulary on both sides: measured on 2026-09-17
+against a pyraichu that predates the reader, a document asking for the
+generated set is accepted, the key is dropped without a word, and the study
+observes what that reader would have given it anyway. An installation that
+pins this muscadet beside a `pyraichu` older than 0.28.0 -- an engine pin left
+behind, or rolled back alone -- therefore fails silently rather than loudly:
+the engine simply ignores what the model asked for. Raise the `pyraichu` pin
+before this one, and lower it after.
+
+This chantier has already paid the other half of the same defect once, with the
+`mixtures` section: a key muscadet wrote on every component, a reader whose
+vocabulary was closed, and no document of the release readable at all. That
+one, at least, was loud.
+
+### Added
+
+- **`muscadet.declare.GENERATED_INDICATORS`** (`"generated_indicators"`), the
+  model-level key. Spelled exactly as `pyraichu.indicators.GENERATED_INDICATORS`
+  spells it, which is the point of declaring the intention rather than agreeing
+  on a convention.
+- **`muscadet.declare.generated_indicators(spec)`**, the one reading of that
+  key, and **`checked_generated_indicators(value)`** behind it. Only a genuine
+  boolean is honoured: `"false"` is true to Python and false to whoever wrote
+  it, so it is refused rather than resolved.
+- **`muscadet.System(name, generated_indicators=...)`** and the matching
+  property. `System` now overrides `__init__` because
+  `cod3s.PycSystem.__init__(self, name, **kwrds)` accepts and drops every
+  keyword it does not know: without the override, the keyword would have looked
+  like an API, done nothing, and said nothing.
+- **`muscadet.declare.GENERATED_INDICATORS_DEFAULT`** (`True`), what a system
+  wants when its author says nothing.
+
+### What is written, and what a document without the key means
+
+The key is written on **every** document, whatever its value, as `transmits` is
+on a capacity. Writing it only when it departs from the default would leave the
+platform's reference fingerprints untouched -- a real cost, paid once, and it
+is the cost this takes -- but it would also leave a reader in front of a
+document that says nothing and a default it cannot see, which is the silence
+this key exists to break.
+
+A system says **true** when its author says nothing; a **document** without the
+key means **false**. The asymmetry is the one `pyraichu.muscadet.System`
+settled on for the other authoring surface of this format: a system built
+object by object is the muscadet authoring surface, whose models have always
+been observed variable by variable, so a false default here would have taken
+those observations away from every existing model, silently. A document is read
+as it is written.
+
+`build_system` puts what the document says back onto the system it builds,
+including when the document says nothing, so a 1.0.1 document rebuilt and
+re-exported does not quietly gain what it never asked for.
+
+### Measured
+
+A continuous model -- source, buffer volume, load -- exported by muscadet and
+run through `pyraichu.muscadet_engine`:
+
+| Document | Reader | Observations |
+| --- | --- | --- |
+| before this key existed | before the model key | 16 |
+| `generated_indicators: true` | with the model key | the same 16, same values |
+| `generated_indicators: false` | with the model key | 1, the declared one |
+| key absent | with the model key | 1, the declared one |
+
+### Changed
+
+- **`SYSTEM_SPEC_VERSION` is 1.0.2.** An optional field carrying a default is a
+  patch: a reader that ignores the key builds exactly the system it built at
+  1.0.1, and a 1.0.1 document rebuilds here unchanged.
+
 ## 5.5.0 (2026-09-17)
 
 A run declares the events it stops at, beside the document rather than inside
