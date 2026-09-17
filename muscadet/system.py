@@ -16,6 +16,7 @@ from .flow_continuous import (
     RATE_OBSERVATION_OUT_SUFFIX,
     FlowContinuous,
 )
+from .mixture import MixtureGroupError, resolve_mixture_groups  # noqa: F401
 from .obj_logic import LogicAnd, LogicOr
 from .ordering import (
     CAPACITY_ORDER_BASE,
@@ -510,7 +511,17 @@ class System(cod3s.PycSystem):
             When the continuous-flow graph is cyclic (R30). Measurement links
             and the discrete control flows built on them are not continuous
             flows and never take part in the check.
+        muscadet.mixture.MixtureGroupError
+            When a declared mixture group's flows do not all arrive from one
+            capacity of one producer (R51).
         """
+        # BEFORE any equation is registered, and that ordering is load bearing:
+        # PyCATSHOO refuses to register an equation its manager already holds and
+        # offers no removal, so a step that raises after registering could never
+        # be retried. ``resolve_mixture_groups`` registers nothing, so a model
+        # refused here is refused identically at the next entry point (R51).
+        self._mixture_bindings = resolve_mixture_groups(self)
+
         self._equation_order = register_equation_order(self)
 
         # After the equation order, and for one reason: a kink automaton is
