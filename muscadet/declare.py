@@ -3233,6 +3233,57 @@ def declared_events(spec):
     return tuple(events)
 
 
+def declared_occurrence_state(spec, name):
+    """The state an event is IN once it has occurred, read from the DOCUMENT.
+
+    The other half of what a sequence target needs. :func:`declared_events`
+    says which names a document offers; this says what an engine has to watch
+    to know one of them was reached, and it says it from the document alone --
+    so the reference engine resolves a target exactly where a registered one
+    does, instead of reaching into the live component beside it.
+
+    **The state is a declaration and not a convention.** An event names its own
+    (``occ_state_name``), and a document writes only what someone decided, so
+    the key is absent on every event that kept the default. Reading the default
+    off :data:`EVENT_VOCABULARY` rather than spelling ``"occ"`` here is what
+    keeps the two ends of one declaration together: the day that default moves,
+    a target follows it instead of watching a state that no longer exists --
+    which is the silent campaign :data:`muscadet.engine.RUN_TARGETS` exists to
+    stop, reappearing one layer down.
+
+    Parameters
+    ----------
+    spec : dict
+        A system declaration, as :func:`system_spec` produces it.
+    name : str
+        The name of an event of that declaration.
+
+    Returns
+    -------
+    str
+
+    Raises
+    ------
+    SystemSpecError
+        When ``name`` designates no event of ``spec``. Raised rather than
+        defaulted: a caller asking for the occurrence state of something that
+        is not an event has already lost the thread, and answering ``"occ"``
+        would hand it a state to watch on a component that has none.
+    """
+    if name not in declared_events(spec):
+        raise SystemSpecError(
+            f"{name!r} is not an event of this declaration, so it has no "
+            f"occurrence state; the events it declares are "
+            f"{list(declared_events(spec)) or ['<none>']}"
+        )
+
+    comp_spec = spec["components"][name]
+
+    return str(
+        comp_spec.get("occ_state_name") or EVENT_VOCABULARY.defaults["occ_state_name"]
+    )
+
+
 def build_system(spec, system=None):
     """Build a whole system from a declaration held in data.
 

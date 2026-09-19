@@ -32,6 +32,7 @@ from .declare import (
     component_references,
     component_spec,
     declared_events,
+    declared_occurrence_state,
     generated_indicators,
     system_spec,
 )
@@ -48,6 +49,10 @@ from .engine import (
     check_run_targets,
     get_engine,
     is_reference_engine,
+    reference_declaration,
+    reference_isimu_start,
+    reference_run,
+    reference_simulate,
     register_engine,
     registered_engines,
     reset_engines,
