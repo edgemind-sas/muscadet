@@ -662,8 +662,17 @@ class System(cod3s.PycSystem):
         model now yield two documents, and a divergence shows on a diff rather
         than on a campaign (ADR decision 3).
 
-        ``None`` before any run, and after one whose model no document
-        describes -- :attr:`run_declaration_refusal` is then the reason.
+        **After a reference run, exactly one of this and
+        :attr:`run_declaration_refusal` is set**, and that invariant is what
+        makes the pair readable: a document, or the reason there is none.
+        Both at ``None`` means no reference run has happened -- and never "a
+        run that emitted nothing", which is what this attribute used to mean on
+        a session opened through :meth:`startInteractive`.
+
+        A run on a REGISTERED engine leaves both at ``None`` too, and that is
+        not the same statement: the document that run handed over is the
+        engine's, observable where the engine received it. This pair is the
+        reference engine's side of the diff, which nothing else would hold.
         """
         return getattr(self, "_run_declaration", None)
 
@@ -677,17 +686,30 @@ class System(cod3s.PycSystem):
         declared boundary rather than a defect -- see
         :func:`muscadet.engine.reference_declaration`. It does not stop the
         run, so without this it would stop nothing and say nothing.
+
+        **No document without a reason posted here**: that is the invariant
+        the broad ``except Exception`` of ``reference_declaration`` rests on,
+        and it holds on the three run entry points alike -- see
+        :attr:`run_declaration`.
         """
         return getattr(self, "_run_declaration_refusal", None)
 
     def emit_run_declaration(self):
         """Emit the document this run hands to the reference engine, and keep it.
 
-        The single emission point of the reference path, called once per run by
-        :meth:`declare_run_targets`. Runs on every reference run, target or no
-        target: the claim is that the document describes what PyCATSHOO ran,
-        and a document emitted only when someone asked for a target would be a
-        claim about a minority of runs.
+        The single emission point of the reference path. Runs on every
+        reference run, target or no target: the claim is that the document
+        describes what PyCATSHOO ran, and a document emitted only when someone
+        asked for a target would be a claim about a minority of runs.
+
+        **Every reference run means all THREE doors**, which is the part that
+        has to be written down rather than trusted: :meth:`simulate` and
+        :meth:`isimu_start` reach this through :meth:`declare_run_targets`, and
+        :meth:`startInteractive` -- the engine primitive the TUI and
+        ``isimu_start_cli`` drive, which goes through neither wrapper -- calls
+        it itself. A hook on the wrappers alone leaves the door a demonstration
+        is given through emitting nothing, which is the trap :meth:`prerun`
+        already fell into once and is documented under.
 
         Returns
         -------
@@ -859,8 +881,27 @@ class System(cod3s.PycSystem):
         to call: :meth:`isimu_start` reaches it through
         ``PycSystem.isimu_start``, and :meth:`prerun` is idempotent, so the
         second call is a no-op.
+
+        **The declaration is emitted here for exactly the same reason**, and
+        it was left out at first -- the same trap, one layer up. Hooked onto
+        the two wrappers alone, a session opened by the TUI or by
+        ``isimu_start_cli`` was a reference run with NO document: nothing to
+        compare with what the other engine received, on the very path a
+        demonstration is given, and ``run_declaration`` / ``run_declaration_refusal``
+        both at ``None`` -- which the pair is not allowed to mean after a run.
+
+        **Emitting unconditionally rather than once**, which the wrapper path
+        makes visible: it emits, then reaches here and emits again, for one
+        extra read of the model (35 ms on a 300-component system). The two
+        documents are the same, which is asserted rather than assumed
+        (``tests/test_engine_declaration_every_entry_001.py``). The alternative
+        -- caching the first one -- buys that read back and pays for it with a
+        staleness rule nobody can reset, since a run has no end hook and
+        ``ISimuEngine.start`` is deliberately restartable: re-emitting is what
+        keeps the document describing the system as it stands at each restart.
         """
         self.prerun()
+        self.emit_run_declaration()
         return super().startInteractive(*args, **kwargs)
 
     def deleteSys(self, *args, **kwargs):

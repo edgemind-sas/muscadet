@@ -28,6 +28,29 @@ run was read from, a registered engine is handed its own, and
 document for one model. The diff names the component and the field where they
 parted, which a difference of results never does.
 
+### Three doors, not two
+
+A reference run is opened one of three ways, and the third is the one a
+demonstration goes through: `cod3s.pycatshoo.isimu.engine.ISimuEngine.start` --
+what `isimu_start_cli` and the COD3S TUI drive -- calls
+`system.startInteractive()` directly and never touches `System.isimu_start`.
+The emission is hooked onto all three.
+
+**It was hooked onto the two wrappers first**, and that is worth recording
+because it is the same trap `System.prerun` fell into and is documented under,
+one layer up: a session opened by the TUI was then a reference run with **no
+document at all**, so there was nothing to compare with what the other engine
+received, on exactly the path a model is shown to a client. A hole on this door
+does not fail, it answers. `tests/test_engine_declaration_every_entry_001.py`
+is what holds the three doors to the claim, and goes red on five of its six
+tests when the primitive stops emitting.
+
+The wrapper path reaches the primitive, so it emits twice, for one extra read
+of the model. The two documents are asserted equal rather than assumed to be:
+the second emission happens after a target has been declared on the live
+system, and their agreement is what says a sequence target leaves the model
+alone.
+
 ### Where a target is resolved, and by whom
 
 `System.declare_run_targets` resolves a run's targets against the **document**,
@@ -63,6 +86,13 @@ switch, and the refusal that explains them is kept rather than lost:
 `System.run_declaration_refusal` names the field. The sentence the seam makes
 true is *both engines receive the same document, or neither receives one* — a
 model no document describes is one RAICHU could not run either.
+
+**The pair carries an invariant, and it is tested on each of the three doors**:
+after a reference run, exactly one of `run_declaration` and
+`run_declaration_refusal` is set. That is what makes the broad refusal capture
+of `reference_declaration` readable — a document, or the reason there is none,
+never neither — and both at `None` says one thing only, that no reference run
+has happened.
 
 The four remaining refusals are a real gap rather than the boundary: a logic
 gate (`add_logic_or` / `add_logic_and`) is a component no declaration describes
