@@ -620,6 +620,34 @@ Three things follow from where it travels, which is **beside** the declaration a
 
 `addTarget` stays available and stays PyCATSHOO's: a target on a **variable** with a comparison, like the `"VAR", "!=", 1` above, has no counterpart in this vocabulary — declare the equivalent `ObjEvent` and name it.
 
+#### What each engine received, and why that is the thing to compare
+
+**Both engines read the declaration.** A run on a registered engine hands the document over; a run on PyCATSHOO — muscadet's own system — emits the same document and reads its own configuration off it. So one model handed to two engines yields two documents, and a divergence between them shows on a **diff**, before a single replica is drawn:
+
+```python
+system.simulate(params, engine="raichu", targets=["TOP_EVENT"])  # what the seam handed over
+system.simulate(params, targets=["TOP_EVENT"])                   # PyCATSHOO
+
+system.run_declaration          # the document this run was read from
+system.run_declaration_refusal  # or why there is none
+```
+
+That was not true while PyCATSHOO kept a construction path of its own: the document was then an *output towards the other engine*, free to drift from what the reference engine actually ran, and nothing could notice — a campaign measures one engine against itself, and a golden measures one engine against its own past.
+
+- **Every door into a run emits it, the batch one and both interactive ones.** `simulate()`, `isimu_start()` and the engine primitive `startInteractive()` — the one `isimu_start_cli` and the COD3S TUI drive, which goes through neither wrapper. A session opened for a demonstration is a reference run like any other and carries its document.
+- **The document is the model, not the run.** The same system run free-cycling and run stopping at feared events exports the same declaration, so the diff is about the model and never about how it was launched.
+- **Emitting it cannot refuse a run.** Measured at 35 ms for a 300-component system, against a campaign counted in seconds; and the reader is never allowed to kill what it observes, so a model it cannot write leaves `run_declaration` at `None` and the reason on `run_declaration_refusal`. After a reference run **exactly one of the two is set** — a document, or why there is none, never neither.
+- **A model holding a live Python object has no document, and that is the format's declared boundary** — an `allocation_fun`, a `Profile` whose factor is a function, a `Transfer` with no mapping form, a condition built on a PyCATSHOO variable. Those models run here exactly as they always have; they are refused, by name and by field, on the seam. The sentence that holds is *both engines receive the same document, or neither receives one* — a model no document describes is one the other engine could not run either.
+
+A caller that holds a document rather than a system runs it on PyCATSHOO with the same gesture a registered engine offers:
+
+```python
+muscadet.reference_simulate(document, params, targets=["TOP_EVENT"])
+muscadet.reference_isimu_start(document, targets=["TOP_EVENT"])
+```
+
+PyCATSHOO forbids more than one live system per process, so a caller comparing a system with its own reconstruction does it in a process of its own — or compares the two documents, which needs no system at all.
+
 #### Declaring what a model observes, beyond what it names
 
 An engine reading a muscadet declaration can emit two kinds of indicator: the ones the document **declares**, and a set it **generates**, one per observable variable and named `{component}_{variable}`. Which of the two a model received used to depend on the route that assembled it, so a model said nothing about it and observed whatever that route happened to emit. A system declares it instead:

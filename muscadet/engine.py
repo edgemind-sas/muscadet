@@ -2,8 +2,19 @@
 
 muscadet is a modelling façade, and a façade that knows its engines is not one.
 So this module holds no engine name but the reference one, ``pycatshoo``, which
-is not registered here because it is not a plugin: it is muscadet's own body,
-reached by the direct path :class:`muscadet.System` has always taken.
+is not registered here because it is not a plugin: it is muscadet's own body.
+
+**Both engines read the document now, and that is what makes it the semantics.**
+The chantier was deliberately asymmetric for a while (ADR
+``SIMULATION_ENGINE/ADR-2026-09-08-muscadet-facade-portable-deux-moteurs``,
+decision 7): RAICHU crossed the declaration while PyCATSHOO kept a construction
+path of its own, so the reference engine was never at risk while the format was
+being invented. The cost of that state was that the document was an OUTPUT
+towards RAICHU rather than the description of what muscadet means -- it could
+drift from what PyCATSHOO actually ran and nothing would notice. Since the
+switch, a reference run emits its declaration like any other
+(:func:`reference_declaration`) and is configured from it, so what each engine
+received compares on a diff, without a campaign on either side.
 
 **Engines register; muscadet never imports them.** The registry below is filled
 one of two ways, and both mean the same thing -- a third engine is added
@@ -35,6 +46,16 @@ reference engine's objects" instead of "share a document". The declaration is
 :func:`muscadet.declare.system_spec`, checked on the way out so a malformed
 document is muscadet's fault at muscadet's door rather than an obscure failure
 inside a third-party engine.
+
+The reference engine is the one place where the live system and the engine's
+system are the same object, so there is nothing to hand it. What it receives is
+therefore the same document all the same, and what it READS off it is the run
+it was asked for: :meth:`muscadet.System.declare_run_targets` resolves a target
+against the declaration, not against the components standing next to it. The
+one thing the declaration cannot describe -- a model holding a live Python
+object -- is the one case where that resolution has nowhere to happen, and
+:func:`reference_declaration` says so by name rather than letting the two paths
+part company in silence.
 
 Run parameters travel BESIDE the declaration, not inside it, because they are
 the configuration of a run and not the description of a system: two systems
@@ -79,10 +100,12 @@ import pydantic
 from .declare import check_system_spec, declared_events, system_spec
 
 #: The engine muscadet carries in its own body: PyCATSHOO, through ``cod3s``.
-#: Selecting it, or selecting nothing, takes the direct path. It is deliberately
-#: NOT a registered engine -- it needs no declaration to run a system it already
-#: holds, and the day it reads the document like the others (which is the stated
-#: target, not today's state) muscadet itself changes.
+#: Selecting it, or selecting nothing, runs on muscadet's own system. It is
+#: deliberately NOT a registered engine, and that is a statement about the
+#: REGISTRY rather than about the document: a registration exists so muscadet
+#: can reach an engine it does not import, and there is nothing to reach here.
+#: It reads the declaration like the others -- see :func:`reference_declaration`
+#: and :func:`reference_simulate`.
 REFERENCE_ENGINE = "pycatshoo"
 
 #: Entry point group an engine distribution advertises itself under.
@@ -379,6 +402,125 @@ def system_declaration(system) -> dict:
     spec = system_spec(system)
     check_system_spec(spec)
     return spec
+
+
+def reference_declaration(system) -> Tuple[Optional[dict], Optional[Exception]]:
+    """The document a REFERENCE run is read from, or the reason there is none.
+
+    :func:`system_declaration` with its refusal turned into an answer, and the
+    difference is the whole of what "both engines read the document" can mean
+    for the engine muscadet is made of.
+
+    **A reference run is never refused by the document reader**, and that is a
+    deliberate asymmetry with the seam rather than a hole left in it. muscadet's
+    declaration does not cover the whole of muscadet, and never will: a model
+    holding a live Python object -- an ``allocation_fun``, a ``Profile`` whose
+    factor is a function, a ``Transfer`` with no mapping form, a condition built
+    on a PyCATSHOO variable -- is refused by name, loudly, and that refusal is
+    the format's declared boundary (ADR decision 3). Those models run on
+    PyCATSHOO perfectly well and have always run. Refusing them here would take
+    working models away from every muscadet user to buy a symmetry none of them
+    asked for, which is why what happens instead is: no document, the reason
+    kept, and the run configured the way it was before there was a document at
+    all. The sentence the seam makes true is "both engines receive the same
+    document, or neither receives one" -- and a model no document describes is
+    a model RAICHU cannot run either.
+
+    **The refusal is kept and not raised, and it is not thrown away either.**
+    :attr:`muscadet.System.run_declaration_refusal` holds it after the run, so
+    "this model is not portable, here is the field that pins it down" is a
+    question with an answer rather than something a study finds out the day it
+    changes engine.
+
+    **Every exception is caught, not only the declaration's own.** A run that
+    worked yesterday must not stop working today because the reader met a shape
+    it has no opinion about: emitting a document is an observation of the model,
+    and an observation is not allowed to kill the thing it observes. Same
+    doctrine as :func:`_advertised_engines`, and the same guard against silence
+    -- what was caught is returned, never swallowed.
+
+    Parameters
+    ----------
+    system : muscadet.System
+
+    Returns
+    -------
+    (dict or None, Exception or None)
+        The document and no refusal, or no document and the refusal that
+        explains it. Never both, never neither.
+    """
+    try:
+        return system_declaration(system), None
+    except Exception as refusal:  # noqa: BLE001 -- see docstring
+        return None, refusal
+
+
+def reference_run(kind: str, spec: dict, *args, system=None, **kwargs) -> Any:
+    """Build a system from ``spec`` on the REFERENCE engine, and run it.
+
+    The reference engine's document entry point, shaped exactly like the runner
+    a registered engine declares (:class:`Engine`): a declaration comes in, a
+    run comes out, and nothing else crosses. It is what
+    "PyCATSHOO builds its system from the declaration" means when said of a
+    caller that holds a document -- the platform's launcher, a comparison
+    between two readings of one export, a rebuild of an archived study.
+
+    **The run re-emits the document, and that is worth its cost.** The system
+    built here runs through :meth:`muscadet.System.simulate` like any other, so
+    it declares itself again on the way out and leaves the result on
+    :attr:`muscadet.System.run_declaration` -- which closes the loop for free: a
+    document handed in, and the document the run reports, are the two ends of a
+    full round trip. Measured at 35 ms for a 300-component system, against a
+    campaign counted in seconds.
+
+    **PyCATSHOO forbids more than one live system per process**, so a caller
+    comparing a system with its own reconstruction runs this in a process of its
+    own, or hands the ``system`` it already owns. That constraint is the reason
+    the document is worth having: two documents compare without building
+    anything at all.
+
+    Parameters
+    ----------
+    kind : str
+        One of :data:`RUN_KINDS`.
+    spec : dict
+        A system declaration, as :func:`muscadet.declare.system_spec` produces.
+    system : muscadet.System, optional
+        A system to fill, for a caller that owns its creation. Created from the
+        document's own ``name`` when not given.
+    *args, **kwargs
+        Handed to the run untouched -- ``simu_params``, and the ``targets`` of
+        :data:`RUN_TARGETS`, which the run reads against this very document.
+
+    Returns
+    -------
+    Any
+        Whatever the run returns.
+    """
+    if kind not in RUN_KINDS:
+        raise EngineError(f"unknown kind of run {kind!r}, known: {list(RUN_KINDS)}")
+
+    # Imported here and not at module scope: :mod:`muscadet.system` imports this
+    # module, so the reverse import only holds once someone asks for it.
+    from .declare import build_system
+    from .system import System
+
+    if system is None:
+        system = System(name=spec.get("name") or "system")
+
+    build_system(spec, system=system)
+
+    return getattr(system, kind)(*args, **kwargs)
+
+
+def reference_simulate(spec: dict, *args, system=None, **kwargs) -> Any:
+    """Batch run of a DECLARATION. See :func:`reference_run`."""
+    return reference_run(RUN_BATCH, spec, *args, system=system, **kwargs)
+
+
+def reference_isimu_start(spec: dict, *args, system=None, **kwargs) -> Any:
+    """Interactive session on a DECLARATION. See :func:`reference_run`."""
+    return reference_run(RUN_INTERACTIVE, spec, *args, system=system, **kwargs)
 
 
 def run_target_names(targets) -> Tuple[str, ...]:
