@@ -1,0 +1,20 @@
+# Configuration compound-engineering, à l'échelle du dépôt.
+#
+# cross_model_review_mode : la skill `ce-code-review` fait par défaut relire le
+# diff par un modèle d'un AUTRE fournisseur (« peer » adversarial), en le lui
+# envoyant. La valeur par défaut est `auto` et la cible se choisit dans l'ordre
+# `codex -> claude -> grok -> composer`, la première installée gagnant : sur un
+# poste où l'un d'eux est installé, cela part sans que personne l'ait demandé.
+#
+# La configuration du plugin est lue PAR DÉPÔT uniquement, il n'existe aucune
+# couche globale : ce fichier est donc à poser sur chaque dépôt. La règle de
+# fond, elle, est globale et vit dans ~/.claude/WORKFLOW.md, section Hygiène :
+# ne jamais envoyer de code à un fournisseur tiers sans demander d'abord.
+#
+# La lentille adversariale n'est pas perdue : la skill retombe sur son
+# `adversarial-reviewer` local, qui lit le même brief. Ce qui disparaît est la
+# corroboration CROISÉE entre familles de modèles, pas la relecture.
+#
+# Pour un run précis, la demander explicitement en conversation reste possible
+# et prime sur cette valeur.
+cross_model_review_mode: off
