@@ -365,48 +365,6 @@ DEVIATIONS: typing.Final[typing.Tuple[Deviation, ...]] = (
     ),
     Deviation(
         engine=ENGINE_RAICHU,
-        point=POINT_CONTINUOUS_CROSSING_RESOLUTION,
-        behaviour=(
-            "Samples no grid to set a resolution on: it integrates "
-            "adaptively and LOCATES a crossing. Every accepted step is "
-            "scanned at sub_samples interior points of its dense output, the "
-            "earliest sign change is bracketed, and the bracket is bisected "
-            "down to tol_event. There is therefore no base integration step "
-            "to receive the request, and the parameter is accepted without "
-            "being read (pyraichu.muscadet_engine._DIVERGENT_PARAMETERS)."
-        ),
-        consequence=(
-            "Nothing at all on a purely DISCRETE model, which is the whole "
-            "boolean corpus: there is no continuous state to watch, so the "
-            "request governs nothing on either engine. On a CONTINUOUS model "
-            "the answer is NOT 'less accurate'. It is that the floor is met "
-            "or missed BY ACCIDENT, the request never being read: this "
-            "engine watches at a spacing of its own, fixed by max_step and "
-            "sub_samples (0.1 and 16 by default, hence no coarser than "
-            "0.00625) and reachable only as a keyword of the run, beside the "
-            "parameters. Against the 0.02 the platform corpus writes that is "
-            "FINER, so the floor happens to hold and the gap is easy to "
-            "miss. Against a study asking 0.002 to catch a short episode it "
-            "does not hold, nothing says so, and the episode is lost exactly "
-            "as it would be on a too-wide grid. What is lost is therefore "
-            "the link rather than the precision: a request the analyst "
-            "tightens buys nothing here, one they loosen costs nothing. Two "
-            "engines compared on a continuous model are compared at two "
-            "resolutions, one requested and one defaulted, and only the "
-            "requested one moves when the analyst changes their mind."
-        ),
-        compensation=None,
-        source=(
-            "muscadet conformance ticket 5cee0a73, 2026-09-14, measured on "
-            "the COD3S Platform reference corpus, which writes pdmp_dt in "
-            "every study's simulation section whether or not it was set "
-            "(DEFAULT_PDMP_DT, 0.02); "
-            "pyraichu.muscadet_engine._DIVERGENT_PARAMETERS; "
-            "raichu_numeric::SolverParams defaults"
-        ),
-    ),
-    Deviation(
-        engine=ENGINE_RAICHU,
         point=POINT_ARMED_TRANSITION_DATE,
         behaviour="Samples the law as soon as the transition is armed.",
         consequence=(

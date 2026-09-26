@@ -6,6 +6,15 @@ reconstructing them.
 
 ## Unreleased
 
+**RAICHU honours the requested crossing resolution, so its deviation is
+closed.** The conformance registry recorded that RAICHU accepted `pdmp_dt`
+without reading it, meeting the floor of `continuous-crossing-resolution` by
+accident. pyraichu 0.49.0 reads the study's `pdmp_dt` as its
+`event_resolution`, the widest spacing it accepts between two points of its
+crossing scan, which is the floor that point defines. The entry is removed
+and RAICHU is listed among the engines honouring the point. Requires
+pyraichu 0.49.0 or later on the RAICHU side.
+
 **PyCATSHOO reads the declaration too, so the seam is verifiable from both
 sides.** A reference run emits the system declaration like a run on any other
 engine and reads its own configuration off it, which closes the asymmetry the

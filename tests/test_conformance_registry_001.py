@@ -353,7 +353,7 @@ def test_a_shell_prints_the_record_of_the_chosen_engine():
 
     assert completed.returncode == 0, completed.stderr
 
-    for point in CR_INTERACTIVE_POINTS + (POINT_CONTINUOUS_CROSSING_RESOLUTION,):
+    for point in CR_INTERACTIVE_POINTS:
         assert point in completed.stdout
 
     assert "capability matrix" in completed.stdout
@@ -491,77 +491,24 @@ def test_the_rule_owns_up_to_re_reading_the_upstream_field():
     assert "setDt" in point.source
 
 
-def test_raichu_locates_a_crossing_instead_of_stepping_a_grid():
-    """The behaviour, and where the accepted-and-unread parameter lands."""
-    declared = conformance.deviations(
-        ENGINE_RAICHU, POINT_CONTINUOUS_CROSSING_RESOLUTION
+def test_raichu_honours_the_requested_resolution_as_a_floor():
+    """RAICHU carries no deviation on this point any more.
+
+    It locates crossings rather than stepping a grid, and until pyraichu
+    0.49.0 it accepted ``pdmp_dt`` without reading it, so the floor was met
+    or missed by accident. pyraichu 0.49.0 reads the study's ``pdmp_dt`` as
+    its ``event_resolution``, the widest spacing it accepts between two
+    points of its crossing scan: a finer request adds scan points, a
+    coarser one changes nothing. That is the floor this point defines, so
+    the engine is listed as honouring it, not merely as unrecorded.
+    """
+    assert (
+        conformance.deviations(ENGINE_RAICHU, POINT_CONTINUOUS_CROSSING_RESOLUTION)
+        == ()
     )
-
-    assert len(declared) == 1
-
-    deviation = declared[0]
-
-    assert "LOCATES a crossing" in deviation.behaviour
-    assert "_DIVERGENT_PARAMETERS" in deviation.behaviour
-
-
-def test_the_consequence_separates_a_discrete_model_from_a_continuous_one():
-    """Two readers, two answers, and the entry owes both.
-
-    A purely discrete study -- the whole boolean corpus -- loses nothing: no
-    continuous state, nothing for the request to govern, on either engine.
-    Saying only that would hide the real gap; saying only "it is less precise"
-    would be false, since this engine's own defaults are finer than the 0.02
-    the platform writes. What changes is that the resolution stops following
-    the study.
-    """
-    deviation = conformance.deviations(
-        ENGINE_RAICHU, POINT_CONTINUOUS_CROSSING_RESOLUTION
-    )[0]
-
-    assert "DISCRETE" in deviation.consequence
-    assert "CONTINUOUS" in deviation.consequence
-    assert "max_step" in deviation.consequence
-
-
-def test_the_floor_is_reported_as_met_by_accident_on_both_sides():
-    """The entry owes the case where the floor HOLDS as much as the one where
-    it does not.
-
-    Once the rule is a floor, this engine's defaults clear it for the 0.02 a
-    platform study writes and miss it for a study asking 0.002 -- and it does
-    both without ever reading the request, which is why it is one deviation
-    and not a conformance that depends on the number. An entry that only
-    reported the failing side would read as "RAICHU is too coarse", which is
-    false on the corpus as it stands and would be argued away the first time
-    someone measured it.
-    """
-    deviation = conformance.deviations(
-        ENGINE_RAICHU, POINT_CONTINUOUS_CROSSING_RESOLUTION
-    )[0]
-
-    assert "BY ACCIDENT" in deviation.consequence
-
-    # The side where it holds, and the side where it does not, each named
-    # with the number that decides it.
-    assert "0.02" in deviation.consequence
-    assert "0.002" in deviation.consequence
-    assert "FINER" in deviation.consequence
-
-
-def test_nothing_restores_the_resolution_the_study_asked_for():
-    """``compensation`` is None, and that is a measurement, not a shrug.
-
-    RAICHU's own resolution knobs travel as keywords of the run, beside the
-    parameters; no conversion turns the study's request into them, so nothing
-    puts muscadet's meaning back before a number is read.
-    """
-    deviation = conformance.deviations(
-        ENGINE_RAICHU, POINT_CONTINUOUS_CROSSING_RESOLUTION
-    )[0]
-
-    assert deviation.compensation is None
-    assert "nothing; it reaches the result" in conformance.describe(ENGINE_RAICHU)
+    assert POINT_CONTINUOUS_CROSSING_RESOLUTION in conformance.conformant_points(
+        ENGINE_RAICHU
+    )
 
 
 def test_the_reference_engine_is_named_as_honouring_the_request():
