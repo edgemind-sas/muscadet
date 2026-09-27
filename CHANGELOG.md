@@ -4,7 +4,12 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
-## Unreleased
+## 5.7.0 (2026-09-27)
+
+A minor over 5.6.0: PyCATSHOO reads the system declaration like any other
+engine, plus two fixes (a mixture-drawn volume reads back after a run, and
+RAICHU's crossing-resolution deviation is closed in the conformance
+registry). A model written for 5.6.0 builds and runs unchanged.
 
 **A volume drawn by a mixture group reads back after a run.** The pre-run
 step binds each mixture group to the volume it draws by writing a
