@@ -221,7 +221,7 @@ def build() -> muscadet.System:
         targets=["PumpA"],
         failure_param=8,
         failure_effects={"cooling_fed_available_out": False},
-        repair_cond=lambda: False,
+        repair_cond=False,
         repair_param=1e9,
     )
 
@@ -235,7 +235,7 @@ def build() -> muscadet.System:
         targets=["HMI"],
         failure_param=20,
         failure_effects={},
-        repair_cond=lambda: False,
+        repair_cond=False,
         repair_param=1e9,
     )
     system.add_component(
@@ -245,7 +245,7 @@ def build() -> muscadet.System:
         failure_param=5,
         failure_cond=[[{"attr": "occ", "obj": "HMI__mdc_phishing", "value": True}]],
         failure_effects={},
-        repair_cond=lambda: False,
+        repair_cond=False,
         repair_param=1e9,
     )
 
@@ -259,7 +259,7 @@ def build() -> muscadet.System:
             [{"attr": "occ", "obj": "HMI__mdc_lateral_movement", "value": True}]
         ],
         failure_effects={"cooling_fed_available_out": False},
-        repair_cond=lambda: False,
+        repair_cond=False,
         repair_param=1e9,
     )
     system.add_component(
@@ -271,7 +271,7 @@ def build() -> muscadet.System:
             [{"attr": "occ", "obj": "HMI__mdc_lateral_movement", "value": True}]
         ],
         failure_effects={"cooling_fed_available_out": False},
-        repair_cond=lambda: False,
+        repair_cond=False,
         repair_param=1e9,
     )
 

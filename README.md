@@ -594,6 +594,79 @@ analyser.printFilteredSeq(100, "sequences.xml", "PySeq.xsl")
 
 The code for this example is available [here](examples/rbd_06/rbd_06.py).
 
+#### Declaring the targets of a run, on any engine
+
+`addTarget` above is PyCATSHOO's own, and a model that calls it runs on PyCATSHOO and nowhere else. A run declares its targets to **muscadet** instead with the `targets` keyword, which names each one by **the name of its event**:
+
+```python
+my_rbd.add_component(
+    cls="ObjEvent",
+    name="TOP_EVENT",
+    cond=[[{"attr": "is_ok_fed_in", "obj": "T", "value": False}]],
+)
+
+my_rbd.simulate(
+    {"nb_runs": 10, "schedule": [{"start": 0, "end": 24, "nvalues": 1000}]},
+    targets=["TOP_EVENT"],          # the campaign stops at the first occurrence
+)
+my_rbd.simulate(..., engine="raichu", targets=["TOP_EVENT"])   # same words, other engine
+```
+
+Three things follow from where it travels, which is **beside** the declaration and never inside it:
+
+- **the same system runs both campaigns.** A study reads its availability figures off a free-cycling run and its sequences off a first-occurrence run, and those are one model with two run configurations — so a target is a run parameter, exactly as `nb_runs` is, and an exported document (`system_spec`) carries no `targets` section for either run;
+- **the name is all that travels.** Turning `TOP_EVENT` into an automaton and the state that ends a trajectory is each engine's own business, and the two engines spell it differently;
+- **a target naming no event is refused before the run starts**, with `RunTargetError`, and told whether the name is unknown or is a component of another kind. That refusal is the point of the keyword: a target that reaches nobody does not fail, it produces a campaign that stops at nothing, indicators that never latch and an empty list of sequences, on a run that ends cleanly.
+
+`addTarget` stays available and stays PyCATSHOO's: a target on a **variable** with a comparison, like the `"VAR", "!=", 1` above, has no counterpart in this vocabulary — declare the equivalent `ObjEvent` and name it.
+
+#### What each engine received, and why that is the thing to compare
+
+**Both engines read the declaration.** A run on a registered engine hands the document over; a run on PyCATSHOO — muscadet's own system — emits the same document and reads its own configuration off it. So one model handed to two engines yields two documents, and a divergence between them shows on a **diff**, before a single replica is drawn:
+
+```python
+system.simulate(params, engine="raichu", targets=["TOP_EVENT"])  # what the seam handed over
+system.simulate(params, targets=["TOP_EVENT"])                   # PyCATSHOO
+
+system.run_declaration          # the document this run was read from
+system.run_declaration_refusal  # or why there is none
+```
+
+That was not true while PyCATSHOO kept a construction path of its own: the document was then an *output towards the other engine*, free to drift from what the reference engine actually ran, and nothing could notice — a campaign measures one engine against itself, and a golden measures one engine against its own past.
+
+- **Every door into a run emits it, the batch one and both interactive ones.** `simulate()`, `isimu_start()` and the engine primitive `startInteractive()` — the one `isimu_start_cli` and the COD3S TUI drive, which goes through neither wrapper. A session opened for a demonstration is a reference run like any other and carries its document.
+- **The document is the model, not the run.** The same system run free-cycling and run stopping at feared events exports the same declaration, so the diff is about the model and never about how it was launched.
+- **Emitting it cannot refuse a run.** Measured at 35 ms for a 300-component system, against a campaign counted in seconds; and the reader is never allowed to kill what it observes, so a model it cannot write leaves `run_declaration` at `None` and the reason on `run_declaration_refusal`. After a reference run **exactly one of the two is set** — a document, or why there is none, never neither.
+- **A model holding a live Python object has no document, and that is the format's declared boundary** — an `allocation_fun`, a `Profile` whose factor is a function, a `Transfer` with no mapping form, a condition built on a PyCATSHOO variable. Those models run here exactly as they always have; they are refused, by name and by field, on the seam. The sentence that holds is *both engines receive the same document, or neither receives one* — a model no document describes is one the other engine could not run either.
+
+A caller that holds a document rather than a system runs it on PyCATSHOO with the same gesture a registered engine offers:
+
+```python
+muscadet.reference_simulate(document, params, targets=["TOP_EVENT"])
+muscadet.reference_isimu_start(document, targets=["TOP_EVENT"])
+```
+
+PyCATSHOO forbids more than one live system per process, so a caller comparing a system with its own reconstruction does it in a process of its own — or compares the two documents, which needs no system at all.
+
+#### Declaring what a model observes, beyond what it names
+
+An engine reading a muscadet declaration can emit two kinds of indicator: the ones the document **declares**, and a set it **generates**, one per observable variable and named `{component}_{variable}`. Which of the two a model received used to depend on the route that assembled it, so a model said nothing about it and observed whatever that route happened to emit. A system declares it instead:
+
+```python
+system = muscadet.System(name="feed")                              # asks for the generated set
+system = muscadet.System(name="feed", generated_indicators=False)  # observes what it declares, and that alone
+system.generated_indicators = False                                # or said later, before the export
+```
+
+- **A system that says nothing asks for the generated set**, which is what every muscadet model has always been observed by. A **document** that says nothing means the opposite, the declared indicators and nothing else. The two are not in conflict: `system_spec` writes the key on **every** document it exports, so what a model wants is read off the document rather than off a default nobody can see.
+- **The key is `generated_indicators`, spelled as the reading engine spells it.** The model level of the format is an open vocabulary on both sides: a key spelled otherwise is accepted, dropped, and reported by nobody, so the model would simply observe less than it asked for.
+- **Only `True` or `False`.** `"false"` is a string Python reads as true, and it is refused where it is written.
+
+```python
+system.generated_indicators = True
+muscadet.declare.system_spec(system)["generated_indicators"]   # True, in the exported document
+```
+
 ## Flow class names: canonical and legacy
 
 Everything above declares *discrete* flows — boolean signals that are either fed or not. Since MUSCADET 2.0 the discrete flow classes carry an explicit `Discrete` in their name, so that they read as one family beside the continuous one introduced in the next chapter.
@@ -867,6 +940,7 @@ The parameters are:
 - `flow` / `flows` — the held flows. `flow` is the single-flow short form; `flows` takes a list of names, or of mappings carrying `name` and `weight`.
 - `capacity` — the volume the held flows **share**, a single strictly positive scalar.
 - `side` — `"in"` places the whole capacity upstream of the component's rules, `"out"` downstream. Left out, it is resolved from the held flows and defaults to `"in"` for a flow carried by both sides. Every held flow must resolve to the same side.
+- `transmits` — whether the volume passes on what it does **not** hold back: the existence of the branch an empty capacity serves on, where what currently crosses it goes through. The default `True` is what every capacity did before the field existed, and MUSCADET's own solver takes that branch from the wiring rather than from the key — the field is declared so that an **exported document** says it, `side` being unable to: `CapacityContinuous(ports="both")` and `ports="out"` are both `side="out"`, so a buffer and a reservoir came out of the document alike, and an engine reading it back had nothing but the presence of an input flow of the same name to tell them apart. It is *not* a third rate beside `fill_rate` and `serve_rate`: those two say how much, claimed and capped; this one says only whether the branch is there. Declared on `add_capacity`, where a component's rules are a route through the volume that its ports do not show. **`CapacityContinuous` derives it from `ports` and does not accept it** — that class declares no rule, so the ports settle the question, and since the solver transits whatever the key says, an explicit value could only restate the derivation or make the document contradict the engine that wrote it. The COD3S Platform importer derives it too, from the interfaces and the rules of the class.
 - `fill_rate` — what the volume claims **for itself** while it has room, on top of the demand crossing it. The default `0` is a pure pass-through buffer: it asks for exactly what passes through it, and therefore never stocks up. `math.inf` means "whatever the producer can deliver" — a tank connected to a pump fills at the pump's rate. The claim is the volume's own, so it does **not** depend on anything being connected downstream: a tank at the end of a chain, its own output wired to nothing, fills at its producer's rate exactly as one in the middle of it does.
 - `serve_rate`: a **ceiling** on what the volume releases, per held flow. The default `math.inf` is no ceiling at all, which is what every model had before the field existed. It is *not* the twin of `fill_rate`, and reading the two as a pair is the mistake to avoid: `fill_rate` is a **claim**, what the volume asks for itself over and above the demand crossing it, so it makes a tank fill; `serve_rate` asks for nothing and only caps what leaves. The name is taken from the quantity it bounds rather than made symmetric, for that reason. A battery rated at 40 kW is `serve_rate=40`, whatever its stock and whatever it is asked for. The ceiling bounds the delivery **and** the capability the volume publishes, so a consumer downstream sizes itself against what it will actually get.
 - `serve_cond`: a **command** on the discharge, written in the operand vocabulary a production condition uses: the same shapes, the same conjunctive-normal form, the same comparison grammar. An empty condition holds, so a capacity declaring none is uncommanded. This is the half a production condition cannot reach: that one gates what a component *produces*, and what leaves a volume is *stock*, so a control signal wired to a battery gated its charge and never its discharge.
@@ -2447,6 +2521,136 @@ observation step narrows the bracket.
 the sequence, and a grid point is not in it, so the session returns to its
 start rather than to the previous observation. The TUI refuses the key after
 a playback and points at reset.
+
+## Engine conformance: where an engine does it otherwise
+
+muscadet is a modelling interface over more than one engine, and it decides
+what a muscadet model means. Where an engine cannot honour a decision, the gap
+is written down in `muscadet.conformance` rather than left to be discovered on
+a result nobody can explain.
+
+Reading the record builds no system, loads no engine and runs nothing:
+
+```sh
+python -m muscadet.conformance pycatshoo
+```
+
+```
+muscadet conformance -- engine 'pycatshoo'
+(the engine muscadet is written against; being the reference does not make it conformant)
+
+Departs from muscadet on 1 point:
+
+  [transition_instant_observation]
+    muscadet defines : An indicator observed at instant t sees the state AFTER every transition that fires at t.
+    this engine      : Observes the state BEFORE the transitions due at that instant are resolved.
+    consequence      : Visible only when a DETERMINISTIC transition falls exactly on an observation instant, [...]
+    compensated by   : nothing; it reaches the result
+    source           : COD3S Platform ADR-2026-09-01-multi-moteur-simulation-raichu, decision 9; [...]
+
+Honours: continuous_crossing_resolution, armed_transition_date, interactive_step_granularity, advance_to_date
+
+Informational. muscadet refuses no run on the strength of this record; whether an engine can carry a study is the capability matrix's question, and it is asked elsewhere.
+```
+
+or from Python:
+
+```python
+import muscadet
+
+for deviation in muscadet.conformance.deviations("raichu"):
+    print(deviation.point, "->", deviation.behaviour)
+
+print(muscadet.conformance.describe("raichu"))
+```
+
+| Call | Answers |
+|---|---|
+| `deviations(engine=None, point=None)` | where things are done otherwise, in report order |
+| `conformant_points(engine)` | the points that engine was reviewed against and honours |
+| `is_assessed(engine)` | whether it was reviewed at all |
+| `semantic_points()` | every point muscadet has decided, with its rule and why |
+| `describe(engine=None)` | all of the above as text |
+
+### What it is not
+
+It is **not** the capability matrix. That one says what an engine *knows how*
+to do, and a launch is refused by subtracting one set from the other. This one
+says where an engine does it *otherwise*: the study runs, it returns numbers,
+and those numbers follow a convention that is not muscadet's. Folding the two
+together would make a divergence look like a missing capability and refuse an
+engine perfectly able to carry the study.
+
+So the registry **informs, it never forbids**. Nothing inside muscadet reads
+it, which is what makes that a property of the code rather than a promise.
+
+An engine nobody assessed gets an empty answer, and an empty answer is not a
+clean bill of health -- `is_assessed` is what tells the two apart.
+
+### The entries today
+
+| Point | Engine | Does it otherwise |
+|---|---|---|
+| `transition_instant_observation` | `pycatshoo` | reads the state *before* the transitions due at that instant |
+| `continuous_crossing_resolution` | `raichu` | locates a crossing instead of stepping a grid, so `pdmp_dt` reaches nothing |
+| `armed_transition_date` | `raichu` | samples the law as soon as the transition is armed |
+| `interactive_step_granularity` | `raichu` | one step draws a single transition instead of resolving the instant |
+| `advance_to_date` | `raichu` | has no `isimu_step_to` primitive; the date is reached by repeating steps |
+
+The first one is permanent and reaches the result: PyCATSHOO is a third-party
+library, so the gap is a known limit of the reference engine rather than a
+defect to fix. It only shows when a **deterministic** transition falls exactly
+on an observation instant, which commensurable durations make ordinary: a mode
+with a 1000 h delay observed at 1000 h.
+
+The second is the only one about the **continuous** calculation, and it is the
+other entry nothing compensates. A study *requests* a resolution through
+`pdmp_dt`, and muscadet reads that number as a **floor**: no continuous
+phenomenon lasting longer than it goes unnoticed for want of looking often
+enough. Below the floor nothing is promised, so an engine that sees more is
+still conformant.
+
+That widens what the field is declared to be upstream, and deliberately: cod3s
+calls `pdmp_dt` the base integration step of the PDMP solver and applies it as
+one (`setDt`). A step size is a mechanism only one solver family has, and read
+that way the number means nothing to an engine built otherwise -- muscadet
+would be transcribing PyCATSHOO rather than deciding anything. Read as a
+floor, the same number is a question every engine can be asked. On PyCATSHOO
+the two readings coincide, a fixed grid of `dt` catching everything longer
+than `dt`.
+
+RAICHU has no base step to set, because it locates a crossing by scanning and
+bisecting rather than by sampling a grid, so the request is accepted and never
+read. On a purely discrete model that costs nothing -- there is nothing for it
+to govern on either engine. On a continuous one the floor is met or missed *by
+accident*: RAICHU watches at a spacing of its own (`max_step`, `sub_samples`,
+so no coarser than 0.00625), which clears the 0.02 a platform study writes and
+misses a study asking 0.002, without either being noticed. What is lost is the
+link rather than the precision.
+
+The last three are compensated by the COD3S Platform's interactive worker, so
+a platform user never meets them. **A library user driving the engine directly
+does** -- which is why this record lives here and not in the platform.
+
+### Declaring a third engine
+
+muscadet imports no engine, so an engine it cannot know adds its own record:
+
+```python
+from muscadet.conformance import Deviation, assess_engine, register_deviation
+
+register_deviation(Deviation(
+    engine="my-engine",
+    point="advance_to_date",
+    behaviour="Advances to the date, then rounds it to its own grid.",
+    consequence="A stop lands near the asked date, not on it.",
+    source="my integration notes",
+))
+assess_engine("my-engine")
+```
+
+The *points* stay muscadet's. An engine free to declare which rules it is
+judged against would be certifying itself.
 
 ## Modelling pitfalls
 

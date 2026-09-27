@@ -42,6 +42,42 @@ class; ``params`` is its own declaration (``rate``, ``capacity``, ``activate``
 top, so ``SourceContinuous`` plus one discrete output is a spec and not a
 subclass.
 
+A mode's occurrence law, written twice
+--------------------------------------
+
+A two-state mode declares the numbers of its occurrence law in TWO fields, and
+this is the one rule a second reader of the document has to know:
+
+.. code-block:: json
+
+    {"occ_law":        {"cls": "delay", "time": [4.0]},
+     "occ_param":      [4.0],
+     "occ_param_name": ["occ_time"]}
+
+``occ_law`` carries the NATURE of the law -- exponential, deterministic delay,
+instantaneous draw -- and ``occ_param`` carries ONE ENTRY PER COMMON-CAUSE
+ORDER, which is what the engine wires its transitions to and what an indicator
+names through ``occ_param_name``. Neither is redundant: the vector has no
+nature, and the law has nowhere to hold an order whose entry is a tuple of
+several parameters. The same holds of ``not_occ_law`` / ``not_occ_param`` for
+the return direction, and only for the ``ObjMode2S`` spelling -- an ``ObjFM``
+façade carries its law in its CLASS and writes no law field at all.
+
+**The two are one statement, and a document where they disagree is refused**
+(:func:`_check_law_agreement`), naming the mode, both fields and both values.
+They are not resolved by precedence: ``ObjMode2S`` has one -- the vector wins
+-- but it is muscadet-and-PyCATSHOO's and nothing in the document says so, and
+a reader that takes the typed law would build another system from the very
+same bytes without either run signalling it.
+
+**Read back, the law's parameter is written from the vector** and not from the
+spec the constructor was handed (:func:`_mode_law_spec`), so a document that
+comes out of :func:`system_spec` always says one thing. One consequence worth
+expecting: a law declared with a scalar (``{"cls": "exp", "rate": 0.1}``)
+reads back as the one-entry vector (``{"cls": "exp", "rate": [0.1]}``), which
+is the spelling of ``occ_param`` -- the format has always accepted both and
+now emits one.
+
 Examples
 --------
 >>> comp = build_component(system, {                        # doctest: +SKIP
@@ -58,13 +94,26 @@ Examples
 ... })
 """
 
+import heapq
 import inspect
 import math
+import operator
 import re
+import typing
 
+import cod3s
+import cod3s.pycatshoo.mode_law
 import pydantic
 
+from .capacity import MeasurementOut
 from .common import copy_declaration
+from .obj_ctrl import (
+    CTRL_OUT_BOOL,
+    CTRL_OUT_VALUE,
+    CtrlRepublish,
+    ObjCtrl,
+    build_ctrl_node,
+)
 from .profile import PROFILE_CLASSES, Profile
 from .transfer import TRANSFER_CLASSES, Transfer
 
@@ -114,10 +163,14 @@ CONSTRUCTOR_KEYS = (
 #: component ever carries both them and the flow sections. What this constant
 #: records for them is the ORDER and the two method names, in the one place the
 #: order is written down, so that a bridge reading it places a controller's
-#: sections without forking the sequence. :func:`build_component` owns the
-#: ``ObjFlow`` construction lifecycle and does not build controllers; a spec
-#: carrying a controller section on a component that has no builder for it is
-#: refused BY NAME below rather than crashing on a missing attribute.
+#: sections without forking the sequence. That reading is
+#: :data:`CONTROLLER_SECTIONS`, derived from here rather than restated, and a
+#: controller is built by :func:`build_controller_component` -- in one
+#: constructor call, because ``build_component`` owns the ``ObjFlow``
+#: lifecycle (``partial_init``, ``add_flows``, one ``set_flows()``) that a peer
+#: class does not have. A spec carrying a controller section on a component
+#: that has no builder for it is still refused BY NAME below rather than
+#: crashing on a missing attribute.
 #:
 #: Every one of these runs BEFORE ``set_flows()``. The two sections that run
 #: after it are handled apart, in :data:`POST_SET_FLOWS_SECTIONS`, because they
@@ -161,6 +214,420 @@ COMPONENT_KEYS = frozenset(
     + POST_SET_FLOWS_SECTIONS
 )
 
+# ---------------------------------------------------------------------------
+# The second shape of a component declaration: a STANDALONE two-state mode
+# ---------------------------------------------------------------------------
+#
+# A ``system.comp`` is not only made of ``ObjFlow``. A standalone two-state
+# mode -- ``system.add_component(cls="ObjFMDelay", fm_name=..., targets=[...])``
+# -- is a PyCATSHOO component of its own, carrying no flow at all, and NOTHING
+# else in the system records it: unlike a mode declared ON a component, which
+# ``ObjFlow.declared_failure_modes`` keeps and ``component_spec`` writes into
+# that component's ``failure_modes`` section, a standalone mode leaves no trace
+# on the component it targets. Skipping it would therefore not lose decoration,
+# it would lose the model: the two interactive examples built on a compromise
+# cascade would declare their components and none of the attack.
+#
+# So it gets its own entry, and the entry says which of the two shapes it is.
+
+#: Key a component declaration states its SHAPE under. Absent means
+#: :data:`COMPONENT_KIND_FLOW`, which is what every declaration written before
+#: this key existed means -- so no stored document has to be rewritten, and a
+#: reader that ignores the key reads exactly what it used to.
+COMPONENT_KIND_KEY = "kind"
+
+#: An ``ObjFlow``: flows, capacities, rules, transfers, and the modes declared
+#: on it. The default, and the shape :data:`COMPONENT_KEYS` describes.
+COMPONENT_KIND_FLOW = "flow"
+
+#: A TWO-STATE automaton declared as a component of its own: no flow, an
+#: occurrence law, and effects it applies to components it NAMES rather than
+#: owns. It covers the three families :data:`MODE_VOCABULARIES` describes --
+#: ``cod3s.ObjEvent``, the ``cod3s.ObjFM`` family and ``cod3s.ObjMode2S``
+#: itself -- and only the middle one is a failure: an event observes a
+#: condition, an ``ObjMode2S`` is a bare two-state mode. What the kind has to
+#: tell a reader is which constructor to call, so it names the two states the
+#: three share, not the nature of the one that happens to be most common.
+COMPONENT_KIND_TWO_STATE_MODE = "two_state_mode"
+
+# ---------------------------------------------------------------------------
+# The third shape of a component declaration: a CONTROLLER
+# ---------------------------------------------------------------------------
+#
+# :class:`muscadet.ObjCtrl` is a PEER of ``ObjFlow`` and not a subclass of it
+# (R39): a flow transports a conserved quantity, a controller transports a
+# reading or a signal, and nothing is allocated. It is therefore neither of the
+# two shapes above -- ``issubclass(ObjCtrl, ObjFlow)`` and
+# ``issubclass(ObjCtrl, cod3s.ObjMode2S)`` are both False -- and a system
+# holding one had no declaration at all: the read refused it BY NAME, which was
+# a diagnosis rather than an answer, and left every model that thresholds
+# anything out of reach of an engine reading the document.
+#
+# Skipping it would be the same loss as skipping a standalone mode, and worse
+# in one way: a controller is WIRED, so a document that dropped it would keep
+# the connections naming it and rebuild into a system whose commanded equipment
+# is never told anything, with no order arriving and nothing raised anywhere.
+
+#: A CONTROLLER: observation inputs, boolean or value outputs, and the emission
+#: grammar (R42) each output carries. No flow, no occurrence law, and the two
+#: sections :data:`DECLARATION_SECTIONS` already records the order of.
+COMPONENT_KIND_CONTROLLER = "controller"
+
+COMPONENT_KINDS = (
+    COMPONENT_KIND_FLOW,
+    COMPONENT_KIND_TWO_STATE_MODE,
+    COMPONENT_KIND_CONTROLLER,
+)
+
+#: The sections a controller declaration carries, in the order they are
+#: declared in. DERIVED from :data:`DECLARATION_SECTIONS` and from
+#: ``ObjCtrl.DECLARATION_KEYS`` rather than restated, which is exactly the
+#: reading those two entries were placed for: the order is written down once,
+#: and this module reads it instead of forking it.
+#:
+#: ``tests/test_system_declaration_controller_001.py`` pins the intersection
+#: against ``ObjCtrl.DECLARATION_KEYS``, because a third controller section
+#: added to the class and not to :data:`DECLARATION_SECTIONS` would silently
+#: fall out of this tuple -- and a section a component declares that a document
+#: does not carry is a declaration lost without a trace.
+CONTROLLER_SECTIONS = tuple(
+    section
+    for section, _ in DECLARATION_SECTIONS
+    if section in ObjCtrl.DECLARATION_KEYS
+)
+
+#: Every key a controller declaration may carry.
+CONTROLLER_KEYS = frozenset(
+    (
+        "name",
+        "cls",
+        "label",
+        "description",
+        "metadata",
+        COMPONENT_KIND_KEY,
+        SOURCE_CLS_KEY,
+    )
+    + CONTROLLER_SECTIONS
+)
+
+#: The field of a BOOLEAN output holding the PyCATSHOO variable it writes, and
+#: the one runtime handle of the library that :data:`RUNTIME_FIELD_PREFIXES`
+#: does not catch: ``"var".startswith("var_")`` is False, where its neighbour
+#: ``var_available`` falls through. Named here, and handed to the ``skip``
+#: parameter :func:`_declaration_fields` carries for precisely this, rather
+#: than by either mechanism that looks like the right one:
+#:
+#: - NOT by widening the prefix tuple to ``"var"``, which would swallow every
+#:   declaration field whose name merely begins with those three letters;
+#: - NOT by :data:`DERIVED_EXCLUDED_FIELDS`, which is consulted by field name
+#:   ALONE, without looking at the class. ``var`` carries two opposite meanings
+#:   in this module and the collision is not a future risk: on
+#:   ``CtrlSignalOut`` it is the live engine handle to drop, while a few
+#:   hundred lines below :data:`_INDICATOR_KINDS` makes ``var`` the SUBJECT a
+#:   variable indicator observes, carried in the clear and without which the
+#:   indicator does not rebuild.
+#:
+#: The exclusion therefore stays borne by the class that justifies it, which is
+#: how a capacity's ``serve_cond`` is already handled.
+CTRL_SIGNAL_RUNTIME_FIELDS = ("var",)
+
+#: The two truth functions a mode may compose its condition groups with, named
+#: rather than held. They are callables, so a document cannot carry the
+#: function -- but it can carry which of the two it is, and that costs one
+#: mapping instead of a refusal on a mode that declared nothing unusual.
+#: Anything else is a callable of the caller's own and is refused, exactly as
+#: ``cod3s.ObjEvent`` refuses one for the same reason: reaching into builtins
+#: by name would accept ``"sum"`` and produce wrong truth logic.
+MODE_LOGIC = {"all": all, "any": any}
+
+#: What a document carries instead of the comparison an event was built with.
+#: ``ObjEvent`` keeps the COMPILED operator and not its spelling, but the
+#: functions it compiles to are ``operator`` module singletons, so the spelling
+#: comes back exactly -- which is what lets an event be declared at all rather
+#: than refused for a comparison nobody can read.
+MODE_OPERATORS = {
+    "==": operator.eq,
+    "!=": operator.ne,
+    "<": operator.lt,
+    "<=": operator.le,
+    ">": operator.gt,
+    ">=": operator.ge,
+}
+
+#: ``{"exp": "rate", "delay": "time", "inst": "prob"}``: which key of an
+#: occurrence law holds its PARAMETER, per ``cls`` tag. The one thing a reader
+#: of a law dict needs in order to compare it with the parameter vector that
+#: writes the same numbers (:attr:`ModeVocabulary.law_fields`).
+#:
+#: DERIVED from cod3s' own discriminated union rather than typed out here, so
+#: a fourth law class does not need this line edited to be understood -- each
+#: law declares its tag as the default of its ``cls`` field and its parameter
+#: as the ``param_field`` class variable the engine itself reads to name the
+#: parameter variables. A law cod3s stops exposing there simply falls out of
+#: the mapping, and the agreement check goes silent on it rather than refusing
+#: a document it cannot read.
+MODE_LAW_PARAM_FIELDS = {
+    law_cls.model_fields["cls"].default: law_cls.param_field
+    for law_cls in typing.get_args(typing.get_args(cod3s.pycatshoo.mode_law.ModeLaw)[0])
+}
+
+
+class ModeVocabulary(pydantic.BaseModel):
+    """How one FAMILY of mode classes spells its declaration.
+
+    There are three, and the split is not muscadet's doing. ``cod3s.ObjMode2S``
+    is the engine and takes ``occ_*`` / ``not_occ_*``; ``cod3s.ObjFM`` is the
+    backward-compatible façade over it and takes ``failure_*`` / ``repair_*``,
+    storing them in the engine's fields through aliases; ``cod3s.ObjEvent`` is
+    a second façade over the same engine and takes a ``cond`` with its
+    comparison. All three are live classes a study builds today -- the COD3S
+    Platform emits ``ObjMode2S`` for its modes and synthesises an ``ObjEvent``
+    per multi-clause indicator, and every muscadet model in the wild uses the
+    ``ObjFM`` spelling -- so a document has to carry any of them.
+
+    **A declaration is spelled the way its own constructor takes it**, which is
+    why the vocabulary follows the CLASS rather than being normalised to one of
+    the three. Splatting the entry into ``cls(**entry)`` is then the whole of
+    the build: there is no translation layer to get subtly wrong, and a key a
+    constructor does not take is refused by name before anything is built.
+    """
+
+    model_config = pydantic.ConfigDict(frozen=True)
+
+    #: ``(spec key, attribute read back from)``, in the order the constructor
+    #: takes them, so a reader of the constructor and a reader of a document
+    #: walk the same list.
+    fields: tuple
+
+    #: What each field is when the modeller said nothing, so a declaration
+    #: writes only what someone decided. The name, the targets and the target
+    #: name are deliberately absent: the first two are what a mode IS, and the
+    #: third decides the component's name.
+    defaults: dict
+
+    #: The key the mode's own name is declared under.
+    name_key: str
+
+    #: The fields holding ONE ENTRY PER COMMON-CAUSE ORDER, where an entry is
+    #: either a scalar or the vector of the law's parameters for that order.
+    #:
+    #: **A document has no tuples, and the engine reads one.** ``ObjMode2S``
+    #: takes a TUPLE at an order to mean "the parameters of that order", and
+    #: wraps anything else into a one-element one -- so a list arriving where
+    #: the engine expects a tuple is read as a single parameter WHOSE VALUE IS
+    #: A LIST, and PyCATSHOO refuses it with a Boost signature dump naming no
+    #: field. Not hypothetical: the engine pads a short vector with ``(0,)``
+    #: itself, so any common-cause mode declared with one rate for every order
+    #: came back as ``[1.0, [0], [0]]`` and could not be rebuilt. A list at an
+    #: order therefore MEANS what the tuple means, and the build converts.
+    order_vectors: tuple
+
+    #: ``(law key, parameter key)``: the fields holding a
+    #: ``cod3s.pycatshoo.mode_law.ModeLaw``, which is a pydantic model rather
+    #: than data and is dumped rather than refused, EACH PAIRED WITH THE FIELD
+    #: OF :attr:`order_vectors` THAT WRITES THE SAME NUMBERS. Empty for the
+    #: façade family, whose law is carried by the class itself.
+    #:
+    #: **The pairing is what makes the two writings one declaration.** A
+    #: ``delay`` mode declares its four hours twice, as ``occ_law: {"cls":
+    #: "delay", "time": [4.0]}`` and as ``occ_param: [4.0]``, and the engine
+    #: reads the SECOND: the law contributes its NATURE and the per-order
+    #: vector contributes the NUMBERS, so a document saying 4 in one and 5 in
+    #: the other builds a four-hour mode while a reader that takes the typed
+    #: law builds a five-hour one. Neither half can be dropped -- the vector
+    #: has no nature and the law has no place to hold a per-order tuple -- so
+    #: the pairing is written down here, once, and the two directions of the
+    #: declaration use it to stay one statement:
+    #:
+    #: - reading a live mode back, :func:`_mode_law_spec` writes the law's
+    #:   parameter FROM the vector, so what comes out never disagrees with
+    #:   itself whatever the mode was built from;
+    #: - reading a document in, :func:`_check_law_agreement` refuses one whose
+    #:   two writings disagree, naming the mode and both fields.
+    law_fields: tuple = ()
+
+    #: ``(spec key, attribute, default)`` for the fields carrying one of the
+    #: two truth functions of :data:`MODE_LOGIC`. Per vocabulary rather than
+    #: shared: the engine calls them ``cond_inner_logic`` / ``cond_outer_logic``
+    #: and ``ObjEvent`` calls them ``inner_logic`` / ``outer_logic``, and a key
+    #: a constructor does not take is a key nothing builds.
+    logic_fields: tuple = (
+        ("cond_inner_logic", "cond_inner_logic", all),
+        ("cond_outer_logic", "cond_outer_logic", any),
+    )
+
+    @property
+    def keys(self):
+        """Every key a declaration in this vocabulary may carry.
+
+        ``cls`` is the mode CLASS here and not a base to expand onto: for the
+        façade family the occurrence law lives in the class (``ObjFMDelay``
+        draws a delay, ``ObjFMExp`` a rate), so there is no ``source_cls``
+        counterpart -- a mode read back names the class it is.
+        """
+        return frozenset(
+            ("name", "cls", COMPONENT_KIND_KEY, "label", "description", "metadata")
+            + tuple(key for key, _ in self.fields)
+            + tuple(key for key, _, _ in self.logic_fields)
+            + ("drop_inactive_automata",)
+        )
+
+
+#: ``cod3s.ObjFM`` and its subclasses, which is what a muscadet model writes --
+#: ``muscadet.ObjFailureMode*`` are subclasses of it -- and what
+#: ``system.add_component(cls="ObjFMDelay", ...)`` builds.
+FAILURE_MODE_VOCABULARY = ModeVocabulary(
+    name_key="fm_name",
+    fields=(
+        ("fm_name", "mode_name"),
+        ("targets", "targets"),
+        ("target_name", "target_name"),
+        ("behaviour", "behaviour"),
+        ("failure_state", "occ_state"),
+        ("failure_cond", "occ_cond"),
+        ("failure_effects", "occ_effects"),
+        ("failure_effects_trans", "occ_effects_trans"),
+        ("failure_param_name", "occ_param_name"),
+        ("failure_param", "occ_param"),
+        ("repair_state", "not_occ_state"),
+        ("repair_cond", "not_occ_cond"),
+        ("repair_effects", "not_occ_effects"),
+        ("repair_effects_trans", "not_occ_effects_trans"),
+        ("repair_param_name", "not_occ_param_name"),
+        ("repair_param", "not_occ_param"),
+        ("param_name_order_prefix", "param_name_order_prefix"),
+        ("trans_name_prefix", "trans_name_prefix"),
+        ("trans_name_prefix_fun", "trans_name_prefix_fun"),
+        ("step", "step"),
+    ),
+    defaults={
+        "behaviour": "internal",
+        "failure_state": "occ",
+        "failure_cond": True,
+        "failure_effects": {},
+        "failure_effects_trans": {},
+        "repair_state": "rep",
+        "repair_cond": True,
+        "repair_effects": {},
+        "repair_effects_trans": {},
+        "param_name_order_prefix": "__{order}_o_{order_max}",
+        "trans_name_prefix": "__cc_{target_comb_u}",
+        "trans_name_prefix_fun": None,
+        "step": None,
+    },
+    order_vectors=("failure_param", "repair_param"),
+)
+
+#: The generic two-state engine, ``cod3s.ObjMode2S`` itself. What the COD3S
+#: Platform emits natively, and what carries the declared occurrence LAWS a
+#: façade derives from its class instead.
+MODE_VOCABULARY = ModeVocabulary(
+    name_key="mode_name",
+    fields=(
+        ("mode_name", "mode_name"),
+        ("targets", "targets"),
+        ("target_name", "target_name"),
+        ("aut_name", None),
+        ("behaviour", "behaviour"),
+        ("occ_state", "occ_state"),
+        ("occ_law", "occ_law"),
+        ("occ_cond", "occ_cond"),
+        ("occ_effects", "occ_effects"),
+        ("occ_effects_trans", "occ_effects_trans"),
+        ("occ_param_name", "occ_param_name"),
+        ("occ_param", "occ_param"),
+        ("occ_parked_state", "occ_parked_state"),
+        ("not_occ_state", "not_occ_state"),
+        ("not_occ_law", "not_occ_law"),
+        ("not_occ_cond", "not_occ_cond"),
+        ("not_occ_effects", "not_occ_effects"),
+        ("not_occ_effects_trans", "not_occ_effects_trans"),
+        ("not_occ_param_name", "not_occ_param_name"),
+        ("not_occ_param", "not_occ_param"),
+        ("not_occ_parked_state", "not_occ_parked_state"),
+        ("param_name_order_prefix", "param_name_order_prefix"),
+        ("trans_name_prefix", "trans_name_prefix"),
+        ("trans_name_prefix_fun", "trans_name_prefix_fun"),
+        ("step", "step"),
+    ),
+    defaults={
+        "aut_name": None,
+        "behaviour": "internal",
+        "occ_state": "occ",
+        "occ_law": None,
+        "occ_cond": True,
+        "occ_effects": {},
+        "occ_effects_trans": {},
+        "occ_parked_state": None,
+        "not_occ_state": "not_occ",
+        "not_occ_law": None,
+        "not_occ_cond": True,
+        "not_occ_effects": {},
+        "not_occ_effects_trans": {},
+        "not_occ_parked_state": None,
+        "param_name_order_prefix": "__{order}_o_{order_max}",
+        "trans_name_prefix": "__cc_{target_comb_u}",
+        "trans_name_prefix_fun": None,
+        "step": None,
+    },
+    order_vectors=("occ_param", "not_occ_param"),
+    law_fields=(("occ_law", "occ_param"), ("not_occ_law", "not_occ_param")),
+)
+
+#: ``cod3s.ObjEvent``: a two-state event, self-hosted, whose condition is a
+#: structured tree compared to a value. A second façade over the same engine,
+#: and a shape the COD3S Platform synthesises without anyone asking for it --
+#: one per study event, and one per INDICATOR whose formula has more than one
+#: clause, which is an ordinary thing to write.
+#:
+#: Every field of it is read back from somewhere: the condition and its value
+#: from the compilation inputs the façade keeps, the two tempos from the delay
+#: laws it turns them into, the comparison from :data:`MODE_OPERATORS`. The
+#: only one that looked unreadable is the comparison, and it is not.
+EVENT_VOCABULARY = ModeVocabulary(
+    name_key="name",
+    fields=(
+        # ``name`` is a constructor argument here and not a derived component
+        # name: an event is self-hosted, so it IS what it is called.
+        ("name", None),
+        ("cond", "_event_cond_raw"),
+        ("cond_operator", None),
+        ("cond_value", "_event_cond_value"),
+        ("tempo_occ", None),
+        ("tempo_not_occ", None),
+        ("event_aut_name", "event_aut_name"),
+        ("occ_state_name", "occ_state_name"),
+        ("not_occ_state_name", "not_occ_state_name"),
+    ),
+    defaults={
+        "cond_operator": "==",
+        "cond_value": True,
+        "tempo_occ": 0.0,
+        "tempo_not_occ": 0.0,
+        "event_aut_name": "ev",
+        "occ_state_name": "occ",
+        "not_occ_state_name": "not_occ",
+    },
+    order_vectors=(),
+    logic_fields=(
+        ("inner_logic", "_event_inner_logic", all),
+        ("outer_logic", "_event_outer_logic", any),
+    ),
+)
+
+#: Which vocabulary a mode class speaks, MOST SPECIFIC FIRST. ``cod3s.ObjFM``
+#: is an ``ObjMode2S``, so the order is what decides, and reversing it would
+#: quietly write every muscadet mode in the engine's spelling.
+#:
+#: ``cod3s.ObjDegMode`` is deliberately absent: it is a multi-state mode and
+#: not an ``ObjMode2S`` in the first place, so it has neither of these shapes
+#: and gets the refusal :func:`component_spec` gives.
+MODE_VOCABULARIES = (
+    (cod3s.ObjEvent, EVENT_VOCABULARY),
+    (cod3s.ObjFM, FAILURE_MODE_VOCABULARY),
+    (cod3s.ObjMode2S, MODE_VOCABULARY),
+)
+
 #: Field-name prefixes a RUNTIME HANDLE may carry: the PyCATSHOO variables and
 #: references a flow is wired to at ``set_flows()``, and the sensitive methods
 #: bound with them. They hold engine objects, they are rebuilt on every
@@ -198,8 +665,10 @@ RUNTIME_HANDLE_PREFIXES = ("sm_",)
 #: ``demand_required`` are per-evaluation state, ``automaton`` / ``state_empty``
 #: / ``state_full`` are a capacity's built bound automaton, ``mode`` is the
 #: automaton a rule set's guards compile into, and ``flow`` is the object a
-#: guard operand resolved onto. Every one is rebuilt by the declaration it comes
-#: from.
+#: guard operand resolved onto. ``mixture`` is the binding the pre-run step
+#: writes on a volume from its CONSUMER's ``mixtures`` section, so a system read
+#: back after a run gives the spec it gave before. Every one is rebuilt by the
+#: declaration it comes from.
 DERIVED_EXCLUDED_FIELDS = frozenset(
     {
         "comp_name",
@@ -211,6 +680,7 @@ DERIVED_EXCLUDED_FIELDS = frozenset(
         "state_full",
         "mode",
         "flow",
+        "mixture",
     }
 )
 
@@ -236,6 +706,81 @@ def _is_serialisable(value):
             for key, item in value.items()
         )
     return False
+
+
+def _document_fault(value, where):
+    """Where ``value`` stops being a document, or ``None`` when the whole of it is.
+
+    The path-naming twin of :func:`_is_serialisable`, which answers the very
+    same question with a bool: a caller that only has to pick a branch does not
+    pay for building a path, and a caller that has to REFUSE cannot say
+    anything useful without one.
+
+    Two walks rather than one because a path costs something to build and the
+    bool answer is asked for field by field. Their agreement is what makes a
+    second walk safe rather than a second opinion, so it is PINNED, in
+    ``test_declaration_document_001``, over the same table both are measured
+    against: what one calls serialisable is what the other calls a document.
+
+    KEYS are half of it, and the half that used to go missing. Every value
+    under a tuple key serialises perfectly well, so a mapping keyed by one
+    walks through a value-only gate untouched: the document looks read, looks
+    checked, and dies at the moment it is written, on a ``TypeError`` naming a
+    type and no field. A JSON object is keyed by strings, and an integer key is
+    refused for the same reason though ``json`` accepts it -- it comes back a
+    string, so what was read is not what was written.
+    """
+    if isinstance(value, (str, int, float, bool)) or value is None:
+        return None
+
+    if isinstance(value, (list, tuple)):
+        for index, item in enumerate(value):
+            fault = _document_fault(item, f"{where}[{index}]")
+            if fault:
+                return fault
+        return None
+
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if not isinstance(key, str):
+                return (
+                    f"{where} is keyed by {key!r}, a {type(key).__name__}, and "
+                    f"a document is keyed by strings"
+                )
+            fault = _document_fault(item, f"{where}.{key}")
+            if fault:
+                return fault
+        return None
+
+    return f"{where} holds {type(value).__name__}, which no document can carry"
+
+
+def _checked_document(spec, where, error=ComponentSpecError):
+    """``spec`` itself, once the whole of it is something a document carries.
+
+    The gate this module's per-declaration refusals cannot be, and not a
+    duplicate of them. Each of those fires where ONE value is read and names
+    the declaration that carried it, which is what a modeller needs to fix it;
+    together they close the holes they were written for, one at a time, and
+    nothing says the next section added closes its own. This one is the claim
+    itself: whatever path built it, a declaration this module RETURNS survives
+    ``json.dumps``. It is the only place that sees the whole document, so it is
+    the only place that claim can be made.
+
+    Deliberately on the produce side alone. :func:`check_system_spec` reads a
+    declaration a caller hands in, and building from a mapping no document can
+    carry stays supported on purpose -- see :func:`_checked_declaration`, whose
+    reasoning this follows rather than reverses.
+    """
+    fault = _document_fault(spec, where)
+    if fault is None:
+        return spec
+
+    raise error(
+        f"{fault}. A declaration is a versioned exchange format, so it is "
+        f"refused here, where the path names what carried it, rather than at "
+        f"the ``json.dumps`` that would fail on it later naming only a type"
+    )
 
 
 def _as_data(value):
@@ -276,6 +821,26 @@ def _checked_declaration(value, where):
         return _as_data(value)
 
     if isinstance(value, dict):
+        # A KEY that is not a string is refused here, and not by ``json.dumps``
+        # much later: a mapping keyed by tuples walks through this gate
+        # untouched, because every VALUE under it serialises perfectly well.
+        # The document then looks read, looks checked, and dies at the moment
+        # it is written -- on a ``TypeError`` naming a type and no field. A
+        # platform export reached exactly that, its instance overrides being
+        # indexed by ``(attribute, role)``.
+        #
+        # Refused rather than coerced: a tuple key has no canonical spelling,
+        # and picking one here would be muscadet deciding the shape of somebody
+        # else's metadata behind their back.
+        for key in value:
+            if not isinstance(key, str):
+                raise ComponentSpecError(
+                    f"{where}: is keyed by {key!r}, a {type(key).__name__}, "
+                    f"and a document is keyed by strings. A mapping written "
+                    f"out under a key no JSON object can carry is refused "
+                    f"here rather than at the moment it is written; give the "
+                    f"key a string spelling"
+                )
         return {
             key: _checked_declaration(item, f"{where}.{key}")
             for key, item in value.items()
@@ -431,6 +996,64 @@ def _prod_cond_spec(comp, groups, negates, compares):
     return spec
 
 
+def _ctrl_emit_spec(node):
+    """The DECLARATION form of a compiled output grammar (R42).
+
+    The controller-side twin of :func:`_prod_cond_spec`, and it exists for the
+    same reason: ``build_ctrl_node`` RESOLVES a declaration as it reads it. A
+    combination's operands are replaced by the nodes they built -- so a node
+    holds nodes and never the mappings they came from -- and a band left
+    without a release edge has one filled in from its activation level. What
+    the controller then holds is a tree of live pydantic objects, not the
+    declaration it was handed.
+
+    Walked back rather than dumped, deliberately. ``operands`` is typed
+    ``List[Any]`` so that the recursion has one entry point, which leaves its
+    serialisation to pydantic's duck typing; and a dump writes ``k: None`` on
+    every combination that is not a k-of-n, which is a key the grammar carries
+    for one logic alone. Walking the node's own ``operand_nodes()`` costs one
+    function and owes nothing to either.
+
+    A field left at ``None`` is omitted, and that is exact rather than
+    convenient: after validation no node field carries a meaningful ``None``.
+    ``CtrlCombine.k`` is None exactly when the logic is not ``k``, where
+    declaring it is refused; ``CtrlBand.release`` is never None at all, the
+    validator having replaced it by the activation level. So the walk writes
+    both band edges every time, which is what makes the round trip stable.
+
+    Parameters
+    ----------
+    node : muscadet.CtrlNode or None
+        What the output emits, or ``None`` for an output nothing computes and
+        whose value is written by hand.
+
+    Returns
+    -------
+    dict or None
+        A mapping ``add_control_out`` accepts under ``emit``.
+    """
+    if node is None:
+        return None
+
+    fields = type(node).model_fields
+
+    spec = {}
+    for key in fields:
+        if key == "operands":
+            continue
+        value = getattr(node, key, None)
+        if value is None:
+            continue
+        spec[key] = value
+
+    if "operands" in fields:
+        spec["operands"] = [
+            _ctrl_emit_spec(operand) for operand in node.operand_nodes()
+        ]
+
+    return spec
+
+
 def _declaration_fields(obj, where, skip=()):
     """The declaration fields of one pydantic declaration object.
 
@@ -582,6 +1205,30 @@ def _failure_mode_method(entry, name):
     return method_name
 
 
+def component_kind(spec):
+    """Which of :data:`COMPONENT_KINDS` a declaration is, refusing an unknown one.
+
+    Absent means :data:`COMPONENT_KIND_FLOW`, which is what every declaration
+    written before the key existed means: no stored document has to be
+    rewritten, and the only entries that carry the key are the ones that need
+    it to be read at all.
+    """
+    if not isinstance(spec, dict):
+        raise ComponentSpecError(
+            f"a component declaration is a mapping, got {type(spec).__name__}"
+        )
+
+    kind = spec.get(COMPONENT_KIND_KEY, COMPONENT_KIND_FLOW)
+
+    if kind not in COMPONENT_KINDS:
+        raise ComponentSpecError(
+            f"Component {spec.get('name')!r}: {COMPONENT_KIND_KEY}={kind!r} is "
+            f"not one of {list(COMPONENT_KINDS)}"
+        )
+
+    return kind
+
+
 def check_spec(spec):
     """Validate a declaration WITHOUT building anything, and return its name.
 
@@ -593,7 +1240,20 @@ def check_spec(spec):
     What is left to the build is what only the engine can answer -- that a rule
     names a declared flow, that a conduit does not meter what a rule already
     carries.
+
+    Dispatches on :func:`component_kind`, so the caller validating a batch does
+    not have to sort the three shapes itself -- and, more to the point, does
+    not get an ObjFlow's key list quoted at a declaration that never claimed to
+    be one.
     """
+    kind = component_kind(spec)
+
+    if kind == COMPONENT_KIND_TWO_STATE_MODE:
+        return check_failure_mode_spec(spec)
+
+    if kind == COMPONENT_KIND_CONTROLLER:
+        return check_controller_spec(spec)
+
     name = _check_keys(spec)
 
     for section in [key for key, _ in DECLARATION_SECTIONS] + list(
@@ -619,17 +1279,22 @@ def build_component(system, spec):
     system : muscadet.System
         The system the component is added to.
     spec : dict
-        The declaration. ``name`` is required; ``cls`` defaults to
-        ``"ObjFlow"``. ``params`` is the declaration of the named class itself
-        -- ``rate``, ``capacity``, ``activate`` and so on -- and the sections
-        listed in :data:`DECLARATION_SECTIONS` and
-        :data:`POST_SET_FLOWS_SECTIONS` are added on top of what that class
-        declared.
+        The declaration. A ``kind`` of :data:`COMPONENT_KIND_TWO_STATE_MODE`
+        sends it to :func:`build_failure_mode_component` and one of
+        :data:`COMPONENT_KIND_CONTROLLER` to
+        :func:`build_controller_component`; absent or
+        :data:`COMPONENT_KIND_FLOW`, it is an ``ObjFlow``, where ``name`` is
+        required, ``cls`` defaults to ``"ObjFlow"``, ``params`` is the
+        declaration of the named class itself -- ``rate``, ``capacity``,
+        ``activate`` and so on -- and the sections listed in
+        :data:`DECLARATION_SECTIONS` and :data:`POST_SET_FLOWS_SECTIONS` are
+        added on top of what that class declared.
 
     Returns
     -------
-    muscadet.ObjFlow
-        The built component, ``set_flows()`` already called, ready to connect.
+    muscadet.ObjFlow or cod3s.ObjFM
+        The built component, ``set_flows()`` already called on an ``ObjFlow``,
+        ready to connect.
 
     Raises
     ------
@@ -644,6 +1309,14 @@ def build_component(system, spec):
     a spec never carries ``partial_init``: a caller who set it would either get
     a component built twice or one never wired to the engine.
     """
+    kind = component_kind(spec)
+
+    if kind == COMPONENT_KIND_TWO_STATE_MODE:
+        return build_failure_mode_component(system, spec)
+
+    if kind == COMPONENT_KIND_CONTROLLER:
+        return build_controller_component(system, spec)
+
     name = check_spec(spec)
     clsname = spec.get("cls", "ObjFlow")
     params = spec.get("params") or {}
@@ -766,7 +1439,72 @@ def build_component(system, spec):
 
 
 def component_spec(comp):
-    """Read a live component back into a declaration.
+    """Read a live component back into a declaration, whatever kind it is.
+
+    A system holds more than one kind of component, and the difference is not
+    cosmetic: an ``ObjFlow`` is described by its flows, a standalone mode has
+    none at all. So this reads what the object IS, rather than assuming what it
+    has:
+
+    ==================================  ======================================
+    ``muscadet.ObjFlow``                :func:`flow_component_spec`
+    ``cod3s.ObjMode2S`` and subclasses  :func:`failure_mode_component_spec`
+    ``muscadet.ObjCtrl``                :func:`controller_component_spec`
+    anything else                       refused, by name
+    ==================================  ======================================
+
+    **The refusal is the point of the last row.** Iterating ``flows_in`` on
+    whatever a system happens to hold reported an ``AttributeError`` naming a
+    class the caller never wrote down, from inside a dict comprehension, before
+    any engine saw anything -- which is exactly what a document checked on the
+    way out exists to avoid. A component muscadet has no declaration form for
+    says so, and says which one it is. ``cod3s.ObjDegMode`` is in that last
+    row today, deliberately: see :data:`MODE_VOCABULARIES`.
+
+    Parameters
+    ----------
+    comp : muscadet.ObjFlow, cod3s.ObjMode2S or muscadet.ObjCtrl
+
+    Returns
+    -------
+    dict
+        A spec :func:`build_component` accepts.
+
+    Raises
+    ------
+    ComponentSpecError
+        When a declaration holds something no mapping can carry, or when the
+        component is of a kind no declaration describes.
+    """
+    if isinstance(comp, cod3s.ObjMode2S):
+        return failure_mode_component_spec(comp)
+
+    # Before the flow test rather than after it, though the two cannot both
+    # answer: an ``ObjCtrl`` is a PEER of ``ObjFlow`` (R39) and carries no flow
+    # collection at all. Read on what the object IS, so a subclass of it that
+    # happened to grow a ``flows_in`` would still be declared as the controller
+    # it is, rather than through a collection that describes none of its
+    # interfaces.
+    if isinstance(comp, ObjCtrl):
+        return controller_component_spec(comp)
+
+    if hasattr(comp, "flows_in") and hasattr(comp, "flows_out"):
+        return flow_component_spec(comp)
+
+    raise ComponentSpecError(
+        f"Component {comp.basename()} is of class {type(comp).__name__}, which "
+        f"no component declaration describes. A declaration is written for an "
+        f"ObjFlow, which is read from its flows; for a standalone mode of the "
+        f"cod3s.ObjMode2S family, which is read from its occurrence law and "
+        f"its effects; or for an ObjCtrl, which is read from its observation "
+        f"inputs and the grammar its outputs emit. Keep this component out of "
+        f"a system whose declaration has to leave muscadet, or give its kind a "
+        f"declaration form"
+    )
+
+
+def flow_component_spec(comp):
+    """Read a live ``ObjFlow`` back into a declaration.
 
     What a spec can hold, it holds: the flows with their declaration fields, the
     capacities, the measurement channels, the rule sets, the transfer pairs, and
@@ -926,7 +1664,853 @@ def component_spec(comp):
     if getattr(comp, "has_default_out_automata", False):
         spec["create_default_out_automata"] = True
 
+    return _checked_document(spec, f"component {comp.basename()}")
+
+
+def mode_vocabulary(cls, where):
+    """The :class:`ModeVocabulary` ``cls`` speaks, or a refusal naming it.
+
+    :data:`MODE_VOCABULARIES` is walked in order, MOST SPECIFIC FIRST, and the
+    order is what decides: ``cod3s.ObjEvent`` and ``cod3s.ObjFM`` are both
+    ``ObjMode2S``, so reversing it would quietly write every event and every
+    muscadet mode in the engine's spelling, which none of their constructors
+    takes. A mode class in no family is refused here rather than written out in
+    a vocabulary that does not fit it.
+    """
+    for family, vocabulary in MODE_VOCABULARIES:
+        if isinstance(cls, type) and issubclass(cls, family):
+            return vocabulary
+
+    raise ComponentSpecError(
+        f"{where}: {getattr(cls, '__name__', cls)!r} is not a mode class a "
+        f"{COMPONENT_KIND_TWO_STATE_MODE!r} declaration describes. The three it "
+        f"describes are the cod3s.ObjFM family, spelled failure_*/repair_*, "
+        f"cod3s.ObjMode2S itself, spelled occ_*/not_occ_*, and cod3s.ObjEvent, "
+        f"spelled with a cond and its comparison"
+    )
+
+
+def _mode_class(clsname, where):
+    """The mode class named by ``clsname``, and the vocabulary it speaks.
+
+    Resolved the way ``PycComponent.from_dict`` resolves a ``cls``, through the
+    live subclass tree, so a mode class shipped by cod3s, defined by muscadet
+    or written by a modeller is found the same way and muscadet keeps no list
+    of the mode classes that may exist.
+    """
+    known = {cls.__name__: cls for cls in cod3s.PycComponent.get_subclasses()}
+    cls = known.get(str(clsname))
+
+    if cls is None:
+        raise ComponentSpecError(
+            f"{where}: cls={clsname!r} names no component class. A standalone "
+            f"mode names the class that carries its occurrence law, such as "
+            f"ObjFMExp, ObjFMDelay or ObjMode2S"
+        )
+
+    return cls, mode_vocabulary(cls, where)
+
+
+def _mode_logic_name(value, key, where):
+    """Which of :data:`MODE_LOGIC` ``value`` is, or a refusal."""
+    for name, function in MODE_LOGIC.items():
+        if value is function:
+            return name
+
+    raise ComponentSpecError(
+        f"{where}: {key} is {value!r}, and a document carries the NAME of a "
+        f"truth function rather than the function. Declare one of "
+        f"{sorted(MODE_LOGIC)}, or keep this mode a live object"
+    )
+
+
+def _mode_operator_name(comp, where):
+    """The comparison spelling of an event, from the function it compiled to.
+
+    ``ObjEvent`` keeps ``get_operator_function(cond_operator)`` and drops the
+    string, which is what made an event look unreadable. It is not: the six
+    functions are ``operator`` module singletons, so identity gives the
+    spelling back exactly. Anything else is a function of the caller's own and
+    is refused, like every other live object here.
+    """
+    compiled = getattr(comp, "_event_cond_operator_fun", None)
+
+    for spelling, function in MODE_OPERATORS.items():
+        if compiled is function:
+            return spelling
+
+    raise ComponentSpecError(
+        f"{where}: its comparison is {compiled!r}, which is not one of "
+        f"{sorted(MODE_OPERATORS)}. A document carries the SPELLING of a "
+        f"comparison, never the function it compiled to"
+    )
+
+
+def _mode_tempo(comp, direction):
+    """The tempo an event was built with, from the delay law it became.
+
+    ``ObjEvent`` turns ``tempo_occ`` into ``occ_law={"cls": "delay", "time":
+    ...}`` and keeps only the law, so the tempo is read from there. Nothing
+    else can hold a tempo on an event: the engine has no other way to carry it.
+    """
+    law = getattr(comp, f"{direction}_law", None)
+    return getattr(law, "time", None)
+
+
+def _law_order_value(entry):
+    """The number ONE ORDER of a parameter vector contributes to the law.
+
+    An entry of an order vector is either a scalar or the tuple of that
+    order's parameters (:attr:`ModeVocabulary.order_vectors`). The engine
+    parametrises the transition law with ``params[param_names[0]]`` -- the
+    FIRST of them -- so that is the one the law's own parameter field holds,
+    and any further entry is a variable the law does not read.
+    """
+    if isinstance(entry, (list, tuple)):
+        return entry[0] if entry else None
+    return entry
+
+
+def _mode_law_spec(law, params, where):
+    """A declared occurrence law, as data, or a refusal.
+
+    ``ModeLaw`` is a pydantic model rather than a mapping, so it is dumped and
+    not walked: ``parse_mode_law`` takes the dump back, which is what makes a
+    law-driven mode rebuildable at all.
+
+    **The parameter written is the one the mode RUNS ON, not the one it was
+    handed.** ``ObjMode2S`` keeps the law spec exactly as it was given and
+    builds its parameter variables from the paired order vector, which wins
+    whenever it is as long as the targets. So a mode built from ``occ_law:
+    {"cls": "delay", "time": [5.0]}`` and ``occ_param: [4.0]`` occurs at 4,
+    and dumping the law it was handed would write a document claiming 5 --
+    a document that reads back identical and describes another system, which
+    is the one failure the round trip exists to catch. The nature of the law
+    comes from the spec, its numbers from ``params``, and the two writings
+    then say the same thing by construction.
+
+    ``params`` empty is not a disagreement and derives nothing: a self-hosted
+    mode builds no parameter variable at all (``targets=None``), and its law
+    is the only writing it has.
+    """
+    if law is None:
+        return None
+
+    try:
+        dump = law.model_dump()
+    except AttributeError as err:  # pragma: no cover - cod3s laws are pydantic
+        raise ComponentSpecError(
+            f"{where}: holds {type(law).__name__}, which is not an occurrence "
+            f"law a mapping can carry"
+        ) from err
+
+    if params:
+        dump[law.param_field] = [_law_order_value(entry) for entry in params]
+
+    return _checked_declaration(dump, where)
+
+
+def _self_hosted_automaton_name(comp):
+    """The ``aut_name`` of a self-hosted mode, when it is not the mode's own.
+
+    Not stored: ``ObjMode2S`` builds its single automaton under
+    ``aut_name or mode_name`` and keeps only the automaton. So it is read back
+    from there, and written only when the two differ -- which is the only case
+    where omitting it would rebuild the automaton under another name and lose
+    every indicator that named it.
+    """
+    names = list(getattr(comp, "automata_d", None) or {})
+
+    if len(names) == 1 and names[0] != comp.mode_name:
+        return names[0]
+
+    return None
+
+
+def _drop_inactive_automata_spec(comp):
+    """``{"drop_inactive_automata": False}`` when a rebuild needs it, else ``{}``.
+
+    The one construction parameter of a mode that the built mode does not keep.
+    ``ObjMode2S`` consults it while building -- it decides whether a common
+    cause order whose law is inactive gets an automaton anyway -- and stores
+    nothing, so it cannot be read back the way every other field here is.
+
+    What the built mode DOES show is the RESULT, and that is enough to write a
+    value which rebuilds the same automata. A mode over ``n`` targets has one
+    automaton per non-empty combination, ``2**n - 1`` of them, when nothing was
+    dropped:
+
+    - fewer than that, and something was dropped, which only ``True`` does. It
+      is the default, so nothing is written and the rebuild drops it again;
+    - all of them, and ``False`` rebuilds them all whether or not an order is
+      inactive -- whereas the default would drop any that is. So ``False`` is
+      written, and it is right in both cases.
+
+    Only for a mode over more than one target. At order 1 there is a single
+    combination and the flag decides between a mode and a mode with no
+    automaton at all, which is not a model anyone writes; leaving the key out
+    keeps it off every ordinary mode declaration.
+    """
+    targets = list(getattr(comp, "targets", None) or [])
+
+    if len(targets) < 2:
+        return {}
+
+    if len(getattr(comp, "automata_d", None) or {}) == 2 ** len(targets) - 1:
+        return {"drop_inactive_automata": False}
+
+    return {}
+
+
+def failure_mode_component_spec(comp):
+    """Read a live standalone failure mode back into a declaration.
+
+    A standalone mode is a component of its own: it holds no flow, it names the
+    components it affects rather than owning them, and nothing on those
+    components records it. So it is read here, into an entry of the system's
+    ``components``, and that entry is what the model IS -- drop it and a
+    compromise cascade becomes a system where nothing ever fails.
+
+    **Spelled the way its own constructor takes it**, which is why the
+    vocabulary follows the class: a ``cod3s.ObjFM`` writes ``failure_*`` /
+    ``repair_*`` and a plain ``cod3s.ObjMode2S`` writes ``occ_*`` /
+    ``not_occ_*``, and ``cls(**spec)`` is the whole of the rebuild. See
+    :class:`ModeVocabulary` for why there are two.
+
+    Only what someone decided is written. A field left at the value the
+    vocabulary records as its default is omitted, so an ordinary mode declares
+    its law, its targets and its effects, and nothing else.
+
+    What is refused rather than dropped, and why it has to be
+    --------------------------------------------------------
+    A ``trans_name_prefix_fun``, a callable condition, a ``step`` object: they
+    build a mode and do not survive being written out. They go through
+    :func:`_checked_declaration`, which names the field and says so, because a
+    mode quietly missing its naming function rebuilds with different automaton
+    names and every indicator that named one is silently gone.
+
+    Two exceptions, both deliberate. The condition-logic fields are callables
+    too, but a mode composes its condition groups with one of exactly two of
+    them, so the document carries the NAME (:data:`MODE_LOGIC`); anything else
+    there is the caller's own function and is refused like the rest. And an
+    occurrence law is a pydantic model rather than a mapping, so it is dumped
+    (:func:`_mode_law_spec`) rather than refused.
+
+    An occurrence law is also the one field NOT read back as the mode holds
+    it: its numbers come from the paired parameter vector, which is what the
+    mode runs on. See :attr:`ModeVocabulary.law_fields` for why the two
+    writings exist and :func:`_mode_law_spec` for what that changes.
+
+    Parameters
+    ----------
+    comp : cod3s.ObjFM or cod3s.ObjMode2S
+
+    Returns
+    -------
+    dict
+        A spec :func:`build_component` accepts.
+
+    Raises
+    ------
+    ComponentSpecError
+        When a declaration holds something no mapping can carry, or when the
+        mode class has no declaration form.
+    """
+    where = f"Failure mode {comp.basename()}"
+    vocabulary = mode_vocabulary(type(comp), where)
+    law_params = dict(vocabulary.law_fields)
+
+    spec = {
+        "name": comp.basename(),
+        COMPONENT_KIND_KEY: COMPONENT_KIND_TWO_STATE_MODE,
+        "cls": type(comp).__name__,
+    }
+
+    for key, attribute in vocabulary.fields:
+        if key == "name":
+            # An event's own name IS a constructor argument, where every other
+            # mode's is derived from its targets; it therefore appears in the
+            # fields as well as in the entry's own ``name``.
+            value = comp.basename()
+        elif key == "cond_operator":
+            value = _mode_operator_name(comp, where)
+        elif key == "tempo_occ":
+            value = _mode_tempo(comp, "occ")
+        elif key == "tempo_not_occ":
+            value = _mode_tempo(comp, "not_occ")
+        elif key == "aut_name":
+            value = _self_hosted_automaton_name(comp)
+        elif key == "targets" and getattr(comp, "_self_hosted", False):
+            # ``targets=None`` is what puts a mode in its SELF-HOSTED shape --
+            # one automaton on the component itself, no common-cause machinery
+            # -- and the engine normalises it to ``[]`` right after reading it.
+            # The two spellings are a different model, so the distinction is
+            # read from the flag rather than from what is left of the list.
+            value = None
+        elif key in law_params:
+            value = _mode_law_spec(
+                getattr(comp, attribute, None),
+                getattr(comp, law_params[key], None) or (),
+                f"{where}, {key}",
+            )
+        else:
+            value = getattr(comp, attribute, None)
+
+        if key in vocabulary.defaults and value == vocabulary.defaults[key]:
+            continue
+
+        spec[key] = _checked_declaration(value, f"{where}, {key}")
+
+    for key, attribute, default in vocabulary.logic_fields:
+        value = getattr(comp, attribute, default)
+
+        if value is not default:
+            spec[key] = _mode_logic_name(value, key, where)
+
+    spec.update(_drop_inactive_automata_spec(comp))
+
+    # Same rule as an ObjFlow spec: written only when it says something.
+    # ``label`` defaults to the name the engine derived from the targets and
+    # the mode, and ``description`` to the label, so emitting them
+    # unconditionally would fill every mode declaration with its own name.
+    if comp.label != comp.basename():
+        spec["label"] = comp.label
+    if comp.description != comp.label:
+        spec["description"] = comp.description
+    if comp.metadata:
+        spec["metadata"] = _checked_declaration(comp.metadata, f"{where}, metadata")
+
     return spec
+
+
+def check_failure_mode_spec(spec):
+    """Validate a standalone failure mode declaration, and return its name.
+
+    The counterpart of :func:`check_spec` for the second shape a component
+    declaration takes. Same contract: everything checkable from the mapping
+    alone, before anything is built.
+    """
+    if not isinstance(spec, dict):
+        raise ComponentSpecError(
+            f"a failure mode declaration is a mapping, got {type(spec).__name__}"
+        )
+
+    where = f"Failure mode {spec.get('name') or spec.get('cls')}"
+
+    # The CLASS first, because it is what decides the vocabulary, and every
+    # check below reads a key whose spelling that vocabulary owns.
+    _cls, vocabulary = _mode_class(spec.get("cls"), where)
+
+    mode_name = spec.get(vocabulary.name_key)
+    name = spec.get("name") or mode_name
+    where = f"Failure mode {name}"
+
+    if not mode_name or not isinstance(mode_name, str):
+        raise ComponentSpecError(
+            f"{where}: {vocabulary.name_key!r} is what the mode is called, and "
+            f"it is a non-empty string"
+        )
+
+    unknown = sorted(set(spec) - vocabulary.keys)
+    if unknown:
+        # The one unknown key worth an address rather than a list. Declaring a
+        # sequence target ON the event is the first thing anyone tries, it is
+        # what the engines' own model files do, and the refusal used to stop at
+        # "not a key of this class" -- which is true and leaves the reader with
+        # nowhere to put it. Only ``target``, and ``targets`` on an event whose
+        # vocabulary has no such key: a mode's ``targets`` are the components
+        # it acts upon and are a declaration in the ordinary way.
+        misplaced = "target" in unknown or (
+            "targets" in unknown and vocabulary is EVENT_VOCABULARY
+        )
+        raise ComponentSpecError(
+            f"{where}: unknown key(s) {', '.join(unknown)}. A "
+            f"{spec['cls']} declaration carries: "
+            f"{', '.join(sorted(vocabulary.keys))}"
+            + (
+                ". A SEQUENCE target is not something an event declares: it is "
+                "a parameter of the run, travelling beside the document as "
+                "muscadet.engine.RUN_TARGETS, because one system is run both "
+                "with it and without it"
+                if misplaced
+                else ""
+            )
+        )
+
+    field_keys = {key for key, _ in vocabulary.fields}
+
+    if "targets" in field_keys:
+        targets = spec.get("targets")
+        # ``None`` is the SELF-HOSTED shape and not an omission, so it is
+        # accepted where the vocabulary has one -- and refused for the ObjFM
+        # façade, whose historical contract turns it into the silent no-op of
+        # an empty list. An event has no targets at all: it observes the whole
+        # system, so the key is not in its vocabulary and is not checked here.
+        self_hosted = targets is None and "aut_name" in field_keys
+        if not self_hosted and (
+            not isinstance(targets, (list, tuple))
+            or not all(isinstance(target, str) for target in targets)
+        ):
+            raise ComponentSpecError(
+                f"{where}: 'targets' is the list of component names the mode "
+                f"affects, got {targets!r}"
+            )
+
+    if "cond" in field_keys and spec.get("cond") is None:
+        raise ComponentSpecError(
+            f"{where}: 'cond' is what the event watches, and an event that "
+            f"watches nothing never fires"
+        )
+
+    if spec.get("cond_operator", "==") not in MODE_OPERATORS:
+        raise ComponentSpecError(
+            f"{where}: cond_operator={spec['cond_operator']!r} is not one of "
+            f"{sorted(MODE_OPERATORS)}"
+        )
+
+    for key, _attribute, _default in vocabulary.logic_fields:
+        if key in spec and spec[key] not in MODE_LOGIC:
+            raise ComponentSpecError(
+                f"{where}: {key}={spec[key]!r} is not one of {sorted(MODE_LOGIC)}"
+            )
+
+    for law_key, param_key in vocabulary.law_fields:
+        _check_law_agreement(spec, law_key, param_key, where)
+
+    return name
+
+
+def _check_law_agreement(spec, law_key, param_key, where):
+    """Refuse a declaration whose law and parameter vector say different numbers.
+
+    The two writings of one statement (:attr:`ModeVocabulary.law_fields`).
+    They are not interchangeable -- the law carries the NATURE, the vector
+    carries the per-order numbers and may carry several per order -- so
+    neither can be dropped, and the document is only one statement as long as
+    they agree.
+
+    **Why this is a refusal and not a precedence rule.** ``ObjMode2S`` has one:
+    a vector as long as the targets wins, a shorter one is replaced by the
+    law's own values. It is unwritten, it is muscadet-and-PyCATSHOO's, and the
+    whole point of the declaration document is that a second engine reads the
+    same thing without being told. A reader that takes the typed law -- the
+    natural first reading, it is the one that says what the law IS -- builds
+    another system from the very same bytes, and nothing in either run says
+    so. So a document whose two writings disagree is not resolved here, it is
+    refused, naming the mode, both fields and both values.
+
+    What is compared is what each writing CONTRIBUTES, per common-cause order:
+    the law's parameter vector against the first entry of each order of the
+    vector (:func:`_law_order_value`), which is the one the engine
+    parametrises the transition with. A scalar is the one-order spelling of a
+    one-entry vector on both sides, so ``4.0`` and ``[4.0]`` agree.
+
+    Silent on everything the engine does not read as a disagreement: a missing
+    key, an empty vector (the self-hosted shape, which builds no parameter
+    variable), a ``None`` entry on both sides (the explicit inactive-order
+    marker). A LENGTH mismatch is a disagreement like any other -- the two
+    writings then do not even declare the same number of orders -- and it is
+    the case where the precedence FLIPS, which is why the refusal derives the
+    number muscadet would have built rather than asserting the usual one:
+    ``ObjMode2S`` replaces a vector SHORTER than its targets by the law's own
+    values, and takes the vector whenever it is as long.
+    """
+    if law_key not in spec or param_key not in spec:
+        return
+
+    law = spec[law_key]
+    params = spec[param_key]
+
+    if not isinstance(law, dict) or law.get("cls") not in MODE_LAW_PARAM_FIELDS:
+        # An unreadable law is not this check's refusal to make: cod3s'
+        # ``parse_mode_law`` names the ``cls`` tags it knows, and saying it
+        # here too would mean maintaining that list in two places.
+        return
+
+    param_field = MODE_LAW_PARAM_FIELDS[law["cls"]]
+    declared = law.get(param_field)
+
+    if declared is None or params is None:
+        return
+
+    law_values = list(declared) if isinstance(declared, list) else [declared]
+    param_values = [
+        _law_order_value(entry)
+        for entry in (params if isinstance(params, list) else [params])
+    ]
+
+    if not law_values or not param_values:
+        return
+
+    if law_values == param_values:
+        return
+
+    if len(param_values) >= len(spec.get("targets") or ()):
+        built, other = param_values, law_values
+        why = (
+            f"{param_key} is as long as the mode's targets, so it is what the "
+            f"automata are wired to"
+        )
+    else:
+        built, other = law_values, param_values
+        why = (
+            f"{param_key} is shorter than the mode's targets, so the engine "
+            f"replaces it by the law's own values"
+        )
+
+    raise ComponentSpecError(
+        f"{where}: {law_key}[{param_field!r}]={law_values!r} and "
+        f"{param_key}={param_values!r} are two writings of the same numbers "
+        f"and they disagree. muscadet would build {built!r} -- {why} -- where "
+        f"the other writing says {other!r}, from the same document. Declare "
+        f"one of them, or make them equal"
+    )
+
+
+def build_failure_mode_component(system, spec):
+    """Build one standalone failure mode from a declaration held in data.
+
+    ``cls`` names the class that carries the occurrence law and every other key
+    is a constructor keyword, so the build is the constructor: nothing here
+    reorders anything, because a mode has no ``set_flows()`` and therefore none
+    of the ordering that makes :func:`build_component` what it is.
+
+    For a mode with targets, the component's own name is DERIVED by the engine,
+    ``{target_name}__{fm_name}``, and is therefore not a constructor keyword. A
+    declaration carries it all the same -- it is the key the document files the
+    mode under, and what a connection or an indicator would name -- so it is
+    checked against what the engine derived rather than dropped: a document
+    whose key does not name the component it builds is a document whose other
+    entries point at nothing. An event is self-hosted and its name IS a
+    constructor argument, so there the check is trivially satisfied and the key
+    is passed on rather than dropped.
+    """
+    name = check_failure_mode_spec(spec)
+    _cls, vocabulary = _mode_class(spec.get("cls"), f"Failure mode {name}")
+
+    # ``name`` is dropped, being the key the document files the mode under and
+    # not a constructor argument -- EXCEPT for an event, which is self-hosted
+    # and whose constructor takes it. The vocabulary decides, so neither case
+    # is a special case written here.
+    dropped = {COMPONENT_KIND_KEY}
+    if "name" not in {key for key, _ in vocabulary.fields}:
+        dropped.add("name")
+
+    keywords = {
+        key: value
+        for key, value in copy_declaration(spec).items()
+        if key not in dropped
+    }
+
+    for key, _attribute, _default in vocabulary.logic_fields:
+        if key in keywords:
+            keywords[key] = MODE_LOGIC[keywords[key]]
+
+    # See :attr:`ModeVocabulary.order_vectors`: an order's parameters are a
+    # tuple to the engine and a list in a document, and handing the list over
+    # makes PyCATSHOO refuse a value it prints as ``list`` without naming a
+    # field.
+    for key in vocabulary.order_vectors:
+        entries = keywords.get(key)
+        if isinstance(entries, list):
+            keywords[key] = [
+                tuple(entry) if isinstance(entry, list) else entry for entry in entries
+            ]
+
+    comp = system.add_component(**keywords)
+
+    if comp is None:
+        raise ComponentSpecError(
+            f"Failure mode {name}: the system already holds a component of "
+            f"that name. A declaration builds a NEW mode; give this one a "
+            f"distinct {vocabulary.name_key!r} or 'target_name'"
+        )
+
+    declared_name = spec.get("name")
+    if declared_name and comp.basename() != declared_name:
+        raise ComponentSpecError(
+            f"Failure mode {declared_name}: the engine names this mode "
+            f"{comp.basename()!r}, from its 'target_name' and its "
+            f"{vocabulary.name_key!r}. "
+            f"A declaration naming it otherwise files it under a name nothing "
+            f"else in the document can reach"
+        )
+
+    return comp
+
+
+# ---------------------------------------------------------------------------
+# The CONTROLLER: read, checked, and built in one constructor call
+# ---------------------------------------------------------------------------
+
+
+def controller_component_spec(comp):
+    """Read a live :class:`muscadet.ObjCtrl` back into a declaration.
+
+    Two sections and nothing else, in the order
+    :data:`CONTROLLER_SECTIONS` derives from :data:`DECLARATION_SECTIONS`: the
+    observation inputs, then the outputs with the grammar each emits (R42).
+    Everything else a controller holds -- the automata its grammar compiled to,
+    the crossing automata of an aggregating input, the threshold variables, the
+    forcing and blinding endpoints -- is DERIVED from those two sections and is
+    rebuilt by them, exactly as an ``ObjFlow``'s derived automata are.
+
+    Read on ``ObjCtrl`` rather than on a subclass of it
+    --------------------------------------------------
+    ``cls`` is written as ``ObjCtrl`` and the class actually read is kept under
+    :data:`SOURCE_CLS_KEY`, which is the arbitration
+    :func:`flow_component_spec` already makes for an ``ObjFlow``. Here it is
+    more than a convention: a subclass declaring its own interfaces does so in
+    its constructor, so rebuilding as that subclass AND handing it the sections
+    read back would declare every interface twice, and ``ObjCtrl.claim_name``
+    would refuse the second. Expanding onto the peer class is the shape that
+    rebuilds.
+
+    Two translations the read makes, and why each is not a dump
+    -----------------------------------------------------------
+    * an input's aggregation. The interface says ``aggregate`` and the
+      measurement channel underneath says ``combine``; ``add_control_in``
+      translates one into the other, and this translates it back. Left as
+      ``combine``, the rebuild is refused by name -- the channel's own two keys
+      are deliberately kept out of a controller declaration (R40);
+    * a republication's gain. ``emit_gain_params`` folds it into
+      ``gain_default``, which is the initial value of ``{name}_level_gain``:
+      ONE number, ONE spelling, and ``add_control_out`` REFUSES a declaration
+      carrying both. Written back unfiltered, a controller that builds today
+      would refuse to rebuild from its own declaration.
+
+    What is NOT read back
+    ---------------------
+    A threshold tuned by writing its variable after the build
+    (``comp.variable("run_threshold").setValue(2.0)``, R44) is engine state and
+    not a declaration, so it is no more read here than any other variable
+    written by hand. Nothing is lost on the path this exists for: the COD3S
+    Platform importer folds an instance's threshold overrides into the emission
+    grammar at the PARSE layer, so what the node holds is already the tuned
+    value.
+
+    Parameters
+    ----------
+    comp : muscadet.ObjCtrl
+
+    Returns
+    -------
+    dict
+        A spec :func:`build_component` accepts.
+
+    Raises
+    ------
+    ComponentSpecError
+        When a declaration holds something no mapping can carry.
+    """
+    where = f"Controller {comp.basename()}"
+
+    controls_in = []
+    for iface_name, channel in comp.controls_in.items():
+        fields = _declaration_fields(channel, f"{where}, input {iface_name}")
+        fields.pop("cls", None)
+        name = fields.pop("name", iface_name)
+        aggregate = fields.pop("combine", None)
+        controls_in.append({"name": name, **fields, "aggregate": aggregate})
+
+    controls_out = []
+    for iface_name, interface in comp.controls_out.items():
+        node = comp.controls_emit.get(iface_name)
+        fields = _declaration_fields(
+            interface,
+            f"{where}, output {iface_name}",
+            skip=CTRL_SIGNAL_RUNTIME_FIELDS,
+        )
+        fields.pop("cls", None)
+        name = fields.pop("name", iface_name)
+
+        if isinstance(interface, MeasurementOut):
+            kind = CTRL_OUT_VALUE
+
+            # A publication's SOURCE names the capacity it reads, and a
+            # controller has none: what a value output publishes comes from its
+            # grammar, which is why ``CONTROL_OUT_VALUE_KEYS`` leaves the key
+            # out. It is None on every controller output there is -- no door
+            # sets it -- and writing it back would be refused by name at the
+            # rebuild.
+            fields.pop("source", None)
+
+            if isinstance(node, CtrlRepublish):
+                fields.pop("gain_default", None)
+        else:
+            kind = CTRL_OUT_BOOL
+
+        entry = {"name": name, "kind": kind, **fields}
+
+        emit = _ctrl_emit_spec(node)
+        if emit is not None:
+            entry["emit"] = emit
+
+        controls_out.append(entry)
+
+    read = {"controls_in": controls_in, "controls_out": controls_out}
+
+    spec = _as_data(
+        {
+            "name": comp.basename(),
+            COMPONENT_KIND_KEY: COMPONENT_KIND_CONTROLLER,
+            "cls": "ObjCtrl",
+            SOURCE_CLS_KEY: type(comp).__name__,
+            **{section: read[section] for section in CONTROLLER_SECTIONS},
+        }
+    )
+
+    # Same rule as the other two shapes: written only when it says something.
+    # ``label`` defaults to the name and ``description`` to the label, so
+    # emitting them unconditionally would fill every spec with its own name
+    # twice. ``metadata`` is where the platform importer attaches what it knows
+    # about the instance, the threshold overrides it applied included.
+    if comp.label != comp.basename():
+        spec["label"] = comp.label
+    if comp.description != comp.label:
+        spec["description"] = comp.description
+    if comp.metadata:
+        spec["metadata"] = _checked_declaration(comp.metadata, f"{where}, metadata")
+
+    return _checked_document(spec, f"controller {comp.basename()}")
+
+
+def check_controller_spec(spec):
+    """Validate a controller declaration without building anything, and name it.
+
+    The counterpart of :func:`check_spec` for the third shape a component
+    declaration takes. Same contract: everything checkable from the mapping
+    alone, before anything is built.
+
+    The emission grammar is part of that, and it is what makes this worth
+    more than a key list. ``build_ctrl_node`` is PURE -- it refuses an unknown
+    operator, an inverted band, an empty combination, a ``k`` beside an ``or``,
+    a Python callable -- so a batch of declarations is sorted without raising a
+    system. ``ObjCtrl.__init__`` walks it again before calling the engine
+    constructor, so the refusal is the same one either way; what changes is
+    only how early it arrives, and that it arrives as a
+    :class:`ComponentSpecError` like every other refusal of this module rather
+    than as the bare ``ValueError`` the grammar raises.
+    """
+    if not isinstance(spec, dict):
+        raise ComponentSpecError(
+            f"a controller declaration is a mapping, got {type(spec).__name__}"
+        )
+
+    name = spec.get("name")
+    if not name or not isinstance(name, str):
+        raise ComponentSpecError(f"Controller declaration without a 'name': {spec!r}")
+
+    unknown = sorted(set(spec) - CONTROLLER_KEYS)
+    if unknown:
+        plural = "s" if len(unknown) > 1 else ""
+        raise ComponentSpecError(
+            f"Controller {name}: unknown declaration key{plural} "
+            f"{', '.join(repr(key) for key in unknown)}; it accepts "
+            f"{', '.join(sorted(CONTROLLER_KEYS))}"
+        )
+
+    for section in CONTROLLER_SECTIONS:
+        for entry in _entries(spec, section, name):
+            if not isinstance(entry, dict):
+                raise ComponentSpecError(
+                    f"Controller {name}: every entry of section {section!r} is "
+                    f"a mapping, got {type(entry).__name__}"
+                )
+
+            iface_name = entry.get("name")
+            if not iface_name or not isinstance(iface_name, str):
+                raise ComponentSpecError(
+                    f"Controller {name}: an entry of section {section!r} "
+                    f"carries no 'name'. An interface name is what an output "
+                    f"grammar names its input by and what a connection reaches "
+                    f"its message box through, so an unnamed one is reachable "
+                    f"by nothing"
+                )
+
+            if section != "controls_out":
+                continue
+
+            try:
+                build_ctrl_node(
+                    f"Controller {name}: output {iface_name!r} emit",
+                    entry.get("emit"),
+                )
+            except ValueError as error:
+                raise ComponentSpecError(str(error)) from error
+
+    return name
+
+
+def build_controller_component(system, spec):
+    """Build one controller from a declaration held in data.
+
+    The constructor is the whole of the build, as it is for a standalone mode
+    and for the same reason: a controller has no ``set_flows()``, so it carries
+    none of the ordering that makes :func:`build_component` what it is. It owns
+    the ``ObjFlow`` lifecycle (``partial_init``, ``add_flows``, one
+    ``set_flows()``) that a PEER class does not have, which is why a controller
+    is built here rather than there -- ``ObjLogicGate`` stands outside it for
+    exactly the same reason.
+
+    What this does read from :data:`DECLARATION_SECTIONS`, through
+    :data:`CONTROLLER_SECTIONS`, is WHICH sections a controller carries. The
+    order between them is then the constructor's own: ``ObjCtrl.__init__``
+    declares every input before every output, because an output's grammar names
+    an input and the name has to resolve.
+
+    Parameters
+    ----------
+    system : muscadet.System
+    spec : dict
+        A declaration of kind :data:`COMPONENT_KIND_CONTROLLER`.
+
+    Returns
+    -------
+    muscadet.ObjCtrl
+
+    Raises
+    ------
+    ComponentSpecError
+        For a missing ``name``, an unknown key, a section that is not a list of
+        named mappings, an emission grammar the closed operator list does not
+        carry, or a name the system already holds.
+    """
+    name = check_controller_spec(spec)
+    clsname = spec.get("cls", "ObjCtrl")
+
+    # ``copy_declaration`` rather than the mapping itself: a spec is data the
+    # caller keeps and may build twice, and ``add_control_in`` hands its
+    # entries to a pydantic constructor that keeps what it is given.
+    sections = {
+        section: [copy_declaration(entry) for entry in _entries(spec, section, name)]
+        for section in CONTROLLER_SECTIONS
+    }
+
+    comp = system.add_component(
+        cls=clsname,
+        name=name,
+        label=spec.get("label"),
+        description=spec.get("description"),
+        metadata=spec.get("metadata", {}),
+        **sections,
+    )
+
+    # ``cod3s.PycSystem.add_component`` WARNS on a name the system already
+    # holds and returns None, so a caller reading the result back would get
+    # ``'NoneType' object has no attribute ...`` naming neither the spec nor
+    # the name that collided. Same refusal as :func:`build_component`, for the
+    # same input: a duplicate instance name is the likeliest defect of a
+    # platform export or a generated study.
+    if comp is None:
+        raise ComponentSpecError(
+            f"Controller {name}: the system already holds a component of that "
+            f"name. A declaration builds a NEW controller; give this one a "
+            f"distinct 'name', or read the existing one back with "
+            f"component_spec"
+        )
+
+    return comp
 
 
 # ---------------------------------------------------------------------------
@@ -938,7 +2522,74 @@ def component_spec(comp):
 #: changed meaning is a major. A reader refuses a major it does not know
 #: rather than guessing, because the whole point of this document is that two
 #: engines read the SAME thing.
-SYSTEM_SPEC_VERSION = "1.0.0"
+#:
+#: **A field whose meaning is PINNED is not a changed meaning.** Refusing a
+#: mode whose ``occ_law`` and ``occ_param`` disagree (see the module docstring)
+#: is not a major: no field moved, no field left, and the documents the rule
+#: refuses are exactly the ones that had no single meaning to begin with --
+#: muscadet read one number out of them and a reader of the typed law read
+#: another. A document that said one thing yesterday says the same thing
+#: today and builds the same system.
+#:
+#: 1.0.1 adds ``transmits`` on a capacity, which carries a default: a reader
+#: that ignores the key behaves exactly as it did at 1.0.0, and a 1.0.0
+#: document rebuilds here unchanged, its capacities taking the default.
+#:
+#: 1.0.2 adds :data:`GENERATED_INDICATORS` at the MODEL level, on the same
+#: reading: optional, carrying a default, so a reader that ignores it builds
+#: exactly the system it built at 1.0.1 -- the key says what is OBSERVED, and
+#: muscadet's own engine observes the declared indicators either way -- and a
+#: 1.0.1 document rebuilds here unchanged, taking the default of the format
+#: (absent means false).
+SYSTEM_SPEC_VERSION = "1.0.2"
+
+
+#: The model-level key by which a declaration says whether it wants the
+#: indicator set an engine GENERATES -- one per observable variable, named
+#: ``{component}_{variable}`` -- beside the indicators the document declares
+#: itself.
+#:
+#: **It is spelled exactly as the reader spells it**, and that identity is the
+#: whole reason for writing the intention down instead of leaving it to a
+#: convention: ``pyraichu.indicators.GENERATED_INDICATORS`` is this same
+#: string, and the model level is an OPEN vocabulary on both sides -- a key
+#: nobody knows is accepted and then dropped, in silence. A document asking for
+#: its observations under any other spelling would run, observe only what it
+#: declared, and say nothing about the request it lost.
+#:
+#: **Absent means false**, and false means the model observes what it declared
+#: and nothing else. That is the reading of the FORMAT, shared with the engine
+#: that reads it, and it is what leaves every document written before this key
+#: existed meaning exactly what it meant. What the muscadet AUTHORING surface
+#: defaults to is a different question, and it has a different answer:
+#: :data:`GENERATED_INDICATORS_DEFAULT`.
+#:
+#: **Before pinning a muscadet that writes this key**, read the ordering
+#: constraint in ``CHANGELOG.md`` ("The reader came first, and it stays first
+#: for whoever pins"): a reader that predates the key accepts it and drops it
+#: in silence, so an engine older than the one that reads it does not fail, it
+#: observes less than the model asked for and says nothing. The key is
+#: published from 5.6.0, and ``pyraichu`` reads it from 0.28.0.
+GENERATED_INDICATORS = "generated_indicators"
+
+#: What a muscadet SYSTEM wants when its author says nothing: **true**, the
+#: generated set beside whatever the system declares.
+#:
+#: True here and false in the document format is not a contradiction, it is
+#: the same distinction ``pyraichu.muscadet.System`` settled on for the other
+#: authoring surface of this format: a system built object by object is the
+#: muscadet authoring surface, whose models have always been observed variable
+#: by variable, while a document is read as it is written and a document that
+#: asks for nothing gets nothing. Choosing false here would have cost every
+#: existing muscadet model its observations at the first run on an engine that
+#: reads this key, silently -- which is the regression this key exists to
+#: prevent, not one to inflict from the other side.
+#:
+#: The default is never what a document carries, because
+#: :func:`system_spec` writes the key on EVERY document (see there): the two
+#: authoring surfaces of this format write what they want rather than leaving
+#: a reader to a default it cannot see.
+GENERATED_INDICATORS_DEFAULT = True
 
 #: What an indicator declaration carries. Read back concretely rather than as
 #: the pattern the modeller typed: ``add_indicator`` takes regexes and expands
@@ -956,6 +2607,30 @@ _INDICATOR_COMMON_KEYS = (
     "value_test",
 )
 
+#: Keys whose VALUE names a component, wherever they appear inside a component
+#: declaration -- at its top level or nested arbitrarily deep in a condition
+#: tree. They are what :func:`component_build_order` derives the build order
+#: from, and each is a name the ENGINE resolves against the live system at the
+#: moment the declaring component is built:
+#:
+#: - ``obj`` is the cod3s condition-tree convention
+#:   (``{"attr": "occ", "obj": "OTHER", "ope": "==", "value": True}``): the
+#:   platform's "condition on another mode", resolved through
+#:   ``system.comp[obj]``, which raises a bare ``KeyError`` on a component that
+#:   does not exist yet;
+#: - ``targets`` is what a mode acts on, one name or a list of them, resolved
+#:   through ``system.component(...)`` while the mode's automata are built;
+#: - ``target_name`` is the single-target spelling of the same thing, and is
+#:   also the factorised label of a multi-target mode -- which is why every
+#:   name collected here is kept only when the document DECLARES a component
+#:   under it (see :func:`component_references`).
+#:
+#: This is the one place the vocabulary is written down. A reference key added
+#: to cod3s and not added here does not break silently: the build still refuses
+#: it, but by name, through the guard in :func:`build_system` rather than
+#: through the engine's ``KeyError``.
+COMPONENT_REFERENCE_KEYS = frozenset({"obj", "targets", "target_name"})
+
 #: The three things cod3s knows how to observe, each naming its subject with a
 #: DIFFERENT key and built by a different method. So a declaration states its
 #: ``kind``: without it, a variable and a state are indistinguishable mappings
@@ -969,6 +2644,58 @@ _INDICATOR_KINDS = {
 
 class SystemSpecError(ValueError):
     """A system declaration that cannot be read or cannot be built."""
+
+
+def generated_indicators(spec):
+    """Whether a system declaration asks for the generated indicator set.
+
+    The one reading of :data:`GENERATED_INDICATORS` on this side of the seam,
+    and deliberately the same one the engine applies on the other
+    (``pyraichu.indicators.generated_indicators``): what a model observes must
+    not depend on which of the two read the key.
+
+    Only a genuine boolean is honoured. The string ``"false"`` is true to
+    Python and false to whoever wrote it, so it is refused rather than
+    resolved -- at the author's door, where the message can still name the
+    document, instead of in an engine reporting on its own internals.
+
+    Parameters
+    ----------
+    spec : dict
+        A system declaration, as :func:`system_spec` produces it.
+
+    Returns
+    -------
+    bool
+        False for a declaration that does not carry the key, which is what the
+        format says a document without it means.
+
+    Raises
+    ------
+    SystemSpecError
+        When the key carries anything but ``True`` or ``False``.
+    """
+    return checked_generated_indicators(
+        spec.get(GENERATED_INDICATORS, False) if isinstance(spec, dict) else False
+    )
+
+
+def checked_generated_indicators(value):
+    """``value`` itself, once it is a boolean; the refusal otherwise.
+
+    Split from :func:`generated_indicators` because the same answer is read in
+    two places that do not both have a document in hand: from the key of a
+    declaration, and from the attribute of a live system on its way into one
+    (:func:`system_spec`). One refusal, one sentence, whichever side asked.
+    """
+    if not isinstance(value, bool):
+        raise SystemSpecError(
+            f"{GENERATED_INDICATORS!r} says whether the model wants the "
+            f"indicator set an engine generates beside the declared ones, so "
+            f"it is true or false; got {value!r}"
+        )
+
+    return value
 
 
 def _anchor(name):
@@ -989,10 +2716,24 @@ def system_connections(system):
     by any route reads back the same way.
 
     Each entry carries the two message boxes, and ``flow`` when the pair
-    follows the ``{flow}_out`` / ``{flow}_in`` convention. That name is not
-    decoration: rebuilding through :meth:`System.connect_flow` re-runs the
-    family check that refuses a discrete output feeding a continuous input,
-    which the raw ``connect`` route does not.
+    follows the ``{flow}_out`` / ``{flow}_in`` convention AND that name really
+    names a flow on both ends. That name is not decoration: rebuilding through
+    :meth:`System.connect_flow` re-runs the family check that refuses a
+    discrete output feeding a continuous input, which the raw ``connect`` route
+    does not.
+
+    **The box names alone are not enough to claim it, and that is measured.**
+    A MEASUREMENT link follows the same convention by construction -- a
+    capacity publishes a level on ``{name}_level_out`` and a channel imports it
+    on ``{name}_level_in`` -- so a channel named ``tank`` was written out with
+    ``flow: "tank_level"``, a flow nothing declares. ``connect_flow`` then
+    indexes ``flows_out["tank_level"]`` for its authorization check and the
+    rebuild died on a bare ``KeyError``; on a controller, whose ONLY wires are
+    measurement links and whose class carries no flow collection at all (R39),
+    it died one line earlier on ``'ObjCtrl' object has no attribute
+    'flows_in'``. Asking the two components what they actually hold is what
+    tells the two conventions apart, and it is what sends a measurement link
+    back down the raw ``connect`` route the README prescribes for it.
     """
     components = getattr(system, "comp", None) or {}
     by_engine_name = {}
@@ -1003,6 +2744,7 @@ def system_connections(system):
     out = []
     for key, comp in components.items():
         info = comp.get_cnct_info() or {}
+        flows_out = getattr(comp, "flows_out", None) or {}
         for source_box, box_info in info.items():
             if not str(source_box).endswith("_out"):
                 continue
@@ -1016,7 +2758,12 @@ def system_connections(system):
                     "target_box": target_box,
                 }
                 flow = str(source_box)[: -len("_out")]
-                if str(target_box) == f"{flow}_in":
+                flows_in = getattr(components.get(target_key), "flows_in", None) or {}
+                if (
+                    str(target_box) == f"{flow}_in"
+                    and flow in flows_out
+                    and flow in flows_in
+                ):
                     entry["flow"] = flow
                 out.append(entry)
     return sorted(
@@ -1055,31 +2802,292 @@ def system_spec(system):
     :func:`component_spec`. What it adds over reading each component is the
     part no component knows: how they are wired, and what is observed.
 
+    ``components`` holds every component of the system, whatever its kind: the
+    ``ObjFlow`` components, the standalone two-state modes, and the
+    controllers. The last two are components in their own right and are
+    described nowhere else, so dropping either would not lose decoration but
+    the model. Each entry says which it is (:data:`COMPONENT_KIND_KEY`).
+
+    ``generated_indicators`` says what the model wants OBSERVED beyond the
+    indicators it declares, and it belongs here for the reason a target does
+    not: it is a property of the description, true of every run of this
+    system, and two systems carrying the same declaration must observe the
+    same things or the document is not what the seam claims it is. See
+    :data:`GENERATED_INDICATORS` for the key and
+    :data:`GENERATED_INDICATORS_DEFAULT` for what a system wants when nobody
+    said.
+
+    **It is written on every document, whatever its value**, exactly as
+    ``transmits`` is on a capacity, and the alternative -- writing it only when
+    it departs from the default -- was weighed and left.
+
+    What that alternative would buy is smaller than it looks, and it was
+    measured rather than assumed: **no document of this format is versioned
+    anywhere in the platform that consumes it.** Searched 2026-09-17 across
+    three platform trees, every JSON file outside the environments, for one
+    carrying ``components`` beside ``connections``: none. What its reference
+    corpus holds is the translator's own study files and the result tables
+    beside them, and its two locks that touch the declaration do not see this
+    key either -- one compares an export to its own re-export, which gains the
+    key on both sides at once, the other an artefact map indexed by component,
+    flow and mode, which a model-level key does not enter. So the key appears
+    in documents produced on the fly, and in no file anyone has to re-bless.
+
+    What the alternative would cost is the whole point of having a key: a
+    document that says nothing forces its reader to a default it cannot see,
+    which is precisely the silent divergence this key was introduced to close
+    -- what a model observed used to depend on which route assembled it, and
+    nothing in the document said so. The engine's own muscadet-compatible
+    writer states the key on every document it writes, for that same reason; a
+    format whose two writers disagree about when to speak would put the
+    divergence back one level up.
+
     Deliberately NOT included: targets and simulation parameters. Those are the
     configuration of a RUN, handed to ``simulate()``, not the description of a
     system. Two systems carrying the same declaration are the same system,
     whatever one intends to compute on them. The COD3S Platform already draws
     this line, between its model export and its study.
 
+    **Where a sequence target travels instead**, since "not here" was once the
+    whole answer and left it nowhere at all: beside the document, as the run
+    keyword :data:`muscadet.engine.RUN_TARGETS`, which names each target by the
+    name of its event and is read against this declaration by
+    :func:`muscadet.engine.run_targets`. :func:`declared_events` is the reader
+    that says which names this document offers. The line is unchanged and the
+    reason is now demonstrable rather than asserted: one system runs twice, a
+    free-cycling campaign and a first-occurrence campaign, and it is one
+    system -- so one document, and two sets of run parameters.
+
+    **What comes back survives ``json.dumps``, and that is checked rather than
+    intended.** Every section above has its own refusal and each names the
+    declaration it read, which is what a modeller needs; none of them can say
+    anything about the document as a whole, and the sections do not all go
+    through the same gate -- the indicators are dumped by cod3s, the
+    connections are read off the engine. :func:`_checked_document` is the one
+    place that sees all of it at once, so the guarantee is stated there, once,
+    instead of being the sum of what the parts happen to refuse.
+
     Raises
     ------
     ComponentSpecError
         Through :func:`component_spec`, when a component holds something no
-        mapping can carry -- a Python callable, typically.
+        mapping can carry -- a Python callable, typically -- or when it is of a
+        kind no declaration describes.
+    SystemSpecError
+        When what the whole declaration holds is not something a document
+        carries: a mapping keyed by anything but a string, typically.
     """
-    return {
-        "version": SYSTEM_SPEC_VERSION,
-        "name": (
-            getattr(system, "name", lambda: None)()
-            if callable(getattr(system, "name", None))
-            else getattr(system, "name", None)
-        ),
-        "components": {
-            name: component_spec(comp) for name, comp in (system.comp or {}).items()
+    return _checked_document(
+        {
+            "version": SYSTEM_SPEC_VERSION,
+            "name": (
+                getattr(system, "name", lambda: None)()
+                if callable(getattr(system, "name", None))
+                else getattr(system, "name", None)
+            ),
+            "components": {
+                name: component_spec(comp) for name, comp in (system.comp or {}).items()
+            },
+            "connections": system_connections(system),
+            "indicators": system_indicators(system),
+            GENERATED_INDICATORS: checked_generated_indicators(
+                getattr(system, "generated_indicators", GENERATED_INDICATORS_DEFAULT)
+            ),
         },
-        "connections": system_connections(system),
-        "indicators": system_indicators(system),
+        "$",
+        SystemSpecError,
+    )
+
+
+# ---------------------------------------------------------------------------
+# The build ORDER, derived from the document rather than trusted from it
+# ---------------------------------------------------------------------------
+#
+# **The order of an object's keys carries no meaning.** A JSON document may be
+# re-serialised sorted by a formatter, by a diff tool, by a round trip through
+# a database, and above all by an engine whose maps are ordered by key -- a
+# Rust reader over a ``BTreeMap`` sorts, which is exactly the RAICHU path. A
+# document that rebuilds only in the order it happened to be written in is
+# therefore not an exchange format, whatever its ``version`` says.
+#
+# It was one, measured 2026-09-10 on a platform study of six modes: a mode
+# whose ``occ_cond`` names another mode's ``occ`` state builds a condition the
+# engine resolves through ``system.comp[name]`` AT CONSTRUCTION, so the named
+# mode must already exist. Insertion order happened to put it first; sorted
+# order put the six referencing modes ahead of the six referenced ones and the
+# rebuild died on ``KeyError: 'Rail_1__Rail__Rail__Fissure_O'`` -- a message
+# naming neither the document, nor the component that referenced it, nor the
+# fact that both are declared a few keys apart.
+#
+# So the order is DERIVED here, from what each declaration names, and a cycle
+# -- the one thing no order can satisfy -- is refused by the names that form
+# it. The alternative reading, building every component and resolving the
+# references afterwards, was not taken: it makes a cycle build silently, and
+# a mode that can only occur once another has occurred, and vice versa, is a
+# model defect that has to surface at build time rather than as a mode that
+# never fires in a Monte-Carlo run nobody re-reads.
+
+
+def _reference_names(value, out):
+    """Collect, into ``out``, every name a declaration fragment points at.
+
+    Recursive over the WHOLE fragment rather than over a list of places a
+    reference is allowed to sit: a condition tree nests to an arbitrary depth
+    (outer list of OR clauses, inner list of AND clauses, then the leaves), and
+    a reference key may be introduced at a level nobody thought to look at.
+    """
+    if isinstance(value, dict):
+        for key, item in value.items():
+            if key in COMPONENT_REFERENCE_KEYS:
+                if isinstance(item, str):
+                    out.append(item)
+                elif isinstance(item, (list, tuple)):
+                    out.extend(name for name in item if isinstance(name, str))
+            _reference_names(item, out)
+    elif isinstance(value, (list, tuple)):
+        for item in value:
+            _reference_names(item, out)
+
+
+def component_references(comp_spec, declared):
+    """The components ``comp_spec`` names, among those ``declared`` carries.
+
+    Parameters
+    ----------
+    comp_spec : dict
+        One component declaration.
+    declared : dict
+        Every name the document files a component under -- its key, and its
+        ``name`` field when the two differ -- mapped to the key. Built by
+        :func:`component_build_order`.
+
+    Returns
+    -------
+    list of str
+        Keys of ``declared``, in the order they were met, without duplicates
+        and without the component's own.
+
+    Notes
+    -----
+    A name the document does NOT declare is dropped rather than refused, and
+    that is deliberate: ``build_system`` fills a system the caller may already
+    have put components in, so a reference to something built outside the
+    document is legitimate. It is also what makes ``target_name`` usable as a
+    reference key at all -- on a multi-target mode it holds a factorised label
+    that names no component, and dropping it costs nothing because the
+    ``targets`` list beside it names every one of them.
+    """
+    names = []
+    _reference_names(comp_spec, names)
+
+    own_name = comp_spec.get("name") if isinstance(comp_spec, dict) else None
+    own = declared.get(own_name) if isinstance(own_name, str) else None
+
+    keys = []
+    for name in names:
+        key = declared.get(name)
+        if key is None or key == own or key in keys:
+            continue
+        keys.append(key)
+    return keys
+
+
+def component_build_order(components):
+    """The order ``components`` must be built in, whatever order it is written.
+
+    A component is built after everything its declaration names, so a document
+    reconstructs identically from its insertion order, from its sorted form, or
+    from any permutation of its keys. Components that constrain each other in
+    no way keep the order the document gives them, so a document with no
+    cross-reference at all is built exactly as before.
+
+    Parameters
+    ----------
+    components : dict
+        The ``components`` section of a system declaration.
+
+    Returns
+    -------
+    list of str
+        Every key of ``components``, once.
+
+    Raises
+    ------
+    SystemSpecError
+        When the references form a cycle, naming the components that form it.
+        A cycle is the one thing no build order satisfies, and it is refused
+        BEFORE anything is built rather than left to the engine, which reports
+        it as a ``KeyError`` on whichever member of the loop came first.
+    """
+    keys = list(components)
+    position = {key: index for index, key in enumerate(keys)}
+
+    # Both spellings a reference may use: the key the document files the
+    # component under, and the ``name`` its declaration carries. They are the
+    # same for anything ``system_spec`` writes; a hand-written document may
+    # differ, and a reference then names the component, not the key.
+    declared = {key: key for key in keys}
+    for key, comp_spec in components.items():
+        if isinstance(comp_spec, dict):
+            declared.setdefault(str(comp_spec.get("name") or key), key)
+
+    needs = {
+        key: component_references(
+            comp_spec if isinstance(comp_spec, dict) else {}, declared
+        )
+        for key, comp_spec in components.items()
     }
+    needed_by = {key: [] for key in keys}
+    for key, references in needs.items():
+        for reference in references:
+            if reference != key:
+                needed_by[reference].append(key)
+
+    remaining = {
+        key: sum(1 for reference in references if reference != key)
+        for key, references in needs.items()
+    }
+
+    # A heap on the DOCUMENT's own position, so the result is the document's
+    # order everywhere the references leave it free. Any topological order
+    # would build; only this one leaves a document without cross-references
+    # byte-identical to what it was before this function existed.
+    ready = [position[key] for key in keys if remaining[key] == 0]
+    heapq.heapify(ready)
+
+    order = []
+    while ready:
+        key = keys[heapq.heappop(ready)]
+        order.append(key)
+        for dependent in needed_by[key]:
+            remaining[dependent] -= 1
+            if remaining[dependent] == 0:
+                heapq.heappush(ready, position[dependent])
+
+    if len(order) != len(keys):
+        raise SystemSpecError(_cycle_refusal(set(keys) - set(order), needs, position))
+
+    return order
+
+
+def _cycle_refusal(stuck, needs, position):
+    """The message a dependency cycle is refused with, naming its members."""
+    walk = []
+    seen = {}
+    key = min(stuck, key=position.get)
+    while key not in seen:
+        seen[key] = len(walk)
+        walk.append(key)
+        key = min((name for name in needs[key] if name in stuck), key=position.get)
+    cycle = walk[seen[key] :] + [key]
+
+    return (
+        f"components {' -> '.join(repr(name) for name in cycle)} form a "
+        f"dependency cycle: each one's declaration names the next, so none of "
+        f"them can be built first. A reference is resolved against the live "
+        f"system when the component carrying it is built, which is why the "
+        f"loop has no build order rather than merely an awkward one"
+    )
 
 
 def check_system_spec(spec):
@@ -1089,6 +3097,12 @@ def check_system_spec(spec):
     is checked HERE: a document from a future major is refused with its own
     number in the message, rather than half-built into a system whose shape
     nobody can explain.
+
+    The dependency cycle :func:`component_build_order` refuses is checked here
+    for the same reason: it is a property of the document alone, so a caller
+    validating a batch learns about it without raising a system, and
+    :func:`build_system` -- which opens on this function -- refuses one before
+    creating its first component rather than halfway through.
     """
     if not isinstance(spec, dict):
         raise SystemSpecError(
@@ -1105,6 +3119,12 @@ def check_system_spec(spec):
             f"muscadet, which reads {SYSTEM_SPEC_VERSION.split('.')[0]}.x"
         )
 
+    # Read for its refusal alone: a value that is not a boolean is a document
+    # whose author asked for something nobody can honour, and the engine that
+    # would refuse it next reports on its own vocabulary rather than on this
+    # document.
+    generated_indicators(spec)
+
     components = spec.get("components")
     if not isinstance(components, dict):
         raise SystemSpecError(
@@ -1112,6 +3132,24 @@ def check_system_spec(spec):
         )
     for name, comp_spec in components.items():
         check_spec(comp_spec)
+
+        # A mode names the components it affects, and nothing else in the
+        # document says whether they are there. Unchecked, a typo built the
+        # whole system and then failed inside cod3s' effect resolution, naming
+        # a variable rather than the target that does not exist.
+        if component_kind(comp_spec) == COMPONENT_KIND_TWO_STATE_MODE:
+            unknown = [
+                target
+                for target in comp_spec.get("targets") or []
+                if target not in components
+            ]
+            if unknown:
+                raise SystemSpecError(
+                    f"failure mode {name!r}: target(s) {unknown} are not "
+                    f"declared components"
+                )
+
+    component_build_order(components)
 
     for entry in spec.get("connections") or []:
         missing = [
@@ -1139,12 +3177,134 @@ def check_system_spec(spec):
             raise SystemSpecError(f"indicator {entry!r}: missing {missing}")
 
 
+def declared_events(spec):
+    """Every EVENT a system declaration holds, in the order the document writes.
+
+    The one place muscadet answers "does this name designate an event", and it
+    answers it from the DOCUMENT alone. That is what a sequence target needs:
+    the seam hands an engine a declaration and the targets of the run beside it
+    (:func:`muscadet.engine.run_targets`), so the question "is ``PANNE_OND`` an
+    event of this system" has to be answerable without a live system anywhere.
+
+    An event is recognised by the VOCABULARY its class speaks
+    (:data:`EVENT_VOCABULARY`), not by the spelling of the class name, so a
+    modeller's own subclass of ``cod3s.ObjEvent`` is one -- exactly as
+    :func:`failure_mode_component_spec` wrote it as one. The three families of
+    :data:`MODE_VOCABULARIES` are otherwise indistinguishable in a document:
+    all three are a :data:`COMPONENT_KIND_TWO_STATE_MODE`, and only this one
+    observes a condition, which is what a target reaches.
+
+    The kind is read from the key rather than through :func:`component_kind`,
+    because here an unreadable entry is not this function's to refuse: a
+    two-state mode always writes its kind out (the default is
+    :data:`COMPONENT_KIND_FLOW`), so the key is exact, and a ``cls`` naming no
+    known class is simply not an event. A declaration nobody can build is
+    :func:`check_system_spec`'s to refuse, with a message about the class --
+    where a refusal raised here would talk about a target instead.
+
+    Parameters
+    ----------
+    spec : dict
+        A system declaration, as :func:`system_spec` produces it.
+
+    Returns
+    -------
+    tuple of str
+        The names of the event components, in document order. Empty for
+        anything that is not a readable declaration, a system holding no event
+        and a document holding no ``components`` being the same answer here.
+    """
+    components = spec.get("components") if isinstance(spec, dict) else None
+
+    if not isinstance(components, dict):
+        return ()
+
+    events = []
+
+    for name, comp_spec in components.items():
+        if not isinstance(comp_spec, dict):
+            continue
+        if comp_spec.get(COMPONENT_KIND_KEY) != COMPONENT_KIND_TWO_STATE_MODE:
+            continue
+        try:
+            _, vocabulary = _mode_class(comp_spec.get("cls"), f"Component {name!r}")
+        except ComponentSpecError:
+            continue
+        if vocabulary is EVENT_VOCABULARY:
+            events.append(str(name))
+
+    return tuple(events)
+
+
+def declared_occurrence_state(spec, name):
+    """The state an event is IN once it has occurred, read from the DOCUMENT.
+
+    The other half of what a sequence target needs. :func:`declared_events`
+    says which names a document offers; this says what an engine has to watch
+    to know one of them was reached, and it says it from the document alone --
+    so the reference engine resolves a target exactly where a registered one
+    does, instead of reaching into the live component beside it.
+
+    **The state is a declaration and not a convention.** An event names its own
+    (``occ_state_name``), and a document writes only what someone decided, so
+    the key is absent on every event that kept the default. Reading the default
+    off :data:`EVENT_VOCABULARY` rather than spelling ``"occ"`` here is what
+    keeps the two ends of one declaration together: the day that default moves,
+    a target follows it instead of watching a state that no longer exists --
+    which is the silent campaign :data:`muscadet.engine.RUN_TARGETS` exists to
+    stop, reappearing one layer down.
+
+    Parameters
+    ----------
+    spec : dict
+        A system declaration, as :func:`system_spec` produces it.
+    name : str
+        The name of an event of that declaration.
+
+    Returns
+    -------
+    str
+
+    Raises
+    ------
+    SystemSpecError
+        When ``name`` designates no event of ``spec``. Raised rather than
+        defaulted: a caller asking for the occurrence state of something that
+        is not an event has already lost the thread, and answering ``"occ"``
+        would hand it a state to watch on a component that has none.
+    """
+    if name not in declared_events(spec):
+        raise SystemSpecError(
+            f"{name!r} is not an event of this declaration, so it has no "
+            f"occurrence state; the events it declares are "
+            f"{list(declared_events(spec)) or ['<none>']}"
+        )
+
+    comp_spec = spec["components"][name]
+
+    return str(
+        comp_spec.get("occ_state_name") or EVENT_VOCABULARY.defaults["occ_state_name"]
+    )
+
+
 def build_system(spec, system=None):
     """Build a whole system from a declaration held in data.
 
     Components first, then the wiring, then what is observed: the order is not
     a preference. A connection needs both ends to exist, and an indicator
     resolves against components that are already there.
+
+    **Among the components, the order is DERIVED and not read.** The key order
+    of a JSON object carries no meaning, so a component whose declaration names
+    another -- a mode conditioned on another mode, a mode acting on a target --
+    is built after the one it names, whatever order the document happens to be
+    written in. See :func:`component_build_order`.
+
+    That is also what a standalone failure mode needs of its targets: a mode
+    resolves every one of its effects against every target BEFORE creating a
+    single variable -- cod3s does that deliberately, so a typo fails cleanly
+    rather than leaving a half-built mode -- so a target built after the mode
+    that affects it would be resolved against nothing.
 
     Parameters
     ----------
@@ -1159,6 +3319,13 @@ def build_system(spec, system=None):
     Returns
     -------
     muscadet.System
+
+    Raises
+    ------
+    SystemSpecError
+        When the components' references form a cycle, and when a reference the
+        derived order did not see leaves a component unbuilt: both name the
+        components involved, where the engine names only a missing key.
     """
     check_system_spec(spec)
 
@@ -1167,8 +3334,44 @@ def build_system(spec, system=None):
 
         system = System(name=spec.get("name") or "system")
 
-    for name, comp_spec in spec["components"].items():
-        build_component(system, {**comp_spec, "name": comp_spec.get("name", name)})
+    # The DOCUMENT decides, including when it says nothing: a declaration
+    # carrying no :data:`GENERATED_INDICATORS` means false, and a system
+    # rebuilt from it must re-export false rather than the authoring default
+    # of the class, which would quietly upgrade what an old document observes.
+    system.generated_indicators = generated_indicators(spec)
+
+    for name in component_build_order(spec["components"]):
+        comp_spec = spec["components"][name]
+        try:
+            build_component(system, {**comp_spec, "name": comp_spec.get("name", name)})
+        except KeyError as error:
+            # The net under :data:`COMPONENT_REFERENCE_KEYS`. A reference key
+            # muscadet does not know about yet is invisible to the derived
+            # order, and the engine then resolves it through ``system.comp[...]``
+            # and raises a bare ``KeyError`` naming one component and nothing
+            # else -- not the document, not the component that referenced it,
+            # not the fact that the two are declared a few keys apart. Named
+            # here instead, and pointing at the one constant to extend.
+            #
+            # Narrow on purpose: the key has to name a component this document
+            # declares AND that is not in the system yet. Anything else is a
+            # KeyError of its own -- a rule naming a flow that does not exist,
+            # say -- and rewriting that one would replace a true message by a
+            # false diagnosis.
+            missing = error.args[0] if error.args else None
+            if not (
+                isinstance(missing, str)
+                and missing in spec["components"]
+                and missing not in (getattr(system, "comp", None) or {})
+            ):
+                raise
+            raise SystemSpecError(
+                f"component {name!r} names component {missing!r}, which this "
+                f"declaration carries but which is not built yet: the "
+                f"reference sits under a key muscadet does not count as one "
+                f"(known: {', '.join(sorted(COMPONENT_REFERENCE_KEYS))}). Add "
+                f"that key to COMPONENT_REFERENCE_KEYS so the build order sees it"
+            ) from error
 
     for entry in spec.get("connections") or []:
         flow = entry.get("flow")

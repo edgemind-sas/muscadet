@@ -22,6 +22,7 @@ What this file locks:
 - a purely discrete KB builds exactly what it built before the change.
 """
 
+import json
 import logging
 
 import pytest
@@ -1857,6 +1858,29 @@ class TestDischargeOnAVolumeWithNoWayOut:
         message = str(excinfo.value)
         assert "hopper" in message
         assert next(iter(extra)) in message
+        # The subject is built from what was declared, so the verb agrees with
+        # it: one key names one thing, and this message said "serve_rate
+        # govern" from the day it was written.
+        assert f"{next(iter(extra))} governs what a volume RELEASES" in message
+        assert message.endswith("or drop the field.")
+
+    def test_two_declared_keys_are_both_named_and_the_verb_follows(self):
+        # The other half of the agreement, and the most this list can hold.
+        # The muscadet-side twin of this refusal names the same two keys, and
+        # its wording is pinned in test_capacity_transmits_001.
+        payload = _accumulator_payload(
+            "Macc_inert_both",
+            capacity_extra={"serve_rate": 40.0, "serve_cond": [["H2"]]},
+        )
+        with pytest.raises(Cod3sPlatformImportError) as excinfo:
+            _build_kb_rule_sets(
+                payload["kb"],
+                _build_kb_lookup(payload["kb"]),
+                _build_kb_capacities(payload["kb"], _build_kb_lookup(payload["kb"])),
+            )
+        message = str(excinfo.value)
+        assert "serve_rate and serve_cond govern what a volume RELEASES" in message
+        assert message.endswith("or drop the fields.")
 
     def test_a_rule_consuming_the_held_flow_is_a_way_out(self):
         # R48: both sides honour the ceiling, a hopper releasing into its rules
@@ -2251,6 +2275,72 @@ class TestInstanceCapacityOverrides:
         )
         with pytest.raises(Cod3sPlatformImportError):
             parse_platform_export(payload)
+
+    def test_the_tuning_is_written_down_as_a_document_can_carry_it(self):
+        # The audit trail of what this instance was tuned to: one entry per
+        # override, named in full. It rides in ``metadata`` all the way into a
+        # system declaration, which is JSON, so it is keyed by strings.
+        payload = _two_instance_payload(
+            [
+                {"name": "tank", "role": CAPACITY_VOLUME_ROLE, "value": 12.0},
+                {"name": "tank", "role": CAPACITY_CONTENT_INIT_ROLE, "value": 3.0},
+            ],
+            [],
+            capacities=[{"name": "tank", "flows": "H2", "volume": 6.0}],
+            sys_name="Mov_trail",
+        )
+        ctx = parse_platform_export(payload)
+        tuned = next(comp for comp in ctx.components if comp.name == "C1")
+        assert tuned.metadata["capacity_overrides"] == [
+            {"name": "tank", "role": CAPACITY_CONTENT_INIT_ROLE, "value": 3.0},
+            {"name": "tank", "role": CAPACITY_VOLUME_ROLE, "value": 12.0},
+        ]
+        assert json.loads(json.dumps(tuned.metadata["capacity_overrides"])) == (
+            tuned.metadata["capacity_overrides"]
+        )
+        # And the trail describes a capacity that really was tuned.
+        assert tuned.capacities[0].volume == 12.0
+
+        # An untuned instance carries an empty trail, not None, so a reader
+        # can iterate without guarding.
+        untuned = next(comp for comp in ctx.components if comp.name == "C2")
+        assert untuned.metadata["capacity_overrides"] == []
+        assert untuned.capacities[0].volume == 6.0
+
+
+class TestDeclarationOfATunedSystem:
+    """The whole chain, in one process : export → import → declaration → JSON.
+
+    A capacity override used to reach ``comp.metadata`` keyed by the ``(name,
+    role)`` pair the importer looks capacities up by. The system built was
+    right; writing it out was not possible, and ``json.dumps`` said only
+    ``keys must be str, ... not tuple``.
+    """
+
+    def test_an_imported_system_carrying_overrides_writes_itself_out(
+        self, cleanup_system
+    ):
+        from muscadet.engine import system_declaration
+
+        payload = _two_instance_payload(
+            [{"name": "tank", "role": CAPACITY_VOLUME_ROLE, "value": 12.0}],
+            [],
+            capacities=[{"name": "tank", "flows": "H2", "volume": 6.0}],
+            sys_name="Mov_declared",
+        )
+        system = system_from_export(payload)
+        cleanup_system.append(system)
+
+        declaration = system_declaration(system)
+        assert json.loads(json.dumps(declaration)) == declaration
+
+        trail = declaration["components"]["C1"]["metadata"]["capacity_overrides"]
+        assert trail == [
+            {"name": "tank", "role": CAPACITY_VOLUME_ROLE, "value": 12.0},
+        ]
+        # The model is the one the override asked for, declaration or not.
+        assert system.comp["C1"].capacities["tank"].capacity == 12.0
+        assert system.comp["C2"].capacities["tank"].capacity == 6.0
 
 
 # ---------------------------------------------------------------------------

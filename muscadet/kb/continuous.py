@@ -384,6 +384,33 @@ class TransformerContinuous(ContinuousComponent):
 #: side each implies.
 CAPACITY_PORTS = {"both": "out", "in": "in", "out": "out"}
 
+#: And whether each of them TRANSITS, which ``side`` cannot say: ``"both"`` and
+#: ``"out"`` share the side ``"out"``, so a buffer and a reservoir came out of
+#: the exported document indistinguishable.
+#:
+#: Transit needs two ports, one to receive at and one to pass on to, and
+#: ``ports`` is exactly the declaration of which ports exist. A buffer has both
+#: and transits; a reservoir has no way in and an accumulator no way out, so
+#: neither has a through-path, whatever the volume holds. That this reproduces
+#: what muscadet already computes is not a coincidence and is measured: the
+#: empty branch of ``Capacity.serve_limit`` bounds itself by the inflow, which
+#: on a class declaring no input and no rule is zero.
+#:
+#: **Derived and never declared**, which is where this parts company with
+#: ``side`` and where a first cut got it wrong by taking the two for a pair.
+#: This class declares no rule, so the ports are the whole of the route
+#: through the volume and ``ports`` settles the question completely: an
+#: explicit value could only restate this table or contradict it. And a
+#: contradiction is not a modelling choice here, because muscadet's solver
+#: transits whatever the key says -- ``CapacityContinuous(ports="both",
+#: transmits=False)`` was accepted for a day, and measured, it served its
+#: consumer 1.0 while writing ``transmits: false`` into the document. That is
+#: the divergence between the two engines this whole field exists to close,
+#: written by the shipped class itself. ``ObjFlow.add_capacity`` keeps the key:
+#: a component that declares RULES has a route the ports do not show, and the
+#: platform importer needs it to write a reservoir.
+CAPACITY_TRANSMITS = {"both": True, "in": False, "out": False}
+
 
 class CapacityContinuous(ContinuousComponent):
     """A volume held over one or more continuous flows.
@@ -430,7 +457,10 @@ class CapacityContinuous(ContinuousComponent):
         ``"both"`` (default), ``"in"`` or ``"out"``.
     side : str, optional
         Side the capacity itself sits on. Defaults to the one ``ports``
-        implies.
+        implies, and unlike the transit below this one is a real choice: on
+        ``ports="both"`` the flow is carried on both sides, so placing the
+        volume upstream of the rules rather than downstream is something a
+        model may mean.
     demand : float, optional
         Demand claimed on every input, for an accumulator. Defaults to 0.
     control : str, optional
@@ -512,12 +542,17 @@ class CapacityContinuous(ContinuousComponent):
         ]
 
         if ports == "in" and commanded:
+            # The subject is built from what was actually declared, so the
+            # verb and the pronoun agree with it: a refusal a modeller reads
+            # is prose, and "serve_rate govern" is not.
+            keys = " and ".join(commanded)
+            alone = len(commanded) == 1
             raise ValueError(
-                "serve_rate and serve_cond govern what a capacity RELEASES. "
-                "An accumulator (ports='in') releases nothing: it declares no "
-                "output and no rule, so nothing would ever read them. Declare "
-                "ports='both' to give the volume a way out, or drop "
-                f"{' and '.join(commanded)}"
+                f"{keys} govern{'s' if alone else ''} what a capacity "
+                "RELEASES. An accumulator (ports='in') releases nothing: it "
+                "declares no output and no rule, so nothing would ever read "
+                f"{'it' if alone else 'them'}. Declare ports='both' to give "
+                f"the volume a way out, or drop {keys}"
             )
 
         entries = flow_declarations(
@@ -549,6 +584,7 @@ class CapacityContinuous(ContinuousComponent):
             ],
             capacity=kwargs.get("capacity"),
             side=kwargs.get("side", CAPACITY_PORTS[ports]),
+            transmits=CAPACITY_TRANSMITS[ports],
             content_init=kwargs.get("content_init"),
             fill_rate=float(kwargs.get("fill_rate", 0.0)),
             serve_rate=serve_rate,

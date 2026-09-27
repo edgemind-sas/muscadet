@@ -4,6 +4,306 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 5.7.0 (2026-09-27)
+
+A minor over 5.6.0: PyCATSHOO reads the system declaration like any other
+engine, plus two fixes (a mixture-drawn volume reads back after a run, and
+RAICHU's crossing-resolution deviation is closed in the conformance
+registry). A model written for 5.6.0 builds and runs unchanged.
+
+**A volume drawn by a mixture group reads back after a run.** The pre-run
+step binds each mixture group to the volume it draws by writing a
+`MixtureDraw` on that capacity's `mixture` field. The field is excluded from
+a dump, and the declaration reader treats every excluded field it does not
+know as a declaration, so `component_spec` refused the room of any system
+that had been started once: "field 'mixture' holds MixtureDraw, which cannot
+be written to a spec". The binding is derived from the CONSUMER's `mixtures`
+section and rebuilt at every pre-run, so it is now listed among the derived
+fields and a system reads back after a run to the spec it gave before.
+`tests/test_mixture_ventilation_001.py` pins it.
+
+**RAICHU honours the requested crossing resolution, so its deviation is
+closed.** The conformance registry recorded that RAICHU accepted `pdmp_dt`
+without reading it, meeting the floor of `continuous-crossing-resolution` by
+accident. pyraichu 0.49.0 reads the study's `pdmp_dt` as its
+`event_resolution`, the widest spacing it accepts between two points of its
+crossing scan, which is the floor that point defines. The entry is removed
+and RAICHU is listed among the engines honouring the point. Requires
+pyraichu 0.49.0 or later on the RAICHU side.
+
+**PyCATSHOO reads the declaration too, so the seam is verifiable from both
+sides.** A reference run emits the system declaration like a run on any other
+engine and reads its own configuration off it, which closes the asymmetry the
+multi-engine chantier was deliberately started with (ADR
+`SIMULATION_ENGINE/ADR-2026-09-08-muscadet-facade-portable-deux-moteurs`,
+decision 7).
+
+### What the asymmetry cost, and what replaces it
+
+While one engine alone crossed the document, **the document was not the
+semantics**: it was an output towards RAICHU, free to drift from what the
+reference engine actually ran, and nothing anywhere could notice. A campaign
+compares an engine with itself; a golden compares an engine with its own past.
+Neither sees two engines part company.
+
+What each engine received now **compares on a diff**, and that needs no replica,
+no seed and no horizon: `System.run_declaration` holds the document a reference
+run was read from, a registered engine is handed its own, and
+`tests/test_engine_document_parity_001.py` requires the two to be the same
+document for one model. The diff names the component and the field where they
+parted, which a difference of results never does.
+
+### Three doors, not two
+
+A reference run is opened one of three ways, and the third is the one a
+demonstration goes through: `cod3s.pycatshoo.isimu.engine.ISimuEngine.start` --
+what `isimu_start_cli` and the COD3S TUI drive -- calls
+`system.startInteractive()` directly and never touches `System.isimu_start`.
+The emission is hooked onto all three.
+
+**It was hooked onto the two wrappers first**, and that is worth recording
+because it is the same trap `System.prerun` fell into and is documented under,
+one layer up: a session opened by the TUI was then a reference run with **no
+document at all**, so there was nothing to compare with what the other engine
+received, on exactly the path a model is shown to a client. A hole on this door
+does not fail, it answers. `tests/test_engine_declaration_every_entry_001.py`
+is what holds the three doors to the claim, and goes red on five of its six
+tests when the primitive stops emitting.
+
+The wrapper path reaches the primitive, so it emits twice, for one extra read
+of the model. The two documents are asserted equal rather than assumed to be:
+the second emission happens after a target has been declared on the live
+system, and their agreement is what says a sequence target leaves the model
+alone.
+
+### Where a target is resolved, and by whom
+
+`System.declare_run_targets` resolves a run's targets against the **document**,
+through `muscadet.engine.run_targets`, exactly as the seam does — and the state
+each target latches on comes from the document too, through the new
+`muscadet.declare.declared_occurrence_state`. The two paths used to answer one
+question by looking in two places, the live components and the declaration, so
+the day they disagreed nothing would have compared them.
+
+### A document entry point for the reference engine
+
+`muscadet.reference_simulate(spec, ...)` and `muscadet.reference_isimu_start`
+build a PyCATSHOO system from a declaration and run it, which is the shape a
+registered engine's runner has. A caller holding a document reached RAICHU with
+one call and had to rebuild a system by hand for PyCATSHOO: the two engines were
+reached by two different gestures, and only one of them was a seam.
+
+### What is NOT refused, and why it is not a residual path
+
+**Emitting the document cannot refuse a run.** muscadet's declaration does not
+cover the whole of muscadet and is not meant to: a model holding a live Python
+object — an `allocation_fun`, a `Profile` whose factor is a function, a
+`Transfer` with no mapping form, a condition built on a PyCATSHOO variable — is
+refused by name, loudly, and that refusal is the format's declared boundary
+(ADR decision 3). Measured on this repository's own suite: **119 test modules
+run a reference campaign, 102 of them get a document**, and 23 hold at least one
+model that gets none — 19 for a live Python object, 4 for a logic gate.
+Refusing them here would take working models away from every muscadet user to
+buy a symmetry none of them asked for.
+
+Those runs therefore keep the lookup this method did for everything before the
+switch, and the refusal that explains them is kept rather than lost:
+`System.run_declaration_refusal` names the field. The sentence the seam makes
+true is *both engines receive the same document, or neither receives one* — a
+model no document describes is one RAICHU could not run either.
+
+**The pair carries an invariant, and it is tested on each of the three doors**:
+after a reference run, exactly one of `run_declaration` and
+`run_declaration_refusal` is set. That is what makes the broad refusal capture
+of `reference_declaration` readable — a document, or the reason there is none,
+never neither — and both at `None` says one thing only, that no reference run
+has happened.
+
+The four remaining refusals are a real gap rather than the boundary: a logic
+gate (`add_logic_or` / `add_logic_and`) is a component no declaration describes
+yet.
+
+### Measured, not assumed
+
+- the platform's reference corpus, 89 locks including the byte-for-byte results
+  goldens of both launchers and their cross-launcher agreement: **green, and 13
+  reference runs emitted a document, none refused**;
+- the living-oracle parity demos of `cod3s-raichu`, one per component shape plus
+  the run keyword: **artefacts identical before and after**, and the two that
+  refuse refuse identically on both sides, on a `pyraichu` pin gap that predates
+  this change;
+- emission cost: **35 ms for a 300-component system**, against a campaign
+  counted in seconds.
+
+## 5.6.0 (2026-09-17)
+
+A model declares whether it wants the **generated indicator set** -- one
+indicator per observable variable, named `{component}_{variable}` -- beside the
+indicators it declares itself. The key travels in the document, so it reaches
+whichever engine runs the model.
+
+### The reader came first, and it stays first for whoever pins
+
+**Order, and it is not a precaution.** A `pyraichu` carrying the reader of
+`generated_indicators` comes FIRST; a muscadet carrying this key comes after.
+That order was honoured here: `pyraichu` 0.28.0, whose `pyraichu/indicators.py`
+carries `GENERATED_INDICATORS` and the one reading of it, was published on
+2026-09-17 at 09:35 UTC, and this tag was cut after it.
+
+The constraint outlives the publication, because it binds whoever PINS as much
+as whoever releases. The key is written on every document muscadet exports, and
+the model level is an open vocabulary on both sides: measured on 2026-09-17
+against a pyraichu that predates the reader, a document asking for the
+generated set is accepted, the key is dropped without a word, and the study
+observes what that reader would have given it anyway. An installation that
+pins this muscadet beside a `pyraichu` older than 0.28.0 -- an engine pin left
+behind, or rolled back alone -- therefore fails silently rather than loudly:
+the engine simply ignores what the model asked for. Raise the `pyraichu` pin
+before this one, and lower it after.
+
+### A second reader is needed, and 0.28.0 does not carry it
+
+**0.28.0 reads this key and refuses every document that carries it**, which is
+every document muscadet has written since 5.4.0. muscadet writes a `mixtures`
+section on each component, and the reader refuses an unknown component key by
+name. Measured on 2026-09-17, on the published line and not on a tree of our
+own: `mixtures` appears **zero** times in `pyraichu/declare.py` at the public
+tags `v0.27.0` and `v0.28.0` and on `origin/main`, and a campaign run on the
+published wheel dies on
+
+```
+pyraichu.declare.ComponentSpecError: Component SRC: unknown declaration key
+'mixtures'; it accepts automata, capacities, cls, create_default_out_automata,
+description, failure_modes, flows, kind, label, measurements_in,
+measurements_out, metadata, name, params, rules, source_cls, transfers
+```
+
+So pinning this release beside `pyraichu` 0.28.0 does not give "the key read",
+it gives **no readable document at all**. That half is loud, where the one
+above is silent, and it is the obstacle of this sequence rather than a
+precaution about it: the reader of `mixtures` exists on the cod3s-raichu
+feature line and has never been published. Whoever raises these two pins
+verifies **both** readers inside the wheel, by its content and never by its
+version number.
+
+### Added
+
+- **`muscadet.declare.GENERATED_INDICATORS`** (`"generated_indicators"`), the
+  model-level key. Spelled exactly as `pyraichu.indicators.GENERATED_INDICATORS`
+  spells it, which is the point of declaring the intention rather than agreeing
+  on a convention.
+- **`muscadet.declare.generated_indicators(spec)`**, the one reading of that
+  key, and **`checked_generated_indicators(value)`** behind it. Only a genuine
+  boolean is honoured: `"false"` is true to Python and false to whoever wrote
+  it, so it is refused rather than resolved.
+- **`muscadet.System(name, generated_indicators=...)`** and the matching
+  property. `System` now overrides `__init__` because
+  `cod3s.PycSystem.__init__(self, name, **kwrds)` accepts and drops every
+  keyword it does not know: without the override, the keyword would have looked
+  like an API, done nothing, and said nothing.
+- **`muscadet.declare.GENERATED_INDICATORS_DEFAULT`** (`True`), what a system
+  wants when its author says nothing.
+
+### What is written, and what a document without the key means
+
+The key is written on **every** document, whatever its value, as `transmits` is
+on a capacity.
+
+What writing it only when it departs from the default would have saved was
+measured rather than assumed, and it is close to nothing: **no document of this
+format is versioned anywhere in the platform that consumes it.** Searched on
+2026-09-17 across three platform trees, every JSON file outside the
+environments, for one carrying `components` beside `connections`: none. The
+reference corpus holds the translator's own `*.study_yaml.json` and the result
+tables beside them, and the two locks that touch the declaration do not see a
+model-level key either (one compares an export to its own re-export, the other
+an artefact map indexed by component, flow and mode). What changes is one head
+key in each document produced on the fly, and no file anyone has to re-bless.
+
+What it would have cost is the silence this key exists to break: a reader in
+front of a document that says nothing, and a default it cannot see.
+
+A system says **true** when its author says nothing; a **document** without the
+key means **false**. The asymmetry is the one `pyraichu.muscadet.System`
+settled on for the other authoring surface of this format: a system built
+object by object is the muscadet authoring surface, whose models have always
+been observed variable by variable, so a false default here would have taken
+those observations away from every existing model, silently. A document is read
+as it is written.
+
+`build_system` puts what the document says back onto the system it builds,
+including when the document says nothing, so a 1.0.1 document rebuilt and
+re-exported does not quietly gain what it never asked for.
+
+### Measured
+
+A continuous model -- source, buffer volume, load -- exported by muscadet and
+run through `pyraichu.muscadet_engine`:
+
+| Document | Reader | Observations |
+| --- | --- | --- |
+| before this key existed | before the model key | 16 |
+| `generated_indicators: true` | with the model key | the same 16, same values |
+| `generated_indicators: false` | with the model key | 1, the declared one |
+| key absent | with the model key | 1, the declared one |
+
+And on the platform side, where nothing was expected to move and nothing does:
+a system built by `PlatformExportBuilder` from its `minimal_export.json`
+fixture exports `generated_indicators: true` at version `1.0.2`, one head key
+more in a document produced at run time. What reaches `indicators.csv` is built
+from the study's own indicator entries and not from what the engine emits, so a
+generated estimate adds no row there; an entry that used to pass with a `warn`
+for want of an estimate and now finds one is a catch-up towards the golden, not
+a drift.
+
+### Changed
+
+- **`SYSTEM_SPEC_VERSION` is 1.0.2.** An optional field carrying a default is a
+  patch: a reader that ignores the key builds exactly the system it built at
+  1.0.1, and a 1.0.1 document rebuilds here unchanged.
+
+## 5.5.0 (2026-09-17)
+
+A run declares the events it stops at, beside the document rather than inside
+it. This is also the first tag to carry both published lines: the ventilated
+mixture of 5.4.0 and the 5.2.0 to 5.3.1 line it had been cut away from.
+
+### Added
+
+- **`muscadet.engine.RUN_TARGETS`** (`"targets"`), the one run parameter the
+  seam spells. `system.simulate({...}, engine=..., targets=[...])` and
+  `isimu_start` take it alike, and it reaches PyCATSHOO through
+  `System.declare_run_targets` and its `addTarget`.
+- **`muscadet.engine.RunTargetError`**, the typed refusal. Names are checked
+  against `muscadet.declare.declared_events` before any engine is reached, and
+  a name that designates something else is refused for what it designates
+  rather than reported missing.
+
+### A parameter of the run, not a section of the declaration
+
+`system_spec` is unchanged: a declaration still carries no `targets` section,
+and a model that names none exports exactly what it exported before. What a run
+stops at belongs to the run, because two campaigns over one model must be free
+to disagree about it.
+
+### The two lines are joined
+
+5.4.0 was cut from the 5.1.0-era base and knew nothing of 5.2.0 through 5.3.1:
+no `muscadet/engine.py`, so no interface over more than one engine and no
+system declaration into JSON, and an embedded cod3s ref still at 1.16.1. A
+consumer pinning muscadet 5.4.0 beside cod3s 1.17.0 got uv's `conflicting URLs
+for package cod3s` and could pin neither. That is the 5.3.0 accident, one
+number higher, and it left `add_mixture_in` published but unreachable.
+
+Nothing is dropped to repair it. `add_mixture_in` arrives here whole, with its
+own tests, and the embedded cod3s ref stays at 1.17.0. The merge of the two
+lines touched the two release files only, `CHANGELOG.md` and
+`muscadet/version.py`; every other file merged without conflict.
+
+Validated by the full suite on the merged tree: 1934 passed, 2 skipped, against
+1906 passed on the run-targets line alone and the 28 tests the mixture line
+brings with it.
+
 ## 5.4.0 (2026-09-15)
 
 A volume holding several constituents can be **ventilated**: a machine declares
@@ -94,6 +394,174 @@ key.
 A machine that carries its draw onward. Bounding the volumetric rate by what the
 machine can place needs its downstream demand to reach the volume that holds the
 composition, which is a mechanism of its own.
+
+## 5.3.1 (2026-09-12)
+
+Maintenance over 5.3.0: one line of `pyproject.toml`, no muscadet code and no
+muscadet behaviour. The embedded cod3s ref moves from 1.16.1 to 1.17.0.
+
+It exists for the reason 5.2.1 existed over 5.2.0, and it is the same line: a
+downstream consumer cannot raise its own cod3s ref above the one muscadet
+embeds, uv refusing to resolve two URLs for the same package, so the two pins
+move together or neither does. What the consumer gains is
+`SimulationConfig.pdmp_dt`, the base integration step of the continuous solver,
+instead of running on PyCATSHOO's own 0.01.
+
+5.3.0 carried 1.16.1 because it was cut from 5.2.0 and the bump lived on
+`maint/5.2.x`. That left the declaration of a standalone mode and the
+integration step on two branches no tag joined, so a consumer had to choose one
+or the other. This release joins them, and is the first tag to carry both.
+
+Validated by running the 5.3.0 suite unchanged against cod3s 1.17.0: 1806
+passed, 2 skipped.
+
+## 5.3.0 (2026-09-12)
+
+A system declaration now comes out of every system muscadet can build, and
+goes into JSON. Two shapes stopped it before, and both are ordinary rather
+than exotic: a component that holds no flow, which is what a mode declared on
+its own is, and an audit trail keyed by a pair, which is what the COD3S
+Platform importer wrote on every component it built.
+
+### It is cut from 5.2.0, not from 5.2.1
+
+5.2.1 is a maintenance release on `maint/5.2.x`: one line of `pyproject.toml`,
+moving the embedded cod3s ref from 1.16.1 to 1.17.0, no muscadet code. This
+release does not carry it. It is cut from the branch the declaration was built
+on, whose cod3s ref is still 1.16.1, and a consumer has to pin cod3s to the
+same ref as the one embedded here -- uv refuses to resolve two URLs for the
+same package. So the choice is not "which cod3s is newer" but "which cod3s the
+consumer pins", and the consumer this release exists for pins 1.16.1. What
+1.17.0 adds is `SimulationConfig.pdmp_dt`, the base integration step of the
+continuous solver; whoever needs it moves both refs together, one commit away.
+
+### Added
+
+- **A two-state mode declared as a component declares itself.** `system_spec`
+  iterated `flows_in` over everything `system.comp` held, and such a mode
+  holds none: two of the six interactive examples died on `AttributeError:
+  'ObjFMDelay' object has no attribute 'flows_in'`, from inside a dict
+  comprehension, before any engine saw anything. `component_spec` now
+  dispatches on what the object IS -- `muscadet.ObjFlow`, `cod3s.ObjMode2S`
+  and its subclasses, `cod3s.ObjEvent` -- and refuses anything else by a
+  message naming the class. A standalone mode gets its OWN entry rather than
+  being skipped: a mode declared ON a component is already written into that
+  component's `failure_modes`, but a standalone one is recorded nowhere else,
+  so skipping it would lose the model and not the decoration (`cyber_3comp`
+  would declare three components and none of the compromise cascade that IS
+  the example).
+- **`cod3s.ObjEvent` declares itself too, comparison included.** The platform
+  translator synthesises one per study event and one per indicator whose
+  formula has more than one clause, so it is not a corner of the corpus. The
+  six comparisons it compiles to are `operator` module singletons, so identity
+  gives the spelling back exactly. `cod3s.ObjDegMode` stays refused by name:
+  it holds a list of states rather than two, and no vocabulary fits it.
+- **`kind` says which shape an entry is**, and its value for a mode is
+  `two_state_mode` (`COMPONENT_KIND_TWO_STATE_MODE`). It covers three families
+  -- `cod3s.ObjEvent`, the `cod3s.ObjFM` family and `cod3s.ObjMode2S` -- and
+  only the middle one is a failure, so the value names the two states the
+  three share rather than the nature of the most common one. Not `mode` nor
+  `standalone_mode`: both would collide with `ObjDegMode`, whose constructor
+  is not this one. No release ever published another spelling.
+- **`component_build_order` and `component_references`** on the package
+  surface, so a caller validating a batch reads the function the build reads.
+
+### Changed
+
+- **The COD3S Platform importer writes its three override audit trails as
+  documents.** `instance_overrides`, `capacity_overrides` and
+  `controller_threshold_overrides` were keyed by the `(name, role)` pair the
+  apply layer looks a flow, a capacity or a threshold up by. No JSON object is
+  keyed by a pair, so the declaration of ANY imported model stopped at
+  `json.dumps`. Each bag is now a sorted LIST of `{"name", "role", "value"}`
+  entries. The INTERNAL index is untouched and stays keyed by the pair, which
+  is what makes the change small: not one model built changes. **BREAKING for
+  a reader of those three metadata keys**, a mapping becomes a list; there is
+  no such reader inside muscadet.
+
+### Fixed
+
+- **What muscadet reads back is a document, and it is checked as one.** A
+  mapping keyed by a tuple walked through every per-field gate, because every
+  VALUE under such a key serialises perfectly well, and died at the moment the
+  declaration was written, on a `TypeError` naming a type and neither the
+  component nor the field. `_checked_document` states the guarantee once, on
+  the two read-back entry points, and names the path
+  (`$.components.Rail_1.metadata.instance_overrides`). An integer key is
+  refused too, though `json` accepts it: it comes back a string, so what is
+  read is not what was written.
+- **A declaration rebuilds in any key order.** The key order of a JSON object
+  carries no meaning, and a Rust reader over a `BTreeMap` sorts -- which is
+  exactly the path this declaration exists for. A mode whose `occ_cond` names
+  another mode's state needs that mode to exist at construction, so sorted
+  order put the six referencing modes ahead of the six referenced ones and the
+  rebuild died on a `KeyError` naming nothing. `build_system` now DERIVES the
+  order from what each declaration names, keeping the document's own order
+  wherever the references leave it free. A cycle is refused by the names that
+  form it, from `check_system_spec`, before the first component is created.
+
+## 5.2.0 (2026-09-09)
+
+muscadet becomes a modelling interface over more than one engine, and says
+where an engine does what it defines but does it OTHERWISE. Additive on every
+side: a run that names no engine takes the reference path it has always taken,
+and nothing inside the package reads the new registry.
+
+This release is also the first tag carrying the system declaration merged on
+`master` after 5.1.0 was cut from a side branch.
+
+### Added
+
+- **An engine seam**, `muscadet.engine`. An engine registers itself by calling
+  `register_engine`, or by advertising a `muscadet.engines` entry point its
+  distribution carries, and a run selects one by name:
+  `system.simulate(params, engine="raichu")`. The entry-point route is what
+  removes the last import from the CALLER too, so the choice of engine is a
+  setting rather than a line of code. What crosses the seam is the SYSTEM
+  DECLARATION and never the live system, with run parameters travelling beside
+  that document rather than inside it. The reference engine is not a plugin:
+  naming `pycatshoo`, or naming nothing, takes the direct path `System` has
+  always taken, and registering under that name is refused.
+- **A conformance registry**, `muscadet.conformance`. Four semantic points,
+  each with the rule muscadet settles on, why, and where it was settled; and
+  one entry per engine that departs from it, with what the engine does
+  instead, what it costs, and what -- if anything -- restores muscadet's
+  meaning before a result is read. Both engines appear on both sides of the
+  line: PyCATSHOO fails the first point (it observes an instant BEFORE the
+  transitions due at it are resolved), RAICHU honours that one and fails the
+  three interactive ones. Consultable with no platform, no model and no run:
+  `python -m muscadet.conformance raichu`.
+- **A system declares itself**, `muscadet.declare`: `system_spec`,
+  `check_system_spec` and `build_system`. `component_spec` already read a
+  component back; what no component knows is how it is wired and what is
+  observed, which are exactly what stops a declaration from being a system.
+  The document carries a semver version, refused by major rather than
+  half-read.
+
+### The two registries answer two questions
+
+The conformance registry is NOT the capability matrix. The matrix says what an
+engine knows how to do and guards a launch; this registry says where it does
+it otherwise and guards nothing. They answer an unknown engine in opposite
+directions, which is the shortest proof they are different objects: the matrix
+answers "covers nothing", this one answers "nothing to report", and says so
+through `is_assessed` rather than letting an empty tuple pass for a clean bill
+of health.
+
+That it cannot refuse a launch is structural rather than promised. Nothing
+inside muscadet imports the module: the package `__getattr__` binds it on
+first ACCESS (PEP 562), so importing muscadet does not even load it. Two tests
+assert it, one by source walk and one by `sys.modules` in a subprocess.
+
+### muscadet still imports no engine
+
+The seam knows no engine name, and a test keeps it that way: the package is
+parsed and any import beyond its declared dependencies fails it, including one
+reached through `importlib.import_module`. It is written as an ALLOWLIST
+rather than as a denylist of engine names, so it also refuses the third engine
+nobody has written yet. A third engine adds its own conformance record through
+`register_deviation` / `assess_engine`; what it cannot do is author the points
+it is judged on, or the registry becomes self-certification.
 
 ## 5.1.0 (2026-09-07)
 

@@ -318,8 +318,11 @@ class TestEndToEndOverrides:
             )
         )
         comp = ctx.components[0]
-        # Traceability: instance_overrides bag carries the raw map
-        assert comp.metadata["instance_overrides"] == {("in_a", "logic_in"): "2"}
+        # Traceability: instance_overrides names each override in full, one
+        # entry per (name, role) pair, under keys a JSON object can carry.
+        assert comp.metadata["instance_overrides"] == [
+            {"name": "in_a", "role": "logic_in", "value": "2"},
+        ]
         # And the raw attributes_initial list is preserved verbatim
         assert comp.metadata["attributes_initial"] == [
             {"name": "in_a", "role": "logic_in", "value": "2"},

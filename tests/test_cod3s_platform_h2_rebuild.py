@@ -298,6 +298,7 @@ def capacity_shape(comp):
         name: {
             "volume": capacity.capacity,
             "side": capacity.side,
+            "transmits": capacity.transmits,
             "content_init": dict(capacity.content_init),
             "fill_rate": capacity.fill_rate,
             "flows": [
@@ -420,6 +421,28 @@ def test_the_declaration_reads_back_identically(both):
             spec.pop("source_cls")
             spec.pop("metadata", None)
         assert right == left, name
+
+
+def test_the_battery_and_the_tank_are_told_apart_by_more_than_their_ports(both):
+    """The two volumes of the plant sit on the same side and are not the same.
+
+    ``B1`` is a reservoir and ``Local`` a buffer, and before ``transmits`` the
+    document said ``side="out"`` of both: an engine reading it back either knew
+    the convention that an input flow of the same name means a through-path, or
+    fed nothing to whatever stood downstream of the tank.
+
+    Read on BOTH builds, which is the whole point here: the shipped class
+    derives the key from its ``ports``, the importer from the interfaces and
+    the rules of the class, and the two derivations have to land on the same
+    answer or the document depends on how the model was declared.
+    """
+    for build in both:
+        battery = build["structure"]["B1"]["spec"]["capacities"][0]
+        tank = build["structure"]["Local"]["spec"]["capacities"][0]
+
+        assert battery["side"] == tank["side"] == "out"
+        assert battery["transmits"] is False
+        assert tank["transmits"] is True
 
 
 def test_the_derating_variables_were_preallocated(both):
