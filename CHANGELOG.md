@@ -6,6 +6,17 @@ reconstructing them.
 
 ## Unreleased
 
+**A volume drawn by a mixture group reads back after a run.** The pre-run
+step binds each mixture group to the volume it draws by writing a
+`MixtureDraw` on that capacity's `mixture` field. The field is excluded from
+a dump, and the declaration reader treats every excluded field it does not
+know as a declaration, so `component_spec` refused the room of any system
+that had been started once: "field 'mixture' holds MixtureDraw, which cannot
+be written to a spec". The binding is derived from the CONSUMER's `mixtures`
+section and rebuilt at every pre-run, so it is now listed among the derived
+fields and a system reads back after a run to the spec it gave before.
+`tests/test_mixture_ventilation_001.py` pins it.
+
 **RAICHU honours the requested crossing resolution, so its deviation is
 closed.** The conformance registry recorded that RAICHU accepted `pdmp_dt`
 without reading it, meeting the floor of `continuous-crossing-resolution` by

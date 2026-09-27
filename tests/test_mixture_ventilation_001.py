@@ -21,6 +21,8 @@ The total is NOT conserved here: it grows by ``q``. The share plateau
 
 import math
 
+import json
+
 import cod3s
 import pytest
 
@@ -719,6 +721,30 @@ def test_a_group_survives_the_spec_round_trip():
         import json
 
         json.dumps(spec)
+    finally:
+        system.deleteSys()
+
+
+def test_a_bound_volume_still_reads_back():
+    """The pre-run binding is derived, so a spec read after a run carries none of it.
+
+    ``resolve_mixture_groups`` writes a ``MixtureDraw`` on the room's capacity.
+    It is rebuilt from the consumer's ``mixtures`` section at every pre-run, so
+    reading a system back after a simulation must give the spec it gave before,
+    not refuse the room because of a binding nobody declared.
+    """
+    system = build(MxFan)
+    try:
+        before = muscadet.component_spec(system.comp["ROOM"])
+        system.prerun()
+
+        capacity = system.comp["ROOM"].capacities["room"]
+        assert isinstance(capacity.mixture, muscadet.MixtureDraw)
+
+        after = muscadet.component_spec(system.comp["ROOM"])
+        assert after == before
+        assert all("mixture" not in entry for entry in after["capacities"])
+        json.dumps(after)
     finally:
         system.deleteSys()
 
