@@ -35,12 +35,14 @@ dependencies = [
     # an interactive session cannot advance a model whose continuous variables
     # are the only thing moving; and, from 1.17.0, SimulationConfig.pdmp_dt,
     # which lets a study set the base integration step of the continuous
-    # solver instead of running on PyCATSHOO's own default).
+    # solver instead of running on PyCATSHOO's own default; and, from 1.17.1,
+    # an inst draw of probability 1 built as a single branch, without which
+    # PyCATSHOO refuses to start any system carrying such a mode).
     #
     # This pin is also why a maintenance release can exist over nothing else:
     # a downstream consumer cannot raise its own cod3s ref above the one
     # muscadet embeds, uv refusing to resolve two URLs for the same package.
-    "cod3s @ git+https://github.com/edgemind-sas/cod3s.git@1.17.0",
+    "cod3s @ git+https://github.com/edgemind-sas/cod3s.git@1.17.1",
     "graphviz==0.20.1",
 ]
 
