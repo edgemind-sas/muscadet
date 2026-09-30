@@ -392,19 +392,14 @@ def test_the_interactive_divergence_is_written_down(point_name):
 
 
 @pytest.mark.parametrize("point_name", CR_INTERACTIVE_POINTS)
-def test_the_interactive_divergence_says_the_library_user_is_uncovered(point_name):
-    """The compensation names where it lives, and where it does not.
-
-    The load-bearing half of the entry, and the reason the registry is held
-    library side at all: the platform's worker absorbs these three, so a
-    platform user never meets them and a Python user meets nothing else. An
-    entry that stopped at "compensated" would warn precisely the audience it
-    does not concern.
-    """
+def test_interactive_compensation_names_the_explicit_native_policy(point_name):
+    """Automatic-policy deviations remain readable for direct library users."""
     deviation = conformance.deviations(ENGINE_RAICHU, point_name)[0]
 
     assert deviation.compensation is not None
-    assert "Nothing compensates it for a library user" in deviation.compensation
+    assert "pyraichu >=0.72.0" in deviation.compensation
+    assert "operator" in deviation.compensation
+    assert "default automatic" in deviation.compensation.lower()
 
 
 def test_the_advance_to_a_date_entry_says_why_it_is_not_a_matrix_line():

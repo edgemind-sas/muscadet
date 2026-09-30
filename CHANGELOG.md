@@ -4,6 +4,18 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 5.8.0 (2026-09-30)
+
+- Combinational `ObjLogicGate` components now cross the portable declaration
+  seam, including OR, AND, k-of-n, empty conditions and gate chains. Read-back
+  retains source declarations before their engine resolution; rebuilding uses
+  the existing component dependency order.
+- Gate declarations distinguish `kind="logic_gate"` from `logic_kind`, the
+  Boolean operator. Conditions use explicit source variables and equality.
+- Document native RAICHU >=0.72.0 operator-control compensation for the three
+  interactive deviations; the default automatic policy retains its differences.
+- Pin COD3S 1.18.0 for producer-owned simulation campaign counters.
+
 ## 5.7.0 (2026-09-27)
 
 A minor over 5.6.0: PyCATSHOO reads the system declaration like any other

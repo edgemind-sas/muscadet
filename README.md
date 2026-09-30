@@ -2805,3 +2805,28 @@ See `tests/test_importer_cod3s_platform_*` for the full behaviour
 specification and `tests/fixtures/` for sample inputs.
 
 
+
+
+## Portable combinational gates
+
+`ObjLogicGate` reads named source variables and exports its boolean `result`,
+without an automaton. `system_spec()` retains its `cond` and `out_elements`;
+`build_system()` resolves source dependencies before constructing each gate.
+The declaration uses `kind="logic_gate"` and `logic_kind="or"`, `"and"` or `"k"`
+(the constructor continues to use `kind` for the Boolean operator).
+
+```python
+spec = {
+    "name": "Voter", "kind": "logic_gate", "cls": "ObjLogicGate",
+    "logic_kind": "k", "k": 2,
+    "cond": [[{"obj": source, "attr": "feed_fed_out", "value": True}]
+             for source in ["Source1", "Source2", "Source3"]],
+    "out_elements": ["feed"],
+}
+```
+
+Each clause is a conjunction; OR, AND and k aggregate the clause verdicts.
+An empty condition yields false for OR and k, true for AND. `k` is a positive
+integer; a threshold greater than the clause count always yields false.
+Portable conditions compare named variables by equality only. Unknown keys,
+missing sources and duplicate output elements are refused by name.

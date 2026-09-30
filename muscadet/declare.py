@@ -114,6 +114,7 @@ from .obj_ctrl import (
     ObjCtrl,
     build_ctrl_node,
 )
+from .obj_logic import ObjLogicGate
 from .profile import PROFILE_CLASSES, Profile
 from .transfer import TRANSFER_CLASSES, Transfer
 
@@ -273,7 +274,11 @@ COMPONENT_KIND_TWO_STATE_MODE = "two_state_mode"
 #: sections :data:`DECLARATION_SECTIONS` already records the order of.
 COMPONENT_KIND_CONTROLLER = "controller"
 
+#: An automaton-free combinational OR, AND or k-of-n gate.
+COMPONENT_KIND_LOGIC_GATE = "logic_gate"
+
 COMPONENT_KINDS = (
+    COMPONENT_KIND_LOGIC_GATE,
     COMPONENT_KIND_FLOW,
     COMPONENT_KIND_TWO_STATE_MODE,
     COMPONENT_KIND_CONTROLLER,
@@ -1242,11 +1247,14 @@ def check_spec(spec):
     carries.
 
     Dispatches on :func:`component_kind`, so the caller validating a batch does
-    not have to sort the three shapes itself -- and, more to the point, does
+    not have to sort the four shapes itself -- and, more to the point, does
     not get an ObjFlow's key list quoted at a declaration that never claimed to
     be one.
     """
     kind = component_kind(spec)
+
+    if kind == COMPONENT_KIND_LOGIC_GATE:
+        return check_logic_gate_spec(spec)
 
     if kind == COMPONENT_KIND_TWO_STATE_MODE:
         return check_failure_mode_spec(spec)
@@ -1310,6 +1318,9 @@ def build_component(system, spec):
     a component built twice or one never wired to the engine.
     """
     kind = component_kind(spec)
+
+    if kind == COMPONENT_KIND_LOGIC_GATE:
+        return build_logic_gate_component(system, spec)
 
     if kind == COMPONENT_KIND_TWO_STATE_MODE:
         return build_failure_mode_component(system, spec)
@@ -1438,6 +1449,125 @@ def build_component(system, spec):
     return comp
 
 
+LOGIC_GATE_KEYS = frozenset(
+    {
+        "name",
+        "kind",
+        "cls",
+        "source_cls",
+        "label",
+        "description",
+        "metadata",
+        "logic_kind",
+        "k",
+        "cond",
+        "out_elements",
+    }
+)
+
+
+def check_logic_gate_spec(spec):
+    """Validate a portable combinational gate without creating engine objects."""
+    name = spec.get("name")
+    where = f"Logic gate {name}"
+    if not isinstance(name, str) or not name:
+        raise ComponentSpecError(f"{where}: 'name' must be a nonempty string")
+    unknown = set(spec) - LOGIC_GATE_KEYS
+    if unknown:
+        raise ComponentSpecError(f"{where}: unknown keys {sorted(unknown)}")
+    if spec.get("cls", "ObjLogicGate") != "ObjLogicGate":
+        raise ComponentSpecError(f"{where}: cls must be 'ObjLogicGate'")
+    try:
+        ObjLogicGate._resolve_logic(spec.get("logic_kind", "or"), spec.get("k"))
+    except ValueError as error:
+        raise ComponentSpecError(f"{where}: {error}") from error
+    cond = spec.get("cond", [])
+    if not isinstance(cond, (dict, list)):
+        raise ComponentSpecError(f"{where}: cond must be a mapping or list")
+    from cod3s.pycatshoo.common import sanitize_cond_format
+
+    try:
+        groups = sanitize_cond_format(cond)
+    except ValueError as error:
+        raise ComponentSpecError(f"{where}: {error}") from error
+    for group in groups:
+        for leaf in group:
+            if set(leaf) - {"obj", "attr", "value", "ope"}:
+                raise ComponentSpecError(f"{where}: unsupported cond leaf {leaf!r}")
+            for key in ("obj", "attr"):
+                if not isinstance(leaf.get(key), str) or not leaf[key]:
+                    raise ComponentSpecError(f"{where}: cond {key} must name a source")
+            if leaf.get("ope", "==") != "==":
+                raise ComponentSpecError(f"{where}: cond comparisons use equality only")
+            if not isinstance(leaf.get("value", True), (bool, int, float)):
+                raise ComponentSpecError(
+                    f"{where}: cond value must be boolean or numeric"
+                )
+    outputs = spec.get("out_elements", [])
+    if not isinstance(outputs, list) or any(
+        not isinstance(item, str) or not item for item in outputs
+    ):
+        raise ComponentSpecError(f"{where}: out_elements must list nonempty names")
+    if len(outputs) != len(set(outputs)):
+        raise ComponentSpecError(f"{where}: duplicate out_elements")
+    _checked_declaration(spec, where)
+    return name
+
+
+def build_logic_gate_component(system, spec):
+    """Build a portable gate after its named source components exist."""
+    name = check_logic_gate_spec(spec)
+    if name in system.comp:
+        raise ComponentSpecError(f"Logic gate {name}: component already exists")
+    from cod3s.pycatshoo.common import prepare_attr_tree, sanitize_cond_format
+
+    groups = sanitize_cond_format(copy_declaration(spec.get("cond", [])))
+    for group in groups:
+        for leaf in group:
+            try:
+                prepare_attr_tree([[leaf]], system=system)
+            except (KeyError, ValueError) as error:
+                raise ComponentSpecError(
+                    f"Logic gate {name}: cannot resolve source "
+                    f"{leaf['obj']}.{leaf['attr']}: {error}"
+                ) from error
+    return system.add_component(
+        name=name,
+        cls="ObjLogicGate",
+        kind=spec.get("logic_kind", "or"),
+        k=spec.get("k"),
+        cond=copy_declaration(spec.get("cond", [])),
+        out_elements=list(spec.get("out_elements", [])),
+        label=spec.get("label"),
+        description=spec.get("description"),
+        metadata=copy_declaration(spec.get("metadata", {})),
+    )
+
+
+def logic_gate_component_spec(comp):
+    """Read retained gate declarations, never resolved engine handles."""
+    spec = {
+        "name": comp.basename(),
+        "kind": COMPONENT_KIND_LOGIC_GATE,
+        "cls": "ObjLogicGate",
+        "source_cls": type(comp).__name__,
+        "logic_kind": comp.logic_kind,
+        "k": comp.logic_k,
+        "cond": copy_declaration(comp._logic_gate_cond),
+        "out_elements": list(comp._logic_gate_out_elements),
+    }
+    if comp.label != comp.basename():
+        spec["label"] = comp.label
+    if comp.description != comp.label:
+        spec["description"] = comp.description
+    if comp.metadata:
+        spec["metadata"] = _checked_declaration(
+            comp.metadata, f"Logic gate {comp.basename()}"
+        )
+    check_logic_gate_spec(spec)
+    return spec
+
+
 def component_spec(comp):
     """Read a live component back into a declaration, whatever kind it is.
 
@@ -1476,6 +1606,9 @@ def component_spec(comp):
         When a declaration holds something no mapping can carry, or when the
         component is of a kind no declaration describes.
     """
+    if isinstance(comp, ObjLogicGate):
+        return logic_gate_component_spec(comp)
+
     if isinstance(comp, cod3s.ObjMode2S):
         return failure_mode_component_spec(comp)
 

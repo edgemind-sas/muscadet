@@ -4,6 +4,7 @@ import cod3s
 import Pycatshoo as Pyc
 from cod3s.pycatshoo.common import prepare_attr_tree, sanitize_cond_format
 
+from .common import copy_declaration
 from .obj import ObjFlow
 
 
@@ -96,14 +97,14 @@ class ObjLogicGate(cod3s.PycComponent):
     def __init__(self, name, cond=None, out_elements=None, kind="or", k=None, **kwargs):
         super().__init__(name, **kwargs)
 
+        self._logic_gate_cond = copy_declaration(sanitize_cond_format(cond or []))
+        self._logic_gate_out_elements = list(out_elements or [])
         self.logic_kind = kind
         self.logic_k = k
         self.result = self.addVariable("result", Pyc.TVarType.t_bool, False)
 
         inner_logic, outer_logic = self._resolve_logic(kind, k)
-        cond_bis = prepare_attr_tree(
-            sanitize_cond_format(cond or []), system=self.system()
-        )
+        cond_bis = prepare_attr_tree(self._logic_gate_cond, system=self.system())
 
         def recompute():
             value = outer_logic(

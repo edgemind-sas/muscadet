@@ -51,11 +51,11 @@ modeller writing a model in Python, with no platform anywhere, runs into the
 same convention and deserves the same warning -- and gets it here, from
 :func:`describe`, without building a system or running a single replica.
 
-That is not a theoretical audience. The three interactive entries below are
-compensated today by the COD3S Platform's interactive worker, so they never
-reach a platform user. A library user driving the same engine directly gets no
-such compensation, and is therefore the ONLY one who meets them. Held platform
-side, the registry would warn exactly the people it does not concern.
+The three interactive entries below describe RAICHU's default automatic
+policy. Since pyraichu 0.72.0, a library caller can instead request the native
+operator policy through ``isimu_start_on(..., operator_control=True)``. The
+registry describes that explicit compensation without claiming qualification
+of every platform consumer.
 
 Kept import-light on purpose (pydantic and nothing else): a registry that has
 to load an engine to be read is a registry nobody reads before choosing one.
@@ -374,11 +374,15 @@ DEVIATIONS: typing.Final[typing.Tuple[Deviation, ...]] = (
             "instead, to a drawn date."
         ),
         compensation=(
-            "The COD3S Platform's interactive worker, by hand. Nothing "
-            "compensates it for a library user driving this engine directly."
+            "pyraichu >=0.72.0: request operator_control=True through "
+            "muscadet.engine.isimu_start_on. The native operator policy leaves "
+            "armed stochastic transitions undated until explicitly planned; "
+            "it suspends probabilistic branch choices for the operator. The "
+            "default automatic policy retains this deviation."
         ),
         source=(
-            "COD3S Platform SIMULATION_ENGINE/COMPARAISON-MOTEURS, section 8 "
+            "RAICHU >=0.72.0 native operator session API; automatic-policy "
+            "deviation established in COD3S Platform COMPARAISON-MOTEURS "
             "(2026-09-08)"
         ),
     ),
@@ -395,11 +399,14 @@ DEVIATIONS: typing.Final[typing.Tuple[Deviation, ...]] = (
             "be seen in a configuration its Monte-Carlo runs never visit."
         ),
         compensation=(
-            "The COD3S Platform's interactive worker, by hand. Nothing "
-            "compensates it for a library user driving this engine directly."
+            "pyraichu >=0.72.0: operator_control=True closes the deterministic "
+            "transitions at the reached event instant before reporting it. "
+            "Unresolved probabilistic choices remain explicit. The default "
+            "automatic single-transition step retains this deviation."
         ),
         source=(
-            "COD3S Platform SIMULATION_ENGINE/COMPARAISON-MOTEURS, section 8 "
+            "RAICHU >=0.72.0 native operator session API; automatic-policy "
+            "deviation established in COD3S Platform COMPARAISON-MOTEURS "
             "(2026-09-08)"
         ),
     ),
@@ -421,12 +428,17 @@ DEVIATIONS: typing.Final[typing.Tuple[Deviation, ...]] = (
             "registry is for."
         ),
         compensation=(
-            "The COD3S Platform's interactive worker, by hand. Nothing "
-            "compensates it for a library user driving this engine directly."
+            "pyraichu >=0.72.0: the native operator session provides "
+            "advance_operator_to(date, max_events=64). It reports the requested "
+            "and reached times and stops at the first event instant, choice, "
+            "target date or incomplete instant. The caller resumes after "
+            "inspecting the reported stop; no Python scheduling emulation is "
+            "required. The default automatic policy retains this deviation."
         ),
         source=(
-            "COD3S Platform SIMULATION_ENGINE/COMPARAISON-MOTEURS, sections 8 "
-            "and 9 (2026-09-08)"
+            "RAICHU >=0.72.0 Interactive.advance_operator_to; automatic-policy "
+            "deviation established in COD3S Platform COMPARAISON-MOTEURS "
+            "(2026-09-08)"
         ),
     ),
 )
