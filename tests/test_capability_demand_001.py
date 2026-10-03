@@ -900,9 +900,10 @@ def test_the_release_still_fires_where_the_estimate_is_optimistic(the_run):
 
     quantities = the_run["release_quantities"]
 
-    # It asks without bound -- nothing else constrains a single-input rule --
-    # so its supplier offers the whole of its rate ...
-    assert quantities["derated_demand_q"] > CD_PLENTY
+    # It asks for all its supplier can deliver -- nothing else constrains a
+    # single-input rule, and the supplier's own capability bounds the claim
+    # since 5.10.0 -- so its supplier offers the whole of its rate ...
+    assert quantities["derated_demand_q"] == pytest.approx(CD_PLENTY)
 
     # ... and it draws the quarter of that rate the derating left of it, handing
     # the other three quarters back.

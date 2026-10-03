@@ -54,7 +54,7 @@ The demand channel above carries what a component *asks* for, and a delivery is
 looking at what ARRIVED can recover it. The capability channel publishes it
 directly, on a third sweep running downstream ahead of the demand sweep
 (:mod:`muscadet.capability`), so that a component sizing its demand on one input
-can bound it by what its OTHER inputs can actually supply. Without it a reaction
+can bound it by what its suppliers can actually deliver. Without it a reaction
 limited by a scarce reagent still claimed its nominal share of an abundant one
 and out-competed a rival that could have used it.
 

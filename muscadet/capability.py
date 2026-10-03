@@ -50,11 +50,23 @@ DOWNSTREAM like production and therefore ahead of the demand sweep. A demand is
 then bounded by::
 
     demand_i = coefficient_i x min( downstream scale,
-                                    min over j != i of ( capability_j / coefficient_j ) )
+                                    min over j of ( capability_j / coefficient_j ) )
 
-The ``j != i`` is not a refinement, it is what makes the scheme work at all:
-including the input being sized would freeze it at its own current capability
-and it could never grow again.
+The minimum runs over every input, the one being sized included. Up to 5.9.0 it
+ran over ``j != i`` only, on the grounds that including the input being sized
+would freeze it at its own current capability. That holds for a bound read from
+what ARRIVED, the variants measured above, and not for a capability: a
+capability is computed with the demand removed from every bound, so it does not
+shrink with what a consumer asks, and bounding a claim by it freezes nothing.
+What the exclusion did instead was let a claim exceed what its own supplier
+could ever deliver, and a split proportional to the claims then served the
+largest claim rather than the largest need (:func:`get_supply_scale`).
+
+The bound holds only if every capability is honest. A component that replaces
+:func:`muscadet.evaluation.compute_production` with an equation of its own must
+replace :func:`compute_capability` too: otherwise its outputs publish what the
+generic sweep computes -- ``var_fed_default`` for a rule-less output, 0 by
+default -- and every consumer sizes its claim on that.
 
 Measured on the same two-rival model, this converges on the FIRST evaluation and
 gives the fair split 0.0909 / 0.909, under a modest downstream demand and under
@@ -479,17 +491,26 @@ def get_input_capability(comp, flow_name):
 
 def get_supply_scale(comp, rule, exclude=None):
     """
-    The scale ``rule``'s OTHER inputs could sustain, ignoring ``exclude``.
+    The scale ``rule``'s suppliers could sustain, ignoring ``exclude``.
 
-    The bound of R-20, and the reason the demand sweep can now size one input
-    against the rest: ``min over j != exclude of (capability_j / coefficient_j)``.
+    The bound of R-20: ``min over j != exclude of (capability_j /
+    coefficient_j)``. The demand sweep calls it with no exclusion, so a claim
+    on an input is bounded by that input's own supplier as well as by the
+    others (5.10.0).
 
-    **Excluding the input being sized is not a refinement.** Including it would
-    bound each input by its own current capability, which is what the supplier
-    is delivering under the present demand -- so an input could never claim more
-    than it is already getting, and a consumer that started small would stay
-    small for ever. That is the ratchet the measured "bound by the previous
-    deliveries" variant decays through, reintroduced by the back door.
+    **Why the input being sized is no longer excluded.** Up to 5.9.0 the demand
+    sweep passed ``exclude=flow_name``, on the reading that a capability is
+    what the supplier delivers under the present demand, so that an input
+    bounded by it could never grow. A capability is computed with the demand
+    removed from every bound (:func:`evaluate_capability`), so that ratchet
+    does not exist. The exclusion did have a cost, measured on one source of 5
+    feeding two single-reagent units, ``B`` needing 2 and ``A`` asked ``D``
+    downstream. ``A`` claimed ``D`` whatever the source could give, and the
+    proportional split served ``B`` 0.83, 0.01 and 1e-5 for ``D`` = 10, 1000
+    and 1e6 -- then 1.43 for an unbounded ``D``, which
+    :func:`~muscadet.flow_continuous.regularize_demands` brings back to the
+    quantity available. Bounded by its own supplier, ``A`` claims 5 in every
+    case and ``B`` is served 1.43 throughout.
 
     A coefficient of zero is skipped, mirroring
     :func:`muscadet.rules.rule_scale`: a catalyst named so it can be guarded on
