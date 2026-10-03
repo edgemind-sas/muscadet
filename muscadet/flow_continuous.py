@@ -70,7 +70,8 @@ what it has. That split is the **allocation policy** of the output flow:
 ===============  ============================================================
 Policy           What it does
 ===============  ============================================================
-``proportional`` splits in proportion to the demands (the default)
+``proportional`` splits in proportion to the demands, each truncated at the
+                 quantity available (the default)
 ``shares``       splits at declared fixed shares, keyed by consumer name
 ``priority``     serves consumers in priority order until the supply is gone
 ===============  ============================================================
@@ -370,19 +371,36 @@ def split_priority(available, demands, priorities):
 
 
 def regularize_demands(available, demands):
-    """Make ``demands`` usable by a split: finite, non-negative, ordered.
+    """Make ``demands`` usable by a split: finite, non-negative, ordered, and
+    no larger than what is available.
 
-    An **unbounded** demand is regularised to the whole quantity available,
-    which is the most any consumer could ever receive. Without it a split would
-    divide by an infinite total and hand out NaN, and an unbounded demand is
-    exactly what an output nobody is connected to publishes upstream.
+    Every claim is **truncated at the quantity available**, which is the most
+    any consumer could ever receive. An unbounded demand is the case that made
+    the rule necessary: without it a split would divide by an infinite total
+    and hand out NaN, and an unbounded demand is exactly what an output nobody
+    is connected to publishes upstream.
+
+    Up to 5.10.0 only that case was truncated, and a finite claim entered the
+    split as declared. A proportional split then served the largest claim
+    rather than the largest need, and it was discontinuous at infinity: one
+    source of 5 shared by a consumer asking 2 and a consumer asking ``D`` served
+    the first 0.83, 0.01 and 1e-5 for ``D`` = 10, 1000 and 1e6, then 1.43 for an
+    unbounded ``D``. Truncated, it serves 1.43 whenever ``D`` reaches the
+    supply. Only the proportional policy reads the claims as weights, so it is
+    the only one whose result moves: shares and priorities never hand a
+    consumer more than the supply anyway.
+
+    The demand a consumer publishes is left as declared: it is what the
+    consumer needs, and a shortfall is read against it. The truncation is a
+    property of the split, applied where the quantity available is known.
     """
+    available = float(available)
     regular = {}
     for key, demand in demands.items():
         value = float(demand)
         if math.isinf(value) or value != value:  # inf or NaN
-            value = float(available)
-        regular[key] = max(value, 0.0)
+            value = available
+        regular[key] = max(min(value, available), 0.0)
     return regular
 
 
@@ -400,7 +418,8 @@ def allocate(available, demands, split=None, trace=None):
     available : float
         The quantity the producer has to give.
     demands : mapping
-        ``{consumer: demand}``. An unbounded demand is regularised first.
+        ``{consumer: demand}``. Regularised first: every claim is truncated at
+        ``available`` (:func:`regularize_demands`).
     split : callable, optional
         ``split(available, demands) -> {consumer: quantity}``. Defaults to
         :func:`split_proportional`. This is the shape of the R17 extension

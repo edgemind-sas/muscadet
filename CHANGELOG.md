@@ -4,6 +4,22 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 5.11.0 (2026-10-03)
+
+- Every claim is truncated at the quantity available before a split reads it
+  (`regularize_demands`). Only an unbounded claim was, so a proportional
+  split was discontinuous at infinity: a supply of 5 shared by a consumer
+  asking 2 and one asking `D` served the first 0.83, 0.01 and 1e-5 for
+  `D` = 10, 1000 and 1e6, then 1.43 for an unbounded `D`. It now serves 1.43
+  whenever `D` reaches the supply.
+- Behaviour change: a proportional split moves wherever a claim exceeded the
+  supply. AE16 (10 between 8 and 12) is now 4.44 / 5.56 instead of 4 / 6, the
+  same split a rule consumer asking 12 through its downstream already got
+  since 5.10.0. Shares and priorities do not move, except a priority tie,
+  split proportionally within the tie. The published demand stays as
+  declared; an `allocation_fun` receives the truncated claims.
+  `tests/test_claim_truncated_at_supply_001.py` pins the rule.
+
 ## 5.10.0 (2026-10-03)
 
 - A claim on a continuous input is now bounded by what that input's own

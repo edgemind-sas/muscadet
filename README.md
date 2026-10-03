@@ -1097,7 +1097,11 @@ self.add_flow_continuous_out(
 )
 ```
 
-Whatever the policy, a consumer proposed more than it demanded is capped at its demand and the policy is applied again to what is left, until no consumer exceeds its demand. A declaration that cannot be applied — an unknown policy name, shares that do not sum to 1, `"shares"` without an `allocation_shares` map — is refused at declaration time rather than showing up as a slightly wrong split inside a run.
+Whatever the policy, a consumer proposed more than it demanded is capped at its demand and the policy is applied again to what is left, until no consumer exceeds its demand.
+
+**Every claim is truncated at the quantity available before the split reads it**, since 5.11.0: nobody can receive more than there is, so a claim of 12 on a supply of 10 weighs as 10. Under the proportional policy this is what keeps the split continuous: a supply of 5 shared by a consumer asking 2 and one asking `D` served the first 0.83, 0.01 and 1e-5 for `D` = 10, 1000 and 1e6, then 1.43 for an unbounded `D`, which was already truncated. It now serves 1.43 whenever `D` reaches the supply. It also gives one need one share however it is modelled: a pure consumer declaring 12 and a rule whose downstream asks 12 (a claim bounded by its own supplier since 5.10.0) now weigh the same. Shares and priorities never hand a consumer more than the supply, so their results do not move. The demand a consumer publishes stays as declared, since a shortfall is read against it; an `allocation_fun` receives the truncated claims.
+
+A declaration that cannot be applied — an unknown policy name, shares that do not sum to 1, `"shares"` without an `allocation_shares` map — is refused at declaration time rather than showing up as a slightly wrong split inside a run.
 
 When none of the three policies expresses what a component needs, `allocation_fun` takes a Python callable `split(available, demands) -> {consumer: quantity}` and is used **in preference** to the declared policy. It only proposes a split; the surplus redistribution above still applies to it:
 

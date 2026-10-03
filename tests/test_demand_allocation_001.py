@@ -52,6 +52,11 @@ CROSSING_TOL = 0.05
 #: did before R-20 bounded the demand -- by accident then, by declaration now.
 CAPACITY_FILL_RATE = 3.0
 
+#: AE16's split: 10 between claims of 8 and 12, the second truncated at the 10
+#: available before the proportional split reads it.
+AE16_C1_SHARE = 10.0 * 8.0 / (8.0 + 10.0)
+AE16_C2_SHARE = 10.0 * 10.0 / (8.0 + 10.0)
+
 #: The cluster read at instant 0, before any production sweep has run: one
 #: producer of 10, two consumers asking for 2 and 3.
 FIRST_SAMPLE_RATE = 10.0
@@ -649,15 +654,19 @@ def the_run():
 
 
 def test_a_short_supply_is_split_in_proportion_to_the_demands(the_run):
-    """AE16: 10 to give, demands of 8 and 12, so 4 and 6.
+    """AE16: 10 to give, demands of 8 and 12, so 4.44 and 5.56.
 
     The default policy needs no declaration at all, and the distributed total is
-    the whole available quantity.
+    the whole available quantity. Each claim is truncated at the 10 available
+    first (5.11.0): nobody can receive more than there is, so the claim of 12
+    weighs as 10, and the split is 8 against 10. Up to 5.10.0 it was 8 against
+    12, so 4 and 6 -- and a claim of a million left the first consumer next to
+    nothing, while an unbounded one, already truncated, left it 4.44.
     """
     received = the_run["received"]
 
-    assert received["AE16_C1"] == pytest.approx(4.0)
-    assert received["AE16_C2"] == pytest.approx(6.0)
+    assert received["AE16_C1"] == pytest.approx(AE16_C1_SHARE)
+    assert received["AE16_C2"] == pytest.approx(AE16_C2_SHARE)
 
     assert the_run["out"]["AE16"] == pytest.approx(10.0)
     assert sum(the_run["allocated"]["AE16"].values()) == pytest.approx(10.0)
@@ -672,8 +681,8 @@ def test_the_allocated_share_is_what_the_consumer_reads(the_run):
     """
     mirrored = the_run["mirrored"]
 
-    assert mirrored["AE16_C1"] == pytest.approx(4.0)
-    assert mirrored["AE16_C2"] == pytest.approx(6.0)
+    assert mirrored["AE16_C1"] == pytest.approx(AE16_C1_SHARE)
+    assert mirrored["AE16_C2"] == pytest.approx(AE16_C2_SHARE)
     assert mirrored["AE16_C1"] + mirrored["AE16_C2"] == pytest.approx(
         the_run["out"]["AE16"]
     )
@@ -867,9 +876,10 @@ def test_a_priority_tie_falls_back_to_proportional_between_them():
     def tied(available, active):
         return split_priority(available, active, {"A": 1, "B": 1})
 
+    # A's claim of 6 is truncated at the 4 available, so the tie splits 4 : 2
     assert allocate(4.0, demands, tied) == {
-        "A": pytest.approx(3.0),
-        "B": pytest.approx(1.0),
+        "A": pytest.approx(4.0 * 4.0 / 6.0),
+        "B": pytest.approx(4.0 * 2.0 / 6.0),
     }
 
     # Ordered, the same demands and the same supply serve A first
