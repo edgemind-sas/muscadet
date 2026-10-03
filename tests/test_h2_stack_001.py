@@ -279,11 +279,17 @@ def test_the_stack_asks_for_the_electricity_it_can_use(the_run):
         )
 
 
-def test_the_water_demand_stays_at_the_declared_coefficient(the_run):
-    """Nothing bounds the water: it is the reagent doing the limiting."""
+def test_the_water_demand_is_what_the_water_supply_can_deliver(the_run):
+    """The water is the reagent doing the limiting, so it is asked for all of it.
+
+    Nothing ELSE bounds it, and up to 5.9.0 it was therefore claimed at the
+    declared coefficient, more than the pump could ever deliver. Since 5.10.0 a
+    claim is bounded by its own supplier too: the stack asks for the water the
+    pump can give, which is also the water it draws and reacts.
+    """
     for instant in RUNNING:
         assert trace(the_run, "Electro", "H2O_demand_out")[instant] == pytest.approx(
-            H2_CONS["H2O"]
+            H2_SCALE * H2_CONS["H2O"]
         )
 
 

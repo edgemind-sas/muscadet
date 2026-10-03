@@ -5,9 +5,8 @@ carries is the lesser of the two (KD4). This module pins down the upstream half:
 
 * a continuous input publishes a demand, aggregated over the connections feeding
   it (R5), and a component maps the demand aggregated on an output back onto its
-  inputs through the active rule's DECLARED coefficients (R34) -- including the
-  recorded limitation that a component capped by a scarce input still claims its
-  nominal demand on the others;
+  inputs through the active rule's DECLARED coefficients (R34), each claim then
+  bounded by what the rule's suppliers can deliver, its own included (R-20);
 * an insufficient supply is split by the output's declared policy -- proportional
   to demand, at fixed shares, or by ordered priorities -- or by a Python rule the
   component supplies itself (R16, R17, KD9);
@@ -975,7 +974,7 @@ def test_an_output_demand_maps_onto_the_inputs_in_the_declared_ratio(the_run):
     assert mapping["received"] == pytest.approx(6.0)
 
 
-def test_the_mapping_uses_declared_coefficients_even_when_an_input_is_scarce(the_run):
+def test_the_mapping_bounds_each_claim_by_its_supplier_when_an_input_is_scarce(the_run):
     """The recorded limitation of R34 -- and the half of it that is now closed.
 
     ``a`` can only be supplied at 3, so the rule runs at scale 1 and uses 2 of
@@ -991,15 +990,15 @@ def test_the_mapping_uses_declared_coefficients_even_when_an_input_is_scarce(the
       6 and it distorted the split of any supply a second component competed
       for.
 
-    ``a`` itself is still claimed at its nominal 9: nothing else bounds it,
-    which is exactly what ``exclude`` in
-    :func:`muscadet.capability.get_supply_scale` means -- an input is never
-    bounded by its own capability, or it could never grow.
+    ``a`` itself is claimed at the 3 its supplier can deliver. Up to 5.9.0 it
+    was claimed at its nominal 9: the bound excluded the input being sized, so
+    a claim could exceed what its own supplier would ever deliver, and in a
+    proportional split that excess was taken from a rival.
     """
     mapping = the_run["mapping"]["SC"]
 
-    # ``a`` is bounded by nothing else, so it claims its nominal 9
-    assert mapping["demand_a"] == pytest.approx(9.0)
+    # ``a`` is bounded by its own supplier: 3 supplied / 3 per unit = 1
+    assert mapping["demand_a"] == pytest.approx(3.0)
 
     # ``b`` is bounded by what ``a`` can sustain: 3 supplied / 3 per unit = 1
     assert mapping["demand_b"] == pytest.approx(2.0)

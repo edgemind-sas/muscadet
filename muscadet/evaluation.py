@@ -16,7 +16,7 @@ order (R8, KD4, R-20):
 - **demand**, upstream: :func:`compute_demand` publishes on each continuous
   input what the component needs from it, mapped back from the demand its
   outputs carry through the active rule's declared coefficients (R34), bounded
-  by the scale the rule's OTHER inputs can sustain (R-20), then claimed by an
+  by the scale the rule's suppliers can sustain (R-20), then claimed by an
   interposed input capacity (R7, R36);
 - **production**, downstream: :func:`compute_production` runs the active rule
   of each rule set at the scale its scarcest input allows (R15) -- or transfers
@@ -45,9 +45,10 @@ at the nominal rate for the rest of the mission.
 ``demand == consumption`` now holds on the common path too, and R-20 is how: the
 demand is still sized on the declared coefficients -- production has not run, so
 there is no scale to size it on -- but it is bounded by the scale the rule's
-other inputs can sustain, read from the capability those suppliers publish
+suppliers can sustain, read from the capability they publish
 (:mod:`muscadet.capability`). A rule limited by one reagent therefore no longer
-asks for its nominal share of the others.
+asks for its nominal share of the others, and no input asks for more than its
+own supplier could deliver.
 
 Two residues remain, both knowingly optimistic rather than overlooked. A
 capability read by two rivals is counted twice, since it is published before any
@@ -128,8 +129,8 @@ def evaluate_demand(comp):
 
     The mapping of R34: the demand aggregated on an output is carried back
     onto the inputs through the active rule's ``prod`` and ``cons``
-    coefficients, and then **bounded by what the rule's other inputs can
-    actually supply** (R-20).
+    coefficients, and then **bounded by what the rule's suppliers can
+    actually deliver** (R-20).
 
     That bound is the whole of R-20. The R34 mapping uses the DECLARED
     coefficients, and it has to: production has not run, so the scale is not
@@ -143,7 +144,16 @@ def evaluate_demand(comp):
     is what is read here::
 
         demand_i = coefficient_i x min( downstream scale,
-                                        min over j != i of ( capability_j / coefficient_j ) )
+                                        min over j of ( capability_j / coefficient_j ) )
+
+    The minimum runs over EVERY input, the one being sized included, since
+    5.10.0. Up to 5.9.0 it ran over ``j != i``: an input was bounded by its
+    rivals but never by its own supplier, so a consumer whose downstream asked
+    without measure published a claim no supplier could meet -- an electrolyser
+    venting oxygen to a sink asking 1000 claimed 1666.67 of water from a pump
+    delivering 5. Inside a split proportional to the claims, that figure is not
+    cosmetic: it decides who is served (see
+    :func:`~muscadet.capability.get_supply_scale`).
 
     What this does NOT close is a capability two rivals read at once: each sums
     what its producers publish and apportions nothing, so each sizes itself as
@@ -206,6 +216,12 @@ def evaluate_demand(comp):
             continue
 
         scale = comp.get_demand_scale(rule)
+        # The supply bound of R-20, read once for the rule: the scale every
+        # input's supplier can sustain, the input being sized included. A
+        # demand therefore never claims more than its own supplier could
+        # deliver -- see get_supply_scale for why that bound, and not the one
+        # over the OTHER inputs alone, is what keeps a shared split sound.
+        supply = comp.get_supply_scale(rule)
         # Handed to the production sweep of this same evaluation, with the
         # rule it was computed for. The rule travels as cheap insurance: no
         # run has been seen to change the active rule between the two bands
@@ -223,14 +239,6 @@ def evaluate_demand(comp):
                 # 0 * inf would publish NaN upstream.
                 accumulate(flow_name, 0.0)
                 continue
-
-            # The supply bound of R-20: what this input is asked for is
-            # capped by the scale the rule's OTHER inputs can sustain, read
-            # from the capability they publish. Without it the demand was
-            # the downstream scale alone, so a reaction limited by a scarce
-            # reagent claimed its nominal share of an abundant one and
-            # out-competed a rival that could have used it.
-            supply = comp.get_supply_scale(rule, exclude=flow_name)
 
             accumulate(flow_name, coefficient * min(scale, supply))
 

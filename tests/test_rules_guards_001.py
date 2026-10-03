@@ -169,7 +169,17 @@ class Ramp(muscadet.ObjFlow):
     The ramp comes from an INTEGRATED level, which is what gives the solver
     something to root-find the crossing on. Its own equation replaces the rule
     evaluation entirely, so the internal tank needs no rule to drain it.
+
+    Replacing the production equation means replacing the capability equation
+    too: the generic one would publish the declared ``var_fed_default`` of 0,
+    and since 5.10.0 a consumer bounds its claim by what its supplier publishes,
+    so it would ask this ramp for nothing.
     """
+
+    def compute_capability(self):
+        self.flows_out["F1"].publish_capability(
+            self.capacities["tank"].get_quantity("fill")
+        )
 
     def add_flows(self, **kwargs):
         super().add_flows(**kwargs)

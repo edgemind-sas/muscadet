@@ -277,7 +277,11 @@ def the_run():
         "x": out_value(system, "OPEN_T", "x"),
     }
 
+    catalysed = system.comp["CATU"]
     obs["catalyst"] = {
+        "scale": catalysed.get_demand_scale(
+            catalysed.get_active_rule(catalysed.rule_sets["react"])
+        ),
         "demand_cat": published_demand(system, "CATU", "cat"),
         "demand_fuel": published_demand(system, "CATU", "fuel"),
         "delivered_cat": delivered(system, "CATU", "cat"),
@@ -394,16 +398,18 @@ def test_a_rule_whose_outputs_are_all_unwired_falls_back_to_the_nominal_scale(th
 
 
 def test_an_unbounded_demand_from_a_connected_consumer_still_travels(the_run):
-    """The test is structural: it never reads the demand's value.
+    """``OPEN_C`` is connected and asks without bound.
 
-    ``OPEN_C`` is connected and asks without bound -- what a capacity claiming
-    its fill rate publishes, and what an unconstrained downstream publishes.
-    Its producer must stay free to run at whatever its inputs allow, so the
-    whole supply of 10 is drawn and 5 of ``x`` come out.
+    That is what a capacity claiming its fill rate publishes, and what an
+    unconstrained downstream publishes. Its producer must stay free to run at
+    whatever its inputs allow, so the whole supply of 10 is drawn and 5 of ``x``
+    come out. The claim crosses the rule unbounded and is then bounded by what
+    the supplier can deliver (R-20, since 5.10.0): ``OPEN_T`` asks for the 10
+    its source makes, not for ``inf``.
     """
     open_case = the_run["open"]
 
-    assert math.isinf(open_case["demand"])
+    assert open_case["demand"] == pytest.approx(10.0)
     assert open_case["received"] == pytest.approx(10.0)
     assert open_case["x"] == pytest.approx(5.0)
 
@@ -422,7 +428,9 @@ def test_a_catalyst_coefficient_publishes_no_nan_under_an_unbounded_scale(the_ru
     """
     catalyst = the_run["catalyst"]
 
-    assert math.isinf(catalyst["demand_fuel"]), "the scale must really be unbounded"
+    assert math.isinf(catalyst["scale"]), "the scale must really be unbounded"
+    # The claim on the fuel is bounded by its supplier, not by the scale
+    assert catalyst["demand_fuel"] == pytest.approx(10.0)
 
     assert catalyst["demand_cat"] == pytest.approx(0.0)
     assert catalyst["demand_cat"] == catalyst["demand_cat"], "NaN published upstream"

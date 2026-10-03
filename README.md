@@ -1119,7 +1119,7 @@ Three quantities travel through a continuous component:
 | | |
 |---|---|
 | **capability** | what each of its outputs could deliver if asked without bound — published downstream so its consumers can size a claim they can honour |
-| **demand** | what it publishes upstream — the downstream demand mapped back through the rule's declared coefficients, bounded by the scale its other inputs can sustain |
+| **demand** | what it publishes upstream — the downstream demand mapped back through the rule's declared coefficients, bounded by the scale its suppliers can sustain, its own included |
 | **delivery** | what its suppliers actually give it — the lesser of production, demand and its allocated share |
 | **consumption** | what its rule actually uses — `scale × uptake × coefficient`: the scale set by the scarcest input, and the `uptake` its outputs were actually produced at |
 
@@ -1174,10 +1174,14 @@ A demand is bounded by
 
 ```
 demand_i = coefficient_i × min( downstream scale ,
-                                min over j ≠ i of ( capability_j / coefficient_j ) )
+                                min over j of ( capability_j / coefficient_j ) )
 ```
 
-The `j ≠ i` is what makes it work at all: including the input being sized would bound it by what it is already getting, so a consumer that started small could never grow. It settles on the **first** evaluation, under a modest downstream demand and an unbounded one alike — a capability is published, never inferred, so there is nothing to converge towards.
+The minimum runs over **every** input, the one being sized included, so no claim exceeds what its own supplier could deliver. Up to 5.9.0 it ran over `j ≠ i`, on the fear that bounding an input by its own supplier would freeze it at what it already gets. That fear holds for a bound read from what *arrived*, not for a capability, which is computed with the demand removed and does not shrink with the claim. What the exclusion did instead was let a claim run past any supply: an electrolyser venting oxygen to a sink asking 1000 claimed 1666.67 of water from a pump delivering 5, and inside a proportional split that figure decided who was served. One source of 5 feeding a unit that needs 2 and a unit whose downstream asks `D`: the first got 0.83, 0.01 and 1e-5 for `D` = 10, 1000 and 1e6, then 1.43 for an unbounded `D`. It now gets 1.43 in every case.
+
+The bound is only as good as the capabilities it reads. A component that replaces `compute_production` with an equation of its own must replace `compute_capability` too, or its outputs publish what the generic sweep computes (`var_fed_default`, 0 by default) and its consumers ask it for nothing.
+
+It settles on the **first** evaluation, under a modest downstream demand and an unbounded one alike — a capability is published, never inferred, so there is nothing to converge towards.
 
 Per continuous flow `f`, the channel adds `f_capability_out` on an output (what it could deliver if asked freely) and `f_capability_in` on an input (a reference collecting what its producers publish). Both are written by the sweeps at every step, so a failure mode may not usefully clamp either; the endpoint a mode wants is `f_out_rate`. The sweep runs **downstream, ahead of the demand sweep**: capability, then demand, then production, then the capacity levels.
 

@@ -4,6 +4,23 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 5.10.0 (2026-10-03)
+
+- A claim on a continuous input is now bounded by what that input's own
+  supplier can deliver, as well as by what the rule's other inputs can
+  sustain (R-20): `min over j` instead of `min over j != i`. An electrolyser
+  venting oxygen to a sink asking 1000 used to claim 1666.67 of water from a
+  pump delivering 5; it now claims 5.
+- Behaviour change: a supply split in proportion to the claims no longer
+  depends on how far past the supply a consumer's downstream asks. One source
+  of 5 feeding a unit needing 2 and a unit asked `D` gave the first 0.83, 0.01
+  and 1e-5 for `D` = 10, 1000 and 1e6, and 1.43 for an unbounded `D`; it now
+  gives 1.43 throughout. Where nobody shares a supplier, deliveries are
+  unchanged and only the published demand moves.
+- A component that replaces `compute_production` must replace
+  `compute_capability` too: a consumer now sizes its claim on what it
+  publishes. `tests/test_demand_own_supplier_bound_001.py` pins the bound.
+
 ## 5.9.0 (2026-10-03)
 
 - A continuous output's capability (`{flow}_capability_out`) now carries the
