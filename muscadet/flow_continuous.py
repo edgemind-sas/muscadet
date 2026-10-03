@@ -1187,13 +1187,15 @@ class FlowContinuousOut(FlowContinuous):
         self.var_demand = comp.addReference(f"{self.name}_demand_in")
 
         # Capability channel: what this output could deliver if asked without
-        # bound (R-20). Created holding the declared rate, which is the answer
-        # for a pure source and therefore the right value to be read at t = 0,
-        # before the first capability sweep has run.
+        # bound (R-20). Created holding what a pure source carries at t = 0,
+        # which is the value read before the first capability sweep has run:
+        # the declared rate scaled by the profile at instant 0, exactly as the
+        # delivered quantity is (`initial_fed_value`). The unprofiled rate
+        # would announce a solar field's peak at midnight on the first sample.
         self.var_capability = comp.addVariable(
             f"{self.name}_capability_out",
             pyc.TVarType.t_double,
-            float(self.var_fed_default),
+            float(self.initial_fed_value() or 0.0),
         )
 
         # The shared rate of KD10, declared HERE rather than allocated on

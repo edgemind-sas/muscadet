@@ -4,6 +4,23 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 5.9.0 (2026-10-03)
+
+- A continuous output's capability (`{flow}_capability_out`) now carries the
+  production factor: time profile x effective rate x production gate, applied
+  where production applies it, before an output capacity substitutes for the
+  flow. It used to be the nominal rating: a solar field announced its peak at
+  midnight, a derated source its whole rate, a closed production gate the rate
+  it was not producing. A stocked volume still announces what it can serve. A
+  zero factor on an unbounded capability publishes 0, not NaN. Its value
+  before the first sweep is the declared rate scaled by the profile at
+  instant 0, as the delivered quantity's already was.
+- Behaviour change: a demand bounded by a supplier's capability no longer
+  counts on a production that supplier is not making. A rule whose reagent
+  comes from a source producing nothing stops claiming its other reagents;
+  deliveries are unchanged where nothing was over-claimed.
+  `tests/test_capability_production_factor_001.py` pins each term.
+
 ## 5.8.0 (2026-09-30)
 
 - Combinational `ObjLogicGate` components now cross the portable declaration

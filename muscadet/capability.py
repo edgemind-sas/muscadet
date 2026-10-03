@@ -82,14 +82,23 @@ reckoning would be an independent estimate of the same physics, free to drift
 from it -- and a demand bounded by a capability the production sweep does not
 honour would starve a component that could have run.
 
-Deratings, time profiles and production gates are **not** applied, and the
-reason is the same one that keeps them out of the demand sweep (R-13): both
-sweeps that size a claim work on the rule's declared coefficients, an existing
-scope boundary. Applying them would sharpen the estimate for a derated or a
-closed producer -- and it is recorded as a separate decision, not taken here,
-precisely because it moves that boundary. The gate (R44) joined the list last
-and is the one most likely to be noticed: a control port shut for the whole run
-still advertises the capability of the output it commands.
+The production factor is applied too: time profile, effective rate and
+production gate, read through
+:func:`muscadet.evaluation.output_production_factor` and multiplied in at the
+point :func:`muscadet.evaluation.apply_production` multiplies them in, before an
+output capacity substitutes for the flow (:func:`scale_capability`). Up to 5.8.0
+they were left out, on the grounds that the demand sweep works on declared
+coefficients, and the capability was the nominal rating: a solar field announced
+its peak at midnight, a source a failure mode derated to 0.5 announced its whole
+rate, and a control port shut for the whole run still advertised the output it
+commands. What an output could deliver if asked without bound, right now, is
+what it would produce under its factor, so that is what is published. The
+demand sweep still sizes a claim on the declared coefficients (R-13); what
+changes is the bound it reads from the suppliers, which no longer counts on a
+production the supplier is not making.
+
+The nominal rating is a different quantity, a constant of the equipment. It is
+not published on this channel, which says what is available.
 
 Torn cycles
 -----------
@@ -320,7 +329,31 @@ def apply_capability(comp, capabilities):
         if not isinstance(flow, FlowContinuousOut):
             continue
 
+        capability = scale_capability(
+            capability, comp.output_production_factor(flow_name)
+        )
         flow.publish_capability(comp.output_capability(flow_name, capability))
+
+
+def scale_capability(capability, factor):
+    """
+    What an output could deliver once its production factor is applied.
+
+    The factor is :func:`muscadet.evaluation.output_production_factor`, the one
+    :func:`muscadet.evaluation.apply_production` multiplies every production by:
+    time profile, effective rate and production gate. Applied at the same point
+    too, before an output capacity substitutes for the flow, so a stocked volume
+    still announces what it can serve whatever its producer is doing.
+
+    A factor of zero answers zero, unbounded or not. ``inf * 0`` is NaN, and a
+    NaN published on the capability channel would poison every demand bound
+    downstream; an output whose production is stopped could deliver nothing,
+    which is the answer the arithmetic would give for any finite capability.
+    """
+    if factor == 0.0:
+        return 0.0
+
+    return capability * factor
 
 
 def output_capability(comp, flow_name, produced):
