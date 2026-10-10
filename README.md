@@ -1010,6 +1010,8 @@ Three things it is **not**, each of which a first cut got wrong and each now pin
 - **not a cap on what arrives.** The volume asks its producer for what it can actually pass on, so a `fill_rate=0` buffer stays the pure pass-through it is documented to be instead of piling up the difference. A battery that should charge says so with a `fill_rate`; the ceiling alone does not make it charge.
 - **not readable by a volume with no way out.** `CapacityContinuous(ports="in")` is an accumulator: it declares no output and no rule, so nothing would ever consult the ceiling. Declaring one there is refused by name rather than silently ignored.
 
+**A stock beside the rules needs a ceiling when what it feeds takes without bound.** A `side="in"` capacity holding a stock and declaring no `serve_rate` serves its rules without limit; if what the rules feed takes without limit too (a room with `fill_rate=math.inf`), nothing bounds the rule at all. The physics is an instantaneous transfer, which a rate cannot express, so the run is refused at the first evaluation meeting it with `muscadet.UnboundedRateError`, naming the component, the rule set and the capacity. Up to 5.11.0 it ran at one rule activity per time unit, a rate the model never stated: the same model written in seconds drained 3600 times slower in physical time. Declare the `serve_rate` the stock may leave at, or bound the demand downstream. A rule consuming nothing is not concerned, its declared `prod` being its rate.
+
 **Weights and composition.** Several constituents may share one volume. Each carries a `weight`, the volume one unit of it occupies:
 
 ```python
