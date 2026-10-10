@@ -20,7 +20,10 @@ reconstructing them.
 - Behaviour change: such a model now raises where it ran. Declaring a finite
   `serve_rate` (the stock leaves at that rate) or a finite demand downstream
   makes it build again. A rule consuming nothing, a source rule or the
-  catalyst idiom, is not concerned: its declared `prod` is its rate. Over the
+  catalyst idiom, is not concerned: its declared `prod` is its rate. A
+  discrete input in `cons` is a gate and does not hide the stock: open, the
+  rule is refused; closed, it draws nothing. Not refused, deliberately: a rule
+  whose outputs are all unwired, which keeps its documented nominal scale. Over the
   test suite and `examples/`, no existing model met the shape.
   `tests/test_unbounded_stock_drain_001.py` pins the refusal and the near
   misses.

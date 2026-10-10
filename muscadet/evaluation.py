@@ -162,11 +162,12 @@ def check_rule_bounded(comp, set_key, rule, available):
     The two conditions, both read off quantities the production sweep already
     holds, so the check costs a scan of ``rule.cons``:
 
-    - every input the rule consumes is unbounded. A coefficient of 0 does not
-      count, exactly as :func:`~muscadet.rules.rule_scale` skips it, so a rule
-      consuming nothing -- a source rule, the catalyst idiom -- is never
-      refused: its declared ``prod`` IS its rate, and that is a statement the
-      model makes;
+    - every CONTINUOUS input the rule consumes is unbounded. A coefficient of
+      0 does not count, exactly as :func:`~muscadet.rules.rule_scale` skips
+      it, so a rule consuming nothing -- a source rule, the catalyst idiom --
+      is never refused: its declared ``prod`` IS its rate, and that is a
+      statement the model makes. A discrete input is a gate: closed, the rule
+      draws nothing and is not refused; open, it reads 1 and bounds nothing;
     - the demand sweep sized the rule at an unbounded scale, on a RECORD that
       exists. A missing record is the cold-start guard of
       :func:`recorded_demand_scale`, which answers ``UNBOUNDED`` for want of a
@@ -178,7 +179,20 @@ def check_rule_bounded(comp, set_key, rule, available):
     UnboundedRateError
         When both hold.
     """
-    consumed = [name for name, coefficient in rule.cons.items() if coefficient > 0]
+    consumed = []
+    for name, coefficient in rule.cons.items():
+        if coefficient <= 0:
+            continue
+        flow = comp.flows_in.get(name)
+        if flow is not None and not flow.is_continuous:
+            # A discrete input is a gate, read as 0 or 1 by rule_scale: closed
+            # it stops the rule, open it bounds nothing, and a finite 1.0 must
+            # not hide the unbounded stock beside it.
+            if available.get(name, 0.0) <= 0:
+                return
+            continue
+        consumed.append(name)
+
     if not consumed:
         return
 

@@ -46,10 +46,20 @@ class UsdSource(muscadet.ObjFlow):
         self.add_flow_continuous_out(name="H2m", var_fed_default=USD_INFLOW)
 
 
+class UsdGate(muscadet.ObjFlow):
+    def add_flows(self, open_=True, **kwargs):
+        super().add_flows(**kwargs)
+        self.add_flow_out(name="go", var_prod_default=open_)
+
+
 class UsdMembrane(muscadet.ObjFlow):
-    def add_flows(self, stock=USD_STOCK, serve_rate=math.inf, cons=1.0, **kwargs):
+    def add_flows(
+        self, stock=USD_STOCK, serve_rate=math.inf, cons=1.0, gated=False, **kwargs
+    ):
         super().add_flows(**kwargs)
         self.add_flow_continuous_in(name="H2m")
+        if gated:
+            self.add_flow_in(name="go")
         self.add_flow_continuous_out(name="H2")
         self.add_capacity(
             name="membrane",
@@ -61,6 +71,8 @@ class UsdMembrane(muscadet.ObjFlow):
             side="in",
         )
         consumed = {} if cons is None else {"H2m": cons}
+        if gated:
+            consumed["go"] = 1.0
         self.add_rules(name="release", rules=[{"cons": consumed, "prod": {"H2": 1.0}}])
 
 
@@ -77,19 +89,24 @@ class UsdRoom(muscadet.ObjFlow):
         )
 
 
-def build_system(name, membrane=None, room=None):
+def build_system(name, membrane=None, room=None, gate=None):
     system = muscadet.System(name=name)
     system.add_component(name="SRC", cls="UsdSource")
+    if gate is not None:
+        membrane = {**(membrane or {}), "gated": True}
+        system.add_component(name="GATE", cls="UsdGate", open_=gate)
     system.add_component(name="MEM", cls="UsdMembrane", **(membrane or {}))
     system.add_component(name="ROOM", cls="UsdRoom", **(room or {}))
     system.connect_flow(source="SRC", target="MEM", flow_name="H2m")
     system.connect_flow(source="MEM", target="ROOM", flow_name="H2")
+    if gate is not None:
+        system.connect("GATE", "go_out", "MEM", "go_in")
     return system
 
 
-def levels_at(name, date=USD_DATE, membrane=None, room=None):
+def levels_at(name, date=USD_DATE, membrane=None, room=None, gate=None):
     """The membrane and room contents at ``date``, the system deleted."""
-    system = build_system(name, membrane, room)
+    system = build_system(name, membrane, room, gate)
     try:
         system.isimu_start()
         system.isimu_step_to(date)
@@ -135,6 +152,19 @@ def test_an_interactive_session_refuses_it_too():
         system.deleteSys()
 
 
+def test_an_open_discrete_gate_does_not_hide_the_unbounded_stock():
+    """A boolean in ``cons`` reads 1, a gate and not a bound on the rate."""
+    system = build_system("UsdGateOpen", gate=True)
+    try:
+        with pytest.raises(muscadet.UnboundedRateError) as excinfo:
+            system.isimu_start()
+            system.isimu_step_to(USD_DATE)
+    finally:
+        system.deleteSys()
+
+    assert excinfo.value.flows == ["H2m"]
+
+
 def test_the_refusal_is_a_value_error():
     """Every existing ``except ValueError`` around a run still catches it."""
     assert issubclass(muscadet.UnboundedRateError, ValueError)
@@ -157,6 +187,14 @@ def test_a_finite_demand_downstream_drains_the_stock_at_that_demand():
 
     assert membrane == pytest.approx(USD_STOCK - (USD_RATE - USD_INFLOW), abs=1e-3)
     assert room == pytest.approx(USD_ROOM_INIT + USD_RATE, abs=1e-3)
+
+
+def test_a_closed_discrete_gate_stops_the_rule():
+    """Nothing is drawn, so nothing runs at a rate the model does not state."""
+    membrane, room = levels_at("UsdGateClosed", gate=False)
+
+    assert membrane == pytest.approx(USD_STOCK + USD_INFLOW, abs=1e-3)
+    assert room == pytest.approx(USD_ROOM_INIT, abs=1e-3)
 
 
 def test_an_empty_volume_serves_what_transits_it():
