@@ -667,6 +667,20 @@ system.generated_indicators = True
 muscadet.declare.system_spec(system)["generated_indicators"]   # True, in the exported document
 ```
 
+### The initial state, and what counts as an occurrence
+
+At t = 0 the deterministic interactions are first stabilised to their fixpoint: every discrete flow, every effect of the state a mode starts in, every combinational gate. That fixpoint **is** the initial state, and it does not depend on the order the components were declared in. Only then does whatever can fire at t = 0 fire, and only that is an event an `nb-occurrences` indicator counts.
+
+| Model, Source feeding a Target | `nb-occurrences` of |  |
+|---|---|---|
+| nothing fails | "target fed" | 0 |
+| initiating failure, `occ_law_12={"cls": "delay", "time": 0}` | "target not fed" | 1 |
+| mode declared in its failed state, `init_st2=True` | "target not fed" | 0, the system starts failed |
+
+An initiating event the analyst wants counted is therefore written as a delay-0 transition, which fires after the fixpoint. A mode declared directly in its second state is a starting condition: its effect is applied from t = 0 and its repair, if any, is the first event.
+
+Up to 5.13.0 the fixpoint was not closed inside the start phase. A component started before its supplier read the supplier's default, the truth arrived afterwards and was counted as a change, so the first row read 0 or 1 depending on which component was declared first. A mode declared in its failed state never applied its effect, and the scenario started healthy. The engine conformance registry records the point as `initial_state_occurrence`.
+
 ## Flow class names: canonical and legacy
 
 Everything above declares *discrete* flows — boolean signals that are either fed or not. Since MUSCADET 2.0 the discrete flow classes carry an explicit `Discrete` in their name, so that they read as one family beside the continuous one introduced in the next chapter.
@@ -2610,6 +2624,7 @@ clean bill of health -- `is_assessed` is what tells the two apart.
 | `armed_transition_date` | `raichu` | samples the law as soon as the transition is armed |
 | `interactive_step_granularity` | `raichu` | one step draws a single transition instead of resolving the instant |
 | `advance_to_date` | `raichu` | has no `isimu_step_to` primitive; the date is reached by repeating steps |
+| `initial_state_occurrence` | `raichu` | counts a predicate true at the initial fixpoint as one occurrence |
 
 The first one is permanent and reaches the result: PyCATSHOO is a third-party
 library, so the gap is a known limit of the reference engine rather than a

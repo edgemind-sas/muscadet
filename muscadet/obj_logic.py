@@ -5,6 +5,7 @@ import Pycatshoo as Pyc
 from cod3s.pycatshoo.common import prepare_attr_tree, sanitize_cond_format
 
 from .common import copy_declaration
+from .initial_state import register_initial_evaluation
 from .obj import ObjFlow
 
 
@@ -138,6 +139,11 @@ class ObjLogicGate(cod3s.PycComponent):
             self.addMessageBoxExport(f"{elem}_out", self.result, elem)
 
         recompute()  # seed the initial value
+
+        # A member of the initial fixpoint (#12): the components it feeds are
+        # replayed at start, and would otherwise read the value seeded here,
+        # before any source had started.
+        register_initial_evaluation(self, recompute, [self.result])
 
     @staticmethod
     def _resolve_logic(kind, k):

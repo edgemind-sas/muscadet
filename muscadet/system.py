@@ -23,6 +23,7 @@ from .flow_continuous import (
     RATE_OBSERVATION_OUT_SUFFIX,
     FlowContinuous,
 )
+from .initial_state import register_initial_settle
 from .mixture import MixtureGroupError, resolve_mixture_groups  # noqa: F401
 from .obj_logic import LogicAnd, LogicOr
 from .ordering import (
@@ -589,6 +590,12 @@ class System(cod3s.PycSystem):
         # has already been left alone by ``register_equation_order`` and is
         # left alone here too -- see the gate at the head of the method below.
         self.register_controller_crossings()
+
+        # Last, so the settle is the last start method of the last component
+        # and closes the initial fixpoint after every other one has run (#12).
+        # Registers no equation and raises nothing, so a step refused above is
+        # retried without it having been registered twice.
+        register_initial_settle(self)
 
         return self._equation_order
 

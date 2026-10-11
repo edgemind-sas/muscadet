@@ -150,6 +150,9 @@ POINT_INTERACTIVE_STEP_GRANULARITY: typing.Final[str] = "interactive_step_granul
 #: Advancing an interactive session to a date the caller names.
 POINT_ADVANCE_TO_DATE: typing.Final[str] = "advance_to_date"
 
+#: Whether a predicate already true in the initial state is an occurrence.
+POINT_INITIAL_STATE_OCCURRENCE: typing.Final[str] = "initial_state_occurrence"
+
 
 class SemanticPoint(pydantic.BaseModel):
     """One place muscadet had to decide what a model means.
@@ -328,6 +331,28 @@ SEMANTIC_POINTS: typing.Final[typing.Tuple[SemanticPoint, ...]] = (
         ),
         source="README, 'Interactive simulation'; muscadet pyproject.toml (cod3s pin)",
     ),
+    SemanticPoint(
+        name=POINT_INITIAL_STATE_OCCURRENCE,
+        rule=(
+            "The initial state is the fixpoint of the deterministic "
+            "interactions at t = 0, whatever the order the components were "
+            "declared in. A predicate true at that fixpoint is not an "
+            "occurrence; a transition firing at t = 0, a delay-0 initiating "
+            "failure included, is one."
+        ),
+        rationale=(
+            "An event is something that happens, and the initial state is "
+            "where the scenario starts rather than something happening in it. "
+            "A healthy system counting one occurrence of 'fed' says it became "
+            "fed, which it never did. An initiating event the analyst wants "
+            "counted is written as a delay-0 transition, which fires after "
+            "the fixpoint and counts on every engine."
+        ),
+        source=(
+            "muscadet issue #12 (maintainer's decision, 2026-10-11); README, "
+            "'The initial state, and what counts as an occurrence'"
+        ),
+    ),
 )
 
 #: What each assessed engine does otherwise, in point order then engine order.
@@ -439,6 +464,27 @@ DEVIATIONS: typing.Final[typing.Tuple[Deviation, ...]] = (
             "RAICHU >=0.72.0 Interactive.advance_operator_to; automatic-policy "
             "deviation established in COD3S Platform COMPARAISON-MOTEURS "
             "(2026-09-08)"
+        ),
+    ),
+    Deviation(
+        engine=ENGINE_RAICHU,
+        point=POINT_INITIAL_STATE_OCCURRENCE,
+        behaviour=(
+            "Reaches the initial fixpoint without a declaration order, then "
+            "counts a predicate true at it as one occurrence."
+        ),
+        consequence=(
+            "An nb-occurrences indicator reads one more per replica than "
+            "muscadet on every predicate that holds from t = 0: measured on a "
+            "Source feeding a Target with no failure, 'target fed' counts 1 "
+            "where muscadet counts 0, in both declaration orders. Predicates "
+            "false at t = 0, a failure count among them, are not concerned."
+        ),
+        compensation=None,
+        source=(
+            "Measured 2026-10-11 on the pyraichu checkout of 2026-09-21 "
+            "(raichu-muscadet-corpus) against muscadet 5.14.0; muscadet "
+            "issue #12"
         ),
     ),
 )

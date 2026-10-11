@@ -673,3 +673,26 @@ def test_an_engine_declares_one_deviation_per_point(cr_isolated_registry):
                 source="...",
             )
         )
+
+
+# ----------------------------------------------------------------------
+# The initial state (#12)
+# ----------------------------------------------------------------------
+
+
+def test_the_initial_state_point_is_decided_and_raichu_departs_from_it():
+    """muscadet reaches the fixpoint itself; RAICHU counts what holds there."""
+    point = conformance.semantic_point(conformance.POINT_INITIAL_STATE_OCCURRENCE)
+
+    assert "fixpoint" in point.rule
+    assert "delay-0" in point.rule
+
+    declared = conformance.deviations(
+        ENGINE_RAICHU, conformance.POINT_INITIAL_STATE_OCCURRENCE
+    )
+
+    assert len(declared) == 1
+    assert declared[0].compensation is None
+    assert conformance.POINT_INITIAL_STATE_OCCURRENCE in (
+        conformance.conformant_points(ENGINE_PYCATSHOO)
+    )
