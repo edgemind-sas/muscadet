@@ -256,6 +256,8 @@ class ObjFlow(cod3s.PycComponent):
     compute_effects_tuples(effects_str=None):
         Computes the effects tuples from a string.
     add_derating(mode_name, flow_name):
+        Allocates and declares the derating variable of a mode outside the component.
+    allocate_derating(mode_name, flow_name):
         Allocates the derating variable a mode owns on a continuous output.
     derating_vars_of(mode_name):
         Returns the derating variables a mode owns, keyed by basename.
@@ -343,6 +345,22 @@ class ObjFlow(cod3s.PycComponent):
         # build the automaton twice.
         self.declared_automata = {}
         self.declared_failure_modes = {}
+
+        # The (mode, continuous output) pairs whose derating variable was
+        # allocated through the public ``add_derating``, for a mode declared
+        # OUTSIDE this component. Keyed by the pair, valued None: an ordered
+        # set. What ``muscadet.declare.component_spec`` writes into the
+        # ``deratings`` section, since nothing else would recreate the
+        # variable on a rebuild (#13). A mode declared ON the component
+        # allocates through ``allocate_derating`` and stays out.
+        self.declared_deratings = {}
+
+        # The (mode, continuous output) pairs a mode declared ON this component
+        # allocated while resolving its effects. Such a mode recreates its
+        # variable when rebuilt, so a pair in both collections -- pre-allocated
+        # by the platform importer, then reused by the mode -- is NOT written
+        # into the declaration: the spec writes the difference.
+        self.mode_owned_deratings = set()
 
         # True once ``compute_capacities`` was registered as a PDMP equation
         # method for this component: one registration covers every capacity.
@@ -2649,6 +2667,7 @@ class ObjFlow(cod3s.PycComponent):
 
     match_continuous_outputs = derating.match_continuous_outputs
     add_derating = derating.add_derating
+    allocate_derating = derating.allocate_derating
     derating_vars_of = derating.derating_vars_of
     continuous_endpoint_names = derating.continuous_endpoint_names
     pat_to_var_value_list = derating.pat_to_var_value_list

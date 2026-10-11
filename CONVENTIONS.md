@@ -62,6 +62,25 @@
   collected alongside the suite changes the outcome of tests that pass without
   it
 
+### Delivery
+- muscadet has a single maintainer, so a pull request is opened AND merged by
+  its author as soon as the checks below pass; no reviewer approval is
+  awaited. The checks are the full suite green under the project environment,
+  and `examples/` showing no failure that `master` does not already show
+- Work happens on a feature branch (`fix/<topic>`, `feat/<topic>`), in a
+  dedicated git worktree when several pieces of work run in parallel; the main
+  checkout stays on `master`
+- A pull request is merged with a merge commit, not squashed or rebased, so
+  each step of the branch stays readable in the history
+- A change that ships bumps `muscadet/version.py` (patch for a fix that
+  changes no behaviour a model relies on, minor otherwise) and adds its entry
+  at the top of `CHANGELOG.md` in the same pull request
+- A change to the system declaration format also bumps
+  `declare.SYSTEM_SPEC_VERSION` by the rule written beside it
+- After the merge: an annotated tag `X.Y.Z` with the message
+  `muscadet X.Y.Z` on the merge commit, pushed to `origin`; the feature
+  branch deleted locally and on the remote, and its worktree removed
+
 ## Project specific coventions
 ### Flow Classes
 - Flow classes should inherit from appropriate base classes

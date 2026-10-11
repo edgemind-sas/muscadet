@@ -1251,6 +1251,8 @@ flow.derating                              # {mode name: variable}
 my_plant.comp["P"].derating_vars_of("wear")  # {variable basename: variable}
 ```
 
+A mode declared **outside** the component, a native `cod3s.ObjMode2S` naming variables by their exact basename, cannot allocate its own: `my_plant.comp["P"].add_derating("leak", "water")` creates `leak_derating_water` for it to clamp. That allocation is part of the component's declaration. `component_spec` writes it in a `deratings` section (`[{"mode": "leak", "flow": "water"}]`) and `build_component` replays it after `set_flows()`, before the modes, so a system read back into a declaration rebuilds with the variable the outside mode targets. A pair that a mode declared on the component also allocates is left out, since that mode recreates it.
+
 #### The shared rate variable: `{flow}_out_rate`
 
 Every continuous output also carries **one shared rate variable**, named `{flow}_out_rate` — `water` gives `water_out_rate` — created with the flow itself and holding `1.0`. It is public, writable, and in existence from the moment the flow is declared. Setting it to `0` is a total loss of production, exactly like a derating of `0`.
