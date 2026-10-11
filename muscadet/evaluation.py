@@ -92,6 +92,126 @@ from .rules import (
 NO_DEMAND = 0.0
 
 
+class UnboundedRateError(ValueError):
+    """
+    A rule nothing bounds, on either side, is refused at the step meeting it.
+
+    Every input the rule consumes is served without limit -- a capacity beside
+    the rules holding a stock and declaring no ``serve_rate`` -- and every
+    output it feeds takes without limit, for instance a room with an infinite
+    ``fill_rate``. :func:`~muscadet.rules.rule_scale` then answers
+    :data:`~muscadet.rules.UNCONSTRAINED_SCALE`, and up to 5.11.0 that was the
+    rate: one rule activity per time unit, stated nowhere in the model, so the
+    same model written in seconds rather than hours drained 3600 times slower
+    in physical time (#8). The physics is an instantaneous transfer, which a
+    rate cannot express.
+
+    Refused rather than resolved, and at the evaluation rather than at the
+    pre-run step: whether the demand is unbounded is a state, not a structure
+    (a room that fills stops claiming), so only an evaluation can tell. RAICHU
+    refuses the same configuration at the same moment since pyraichu 0.64.0,
+    and with a finite ``serve_rate`` the two engines agree on the trajectory.
+
+    Attributes
+    ----------
+    component : str
+        Name of the component carrying the rule.
+    rule_set : str
+        Key of the rule set in ``comp.rule_sets``.
+    flows : list of str
+        The consumed inputs, every one of them served without limit.
+    capacities : list of str
+        The input capacities serving them, in the order of ``flows``.
+    """
+
+    def __init__(self, component, rule_set, flows, capacities):
+        self.component = component
+        self.rule_set = rule_set
+        self.flows = list(flows)
+        self.capacities = list(capacities)
+
+        inputs = ", ".join(f"`{name}`" for name in self.flows)
+        if self.capacities:
+            held = ", ".join(f"`{name}`" for name in self.capacities)
+            served = (
+                f"capacity {held} holds a stock with no ceiling on what leaves "
+                f"it (`serve_rate` left unbounded)"
+            )
+            remedy = f"Declare a finite `serve_rate` on capacity {held}"
+        else:
+            served = "they deliver without limit"
+            remedy = "Bound what they deliver"
+
+        super().__init__(
+            f"Rule set `{rule_set}` of component `{component}` is bounded by "
+            f"nothing: every input it consumes ({inputs}) is served without "
+            f"limit, as {served}, and what it feeds takes without limit (for "
+            f"instance an infinite `fill_rate` downstream). The physics is an "
+            f"instantaneous transfer, which a rate cannot express; run anyway, "
+            f"the rule would go at one activity per time unit, a rate the "
+            f"model does not state, so the result would depend on the study's "
+            f"time unit. {remedy}, the rate the stock may leave at, or bound "
+            f"the demand downstream."
+        )
+
+
+def check_rule_bounded(comp, set_key, rule, available):
+    """
+    Refuses a rule bounded neither by its inputs nor by its outputs (#8).
+
+    The two conditions, both read off quantities the production sweep already
+    holds, so the check costs a scan of ``rule.cons``:
+
+    - every CONTINUOUS input the rule consumes is unbounded. A coefficient of
+      0 does not count, exactly as :func:`~muscadet.rules.rule_scale` skips
+      it, so a rule consuming nothing -- a source rule, the catalyst idiom --
+      is never refused: its declared ``prod`` IS its rate, and that is a
+      statement the model makes. A discrete input is a gate: closed, the rule
+      draws nothing and is not refused; open, it reads 1 and bounds nothing;
+    - the demand sweep sized the rule at an unbounded scale, on a RECORD that
+      exists. A missing record is the cold-start guard of
+      :func:`recorded_demand_scale`, which answers ``UNBOUNDED`` for want of a
+      demand rather than because of one, and must not be read as a demand
+      asking for everything.
+
+    Raises
+    ------
+    UnboundedRateError
+        When both hold.
+    """
+    consumed = []
+    for name, coefficient in rule.cons.items():
+        if coefficient <= 0:
+            continue
+        flow = comp.flows_in.get(name)
+        if flow is not None and not flow.is_continuous:
+            # A discrete input is a gate, read as 0 or 1 by rule_scale: closed
+            # it stops the rule, open it bounds nothing, and a finite 1.0 must
+            # not hide the unbounded stock beside it.
+            if available.get(name, 0.0) <= 0:
+                return
+            continue
+        consumed.append(name)
+
+    if not consumed:
+        return
+
+    if not all(math.isinf(available.get(name, 0.0)) for name in consumed):
+        return
+
+    recorded = comp._demand_scale.get(set_key)
+    if recorded is None or recorded[0] is not rule or not math.isinf(recorded[1]):
+        return
+
+    capacities = []
+    for name in consumed:
+        capacity = comp.get_capacity_of_flow(name, "in")
+        if capacity is not None and capacity.name not in capacities:
+            capacities.append(capacity.name)
+
+    raise UnboundedRateError(comp.basename(), set_key, consumed, capacities)
+
+
 def compute_demand(comp):
     """
     PDMP equation: what this component asks its producers for.
@@ -1108,6 +1228,7 @@ def evaluate_production(comp):
             continue
 
         available = {flow_name: take(flow_name) for flow_name in rule.cons}
+        check_rule_bounded(comp, set_key, rule, available)
         # What the inputs allow, capped by what the outputs can take.
         #
         # The cap is the missing half of the minimum scale of 3.0.0. Sizing a

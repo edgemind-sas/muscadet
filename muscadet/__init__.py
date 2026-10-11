@@ -60,6 +60,7 @@ from .engine import (
     run_targets,
     unregister_engine,
 )
+from .evaluation import UnboundedRateError
 from .flow import (
     FlowDiscrete,
     FlowDiscreteIn,
