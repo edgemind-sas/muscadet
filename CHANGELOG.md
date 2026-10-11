@@ -4,6 +4,33 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 5.13.0 (2026-10-11)
+
+- A derating allocated from outside its component survives a declaration
+  (#13). `ObjFlow.add_derating(mode, flow)`, the public door for a mode
+  declared outside the component and the road the COD3S Platform importer
+  takes for every `deratings` entry, now records the pair in
+  `ObjFlow.declared_deratings`. `component_spec` writes the recorded pairs in
+  a `deratings` section (`[{"mode", "flow"}]`, the platform export's own
+  vocabulary), and `build_component` replays them after `set_flows()` and
+  before the automata and failure modes. Up to 5.12.1 the declaration dropped
+  them, `FlowContinuousOut.derating` sitting among the derived fields on the
+  ground that the rebuild recreates it, which holds only for a mode declared
+  ON the component: `build_system` rebuilt the component without
+  `M_derating_q` and refused the standalone mode writing it.
+- The two muscadet-side modes allocate through the new
+  `ObjFlow.allocate_derating`, which records nothing: a mode declared on the
+  component and a standalone `ObjFailureMode` both recreate their variables
+  when rebuilt. A pair recorded by `add_derating` that a mode declared on the
+  component also allocates, in either order, is left out too
+  (`ObjFlow.mode_owned_deratings`): the H2 platform round trip pre-allocates
+  exactly that shape. A component carrying no outside derating therefore
+  writes no section, and its spec is byte-identical to what it was.
+- `check_spec` refuses a `deratings` entry that is not exactly a non-empty
+  `mode` and `flow`, before anything is built; `build_component` refuses one
+  naming no continuous output with a `ComponentSpecError` naming the
+  component, the mode and the flow.
+
 ## 5.12.0 (2026-10-11)
 
 - A rule bounded by nothing is refused at the first evaluation meeting it,

@@ -445,9 +445,10 @@ class ObjFailureMode(cod3s.ObjFM):
         thing (R19). A discrete output is gated by its availability variable,
         as it has been since 1.x. A continuous output declares no availability
         at all -- it carries a rate -- so the effect is routed through
-        :meth:`ObjFlow.add_derating`, which is public precisely so that a mode
-        declared OUTSIDE the component can allocate the variable it needs and
-        target it. Two modes derating one output then compose by minimum (R18,
+        :meth:`ObjFlow.allocate_derating`, the allocation without the record
+        the public ``add_derating`` keeps: this mode recreates the variable
+        itself when it is rebuilt, so the target's declaration does not have
+        to carry it (#13). Two modes derating one output then compose by minimum (R18,
         R20) instead of overwriting one another, exactly as they do for a mode
         declared inside the component.
 
@@ -493,7 +494,7 @@ class ObjFailureMode(cod3s.ObjFM):
                 if isinstance(fo, FlowContinuousOut):
                     effects_cur.append(
                         {
-                            "var": comp_target.add_derating(mode_key, fo_name),
+                            "var": comp_target.allocate_derating(mode_key, fo_name),
                             "value": float(val),
                         }
                     )

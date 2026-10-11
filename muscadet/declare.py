@@ -173,9 +173,10 @@ CONSTRUCTOR_KEYS = (
 #: that has no builder for it is still refused BY NAME below rather than
 #: crashing on a missing attribute.
 #:
-#: Every one of these runs BEFORE ``set_flows()``. The two sections that run
+#: Every one of these runs BEFORE ``set_flows()``. The three sections that run
 #: after it are handled apart, in :data:`POST_SET_FLOWS_SECTIONS`, because they
-#: need the variables their effects clamp to exist.
+#: need the variables their effects clamp, or the flows they allocate on, to
+#: exist.
 DECLARATION_SECTIONS = (
     ("measurements_in", "add_measurement_in"),
     ("flows", "add_flow"),
@@ -190,7 +191,22 @@ DECLARATION_SECTIONS = (
 
 #: The sections declared AFTER ``set_flows()``. An automaton's effects are
 #: resolved against the component's variables, which do not exist until then.
-POST_SET_FLOWS_SECTIONS = ("automata", "failure_modes")
+#:
+#: ``deratings`` comes first, and both halves of that position are load
+#: bearing. Each entry is a ``(mode, flow)`` pair whose derating variable was
+#: allocated through the public ``ObjFlow.add_derating`` for a mode declared
+#: OUTSIDE the component (#13): after ``set_flows()``, because the allocation
+#: lands on a wired continuous output; before the modes, because a mode the
+#: component itself declares may name that same variable, and
+#: ``register_derating`` then reuses it rather than doubling it. The outside
+#: mode is a component of its own, built after this one by
+#: :func:`component_build_order` since it names this one in its ``targets``.
+POST_SET_FLOWS_SECTIONS = ("deratings", "automata", "failure_modes")
+
+#: The keys a ``deratings`` entry carries, both required. The vocabulary of
+#: the COD3S Platform export's own ``deratings`` section, so one pair reads the
+#: same on both sides of the importer.
+DERATING_KEYS = ("mode", "flow")
 
 #: ``cls`` values a ``failure_modes`` entry may carry, and the method each maps
 #: to. A failure mode declared on a component is one of exactly two shapes; the
@@ -666,8 +682,11 @@ RUNTIME_HANDLE_PREFIXES = ("sm_",)
 #: spec that dropped one would rebuild a component splitting an insufficient
 #: supply by a different policy.
 #:
-#: ``comp_name`` is written at wiring, ``allocated`` / ``derating`` /
-#: ``demand_required`` are per-evaluation state, ``automaton`` / ``state_empty``
+#: ``comp_name`` is written at wiring, ``allocated`` / ``demand_required`` are
+#: per-evaluation state, ``derating`` holds the engine variables the deratings
+#: allocated on an output -- recreated by the mode declared ON the component
+#: that allocated each, or replayed from the component's ``deratings`` section
+#: when a mode outside it did (#13) -- ``automaton`` / ``state_empty``
 #: / ``state_full`` are a capacity's built bound automaton, ``mode`` is the
 #: automaton a rule set's guards compile into, and ``flow`` is the object a
 #: guard operand resolved onto. ``mixture`` is the binding the pre-run step
@@ -1275,8 +1294,34 @@ def check_spec(spec):
                 )
             if section == "failure_modes":
                 _failure_mode_method(entry, name)
+            elif section == "deratings":
+                _check_derating_entry(entry, name)
 
     return name
+
+
+def _check_derating_entry(entry, name):
+    """Refuse a ``deratings`` entry that is not exactly a ``(mode, flow)`` pair.
+
+    Whether ``flow`` names a continuous output is left to the build, which is
+    the only place the component's flows exist; everything the mapping alone
+    can say is said here.
+    """
+    unknown = sorted(set(entry) - set(DERATING_KEYS))
+    if unknown:
+        raise ComponentSpecError(
+            f"Component {name}: a 'deratings' entry carries unknown key(s) "
+            f"{', '.join(repr(key) for key in unknown)}; it accepts "
+            f"{', '.join(repr(key) for key in DERATING_KEYS)}. The value a mode "
+            f"clamps the variable to belongs to the mode, not to the allocation"
+        )
+    for key in DERATING_KEYS:
+        if not isinstance(entry.get(key), str) or not entry[key]:
+            raise ComponentSpecError(
+                f"Component {name}: a 'deratings' entry needs a non-empty "
+                f"{key!r}, got {entry!r}: it names the {key} the derating "
+                f"variable is allocated for"
+            )
 
 
 def build_component(system, spec):
@@ -1432,7 +1477,17 @@ def build_component(system, spec):
     for section in POST_SET_FLOWS_SECTIONS:
         for entry in _entries(spec, section, name):
             entry = copy_declaration(entry)
-            if section == "automata":
+            if section == "deratings":
+                # Through the public door, so the rebuilt component records the
+                # pair again and reads back into the declaration it came from.
+                try:
+                    comp.add_derating(entry["mode"], entry["flow"])
+                except ValueError as exc:
+                    raise ComponentSpecError(
+                        f"Component {name}: 'deratings' entry for mode "
+                        f"{entry['mode']!r} names flow {entry['flow']!r}: {exc}"
+                    ) from exc
+            elif section == "automata":
                 comp.add_atm2states(**entry)
             elif section == "failure_modes":
                 method_name = _failure_mode_method(entry, name)
@@ -1768,6 +1823,19 @@ def flow_component_spec(comp):
             "mixtures": dump_all(comp.mixtures, "mixture group"),
         }
     )
+
+    # The deratings allocated for a mode declared OUTSIDE the component (#13),
+    # bar those a mode declared ON it allocates as well: that mode recreates
+    # its own variable. Written only when one is left, so the spec of every
+    # component that carries none stays byte-identical to what it was before
+    # the section.
+    deratings = [
+        {"mode": mode_name, "flow": flow_name}
+        for mode_name, flow_name in comp.declared_deratings
+        if (mode_name, flow_name) not in comp.mode_owned_deratings
+    ]
+    if deratings:
+        spec["deratings"] = deratings
 
     # Declared verbatim rather than dumped, so they get their own gate -- see
     # :func:`_checked_declaration`.

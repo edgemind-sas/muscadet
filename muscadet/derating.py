@@ -11,7 +11,7 @@ own two variables rather than sharing one, so neither overwrites the other and
 repairing one while the other still stands leaves the surviving degradation in
 force (R20, KTD8). The composition itself lives on the flow, in
 ``FlowContinuousOut.get_effective_rate``; what lives here is the allocation
-(:func:`add_derating`), the resolution of a mode's declared effects onto it
+(:func:`add_derating`, :func:`allocate_derating`), the resolution of a mode's declared effects onto it
 (:func:`resolve_mode_effects`) and the return to nominal a mode owes its own
 variables (:func:`release_deratings`), a derating having no per-step reset.
 """
@@ -75,6 +75,40 @@ def match_continuous_outputs(comp, pattern):
 
 def add_derating(comp, mode_name, flow_name):
     """
+    Allocates, AND DECLARES, the derating variable of a mode outside the component.
+
+    The public door for a mode declared OUTSIDE the component -- a standalone
+    ``cod3s.ObjMode2S`` / ``cod3s.ObjFM*`` naming variables by their exact
+    basename, which is the road the COD3S Platform importer takes for every
+    ``deratings`` entry of an export. Such a mode lives in a component of its
+    own and can only target a variable that already exists, so the allocation
+    is part of THIS component's declaration: it is recorded in
+    ``comp.declared_deratings``, written by ``muscadet.declare.component_spec``
+    into a ``deratings`` section and replayed by ``build_component`` before
+    the modes (#13). Unrecorded, a system read back into a declaration rebuilt
+    the component without the variable and the mode was refused at
+    construction.
+
+    The two muscadet-side modes allocate through :func:`allocate_derating`
+    instead and record nothing, because they recreate their variables
+    themselves when rebuilt: a mode declared on the component
+    (:func:`resolve_mode_effects`) and a standalone ``ObjFailureMode``
+    (``resolve_effects_on``). Recording them would change the declaration of
+    every component carrying such a mode, for a variable its rebuild allocates
+    anyway. For the same reason a pair recorded here that a mode declared ON
+    the component also allocates -- in either order -- is left out of the
+    declaration: ``comp.mode_owned_deratings`` notes those, and the spec
+    writes the difference.
+
+    Parameters and return value are those of :func:`allocate_derating`.
+    """
+    var = allocate_derating(comp, mode_name, flow_name)
+    comp.declared_deratings.setdefault((mode_name, flow_name), None)
+    return var
+
+
+def allocate_derating(comp, mode_name, flow_name):
+    """
     Allocates the derating variable a mode owns on a continuous output.
 
     One variable per (mode, output flow) pair (R18), named
@@ -83,10 +117,9 @@ def add_derating(comp, mode_name, flow_name):
     variables, and the effective rate is the minimum over them (R20, KTD8)
     rather than whatever the mode that fired last wrote.
 
-    Called by :meth:`resolve_mode_effects` at declaration time, and public
-    so that a mode declared OUTSIDE the component -- a standalone
-    ``cod3s.ObjFM*`` naming variables by their exact basename -- can
-    allocate the variable it needs and target it.
+    Called by :func:`resolve_mode_effects` at declaration time and by a
+    standalone ``ObjFailureMode``, neither of which records the allocation:
+    see :func:`add_derating` for the door that does.
 
     Parameters
     ----------
@@ -452,11 +485,16 @@ def resolve_mode_effects(comp, mode_name, effects):
     list of tuples
         ``(variable, value)`` pairs to clamp while the state holds.
     """
-    return resolve_effect_patterns(
-        comp,
-        effects,
-        lambda flow_name: comp.add_derating(mode_name, flow_name),
-    )
+
+    def allocate(flow_name):
+        # Noted as recreated by this mode, which is what lets the declaration
+        # leave out a pair ``add_derating`` ALSO recorded: the importer
+        # pre-allocates the variable a mode declared afterwards on the same
+        # component then finds and reuses (#13).
+        comp.mode_owned_deratings.add((mode_name, flow_name))
+        return allocate_derating(comp, mode_name, flow_name)
+
+    return resolve_effect_patterns(comp, effects, allocate)
 
 
 def release_deratings(comp, mode_name, *var_value_lists):
