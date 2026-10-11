@@ -31,8 +31,17 @@ reconstructing them.
 - The engine conformance registry gains `initial_state_occurrence`. RAICHU
   departs from it: it reaches the fixpoint, then counts a predicate true there
   as one occurrence (measured on the pyraichu checkout of 2026-09-21).
-- A discrete loop with no fixpoint does not converge: the settle stops after a
-  bounded number of sweeps and leaves the engine its own behaviour.
+- Behaviour change: a discrete loop with no fixpoint (a loop through one
+  negation) is refused at start with `InitialFixpointError` (a `ValueError`,
+  exported from the package root), naming the variables that never settle.
+  Such a model has no initial state. Up to 5.13.0 it started only because the
+  loop stayed dormant until its first change; settling it woke the loop and
+  the start never returned. A loop with several fixpoints (a latch) settles on
+  the one the sweep order reaches.
+- The settle runs components along their connections and, within one, inputs
+  before effects before conditions before outputs, so a chain settles in two
+  sweeps whatever its declaration order. Measured on a 400-block chain over
+  100 runs: 0.42 s, against 0.51 s on 5.13.0.
 
 ## 5.13.0 (2026-10-11)
 

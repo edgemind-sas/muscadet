@@ -679,6 +679,8 @@ At t = 0 the deterministic interactions are first stabilised to their fixpoint: 
 
 An initiating event the analyst wants counted is therefore written as a delay-0 transition, which fires after the fixpoint. A mode declared directly in its second state is a starting condition: its effect is applied from t = 0 and its repair, if any, is the first event.
 
+A discrete loop through one negation has no fixpoint, so no initial state: the start is refused with `InitialFixpointError`, naming the variables that never settle. Break such a loop with a delay (a tempo output or a mode). A loop with several fixpoints, a latch, settles on the one the evaluation order reaches, deterministically.
+
 Up to 5.13.0 the fixpoint was not closed inside the start phase. A component started before its supplier read the supplier's default, the truth arrived afterwards and was counted as a change, so the first row read 0 or 1 depending on which component was declared first. A mode declared in its failed state never applied its effect, and the scenario started healthy. The engine conformance registry records the point as `initial_state_occurrence`.
 
 ## Flow class names: canonical and legacy

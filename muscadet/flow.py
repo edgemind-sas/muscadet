@@ -6,7 +6,12 @@ import pydantic
 from colored import attr, fg
 
 from .common import fresh_instant_occ_law, get_pyc_type
-from .initial_state import register_initial_evaluation
+from .initial_state import (
+    RANK_CONDITION,
+    RANK_INPUT,
+    RANK_OUTPUT,
+    register_initial_evaluation,
+)
 
 
 def _prod_cond_matrix_entry(matrix, i, j, default=None):
@@ -744,6 +749,7 @@ class FlowDiscreteIn(FlowDiscrete):
             comp,
             self.sm_flow_fed_fun,
             [self.var_fed],
+            RANK_INPUT,
             start_name=self.sm_flow_fed_name,
         )
 
@@ -1204,6 +1210,7 @@ class FlowDiscreteOut(FlowDiscrete):
             comp,
             self.sm_flow_fed_fun,
             [self.var_fed],
+            RANK_OUTPUT,
             start_name=self.sm_flow_fed_name,
         )
 
@@ -1271,7 +1278,10 @@ class FlowDiscreteOut(FlowDiscrete):
             comp.addStartMethod(sm_flow_prod_available_name, sm_flow_prod_available_fun)
         if self.var_prod_cond:
             register_initial_evaluation(
-                comp, sm_flow_prod_available_fun, [self.var_prod_available]
+                comp,
+                sm_flow_prod_available_fun,
+                [self.var_prod_available],
+                RANK_CONDITION,
             )
 
     def add_automata(self, comp, **kwargs):

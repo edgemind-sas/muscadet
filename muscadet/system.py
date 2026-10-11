@@ -23,7 +23,7 @@ from .flow_continuous import (
     RATE_OBSERVATION_OUT_SUFFIX,
     FlowContinuous,
 )
-from .initial_state import register_initial_settle
+from .initial_state import initial_fixpoint_refusal, register_initial_settle
 from .mixture import MixtureGroupError, resolve_mixture_groups  # noqa: F401
 from .obj_logic import LogicAnd, LogicOr
 from .ordering import (
@@ -842,7 +842,8 @@ class System(cod3s.PycSystem):
         self.prerun()
         if is_reference_engine(engine):
             self.declare_run_targets(targets)
-            return super().simulate(*args, **kwargs)
+            with initial_fixpoint_refusal(self):
+                return super().simulate(*args, **kwargs)
         return simulate_on(engine, self, *args, targets=targets, **kwargs)
 
     def isimu_start(self, *args, engine=None, targets=None, **kwargs):
@@ -909,7 +910,8 @@ class System(cod3s.PycSystem):
         """
         self.prerun()
         self.emit_run_declaration()
-        return super().startInteractive(*args, **kwargs)
+        with initial_fixpoint_refusal(self):
+            return super().startInteractive(*args, **kwargs)
 
     def deleteSys(self, *args, **kwargs):
         """Delete the engine system and release everything bound to it.

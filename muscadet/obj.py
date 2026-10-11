@@ -155,6 +155,11 @@ from .capacity import (
     allocate_capacity_equation_order,
 )
 from .common import copy_declaration
+
+# Standalone failure modes: components of their own, re-exported here because
+# ``muscadet.obj.ObjFailureMode*`` is where every 1.x model imports them from,
+# and because importing them is what registers them under those names for the
+# ``cls="ObjFailureModeExp"`` spelling of ``System.add_component``.
 from .failure_mode import (  # noqa: F401
     ObjFailureMode,
     ObjFailureModeDelay,
@@ -176,12 +181,7 @@ from .flow_continuous import (
     FlowContinuousIn,
     FlowContinuousOut,
 )
-
-# Standalone failure modes: components of their own, re-exported here because
-# ``muscadet.obj.ObjFailureMode*`` is where every 1.x model imports them from,
-# and because importing them is what registers them under those names for the
-# ``cls="ObjFailureModeExp"`` spelling of ``System.add_component``.
-from .initial_state import register_initial_evaluation
+from .initial_state import RANK_EFFECT, register_initial_evaluation
 from .mixture import MixtureIn
 from .profile import build_profile
 from .rules import (
@@ -2875,6 +2875,7 @@ class ObjFlow(cod3s.PycComponent):
                 self,
                 sensitive_method_12,
                 [var for var, _ in var_value_list_12],
+                RANK_EFFECT,
                 start_name=f"init_{method_name_12}",
             )
 

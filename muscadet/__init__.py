@@ -77,6 +77,7 @@ from .flow_continuous import (
     FlowContinuousIn,
     FlowContinuousOut,
 )
+from .initial_state import InitialFixpointError
 from .mixture import MixtureDraw, MixtureGroupError, MixtureIn
 from .obj import ObjFlow
 from .obj_ctrl import (
