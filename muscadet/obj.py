@@ -181,6 +181,7 @@ from .flow_continuous import (
     FlowContinuousIn,
     FlowContinuousOut,
 )
+from .initial_state import RANK_EFFECT, register_initial_evaluation
 from .mixture import MixtureIn
 from .profile import build_profile
 from .rules import (
@@ -2859,6 +2860,24 @@ class ObjFlow(cod3s.PycComponent):
                 var.addSensitiveMethod(method_name_12, sensitive_method_12)
                 for var, value in var_value_list_12
             ]
+
+            # The effect of the state the automaton STARTS in belongs to the
+            # initial fixpoint (#12). Wired to state changes alone, a mode
+            # declared in its second state never applied it: starting in a
+            # state is not a change, and the system started as if healthy.
+            # Guarded by the state, so it is inert while the mode is in st1.
+            #
+            # Only the SECOND state needs it. The effects of st1 restore the
+            # nominal values the variables are created at, and replaying them
+            # at start would let a mode at rest overwrite, by evaluation order
+            # alone, a gate another mode starting failed has just cleared.
+            register_initial_evaluation(
+                self,
+                sensitive_method_12,
+                [var for var, _ in var_value_list_12],
+                RANK_EFFECT,
+                start_name=f"init_{method_name_12}",
+            )
 
         # Jump 2 -> 1
         # -----------

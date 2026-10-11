@@ -6,6 +6,12 @@ import pydantic
 from colored import attr, fg
 
 from .common import fresh_instant_occ_law, get_pyc_type
+from .initial_state import (
+    RANK_CONDITION,
+    RANK_INPUT,
+    RANK_OUTPUT,
+    register_initial_evaluation,
+)
 
 
 def _prod_cond_matrix_entry(matrix, i, j, default=None):
@@ -737,7 +743,15 @@ class FlowDiscreteIn(FlowDiscrete):
             self.sm_flow_fed_name, self.sm_flow_fed_fun
         )
 
-        comp.addStartMethod(self.sm_flow_fed_name, self.sm_flow_fed_fun)
+        # A start method AND a member of the initial fixpoint (#12): run in
+        # creation order alone, it read a supplier created later at its default.
+        register_initial_evaluation(
+            comp,
+            self.sm_flow_fed_fun,
+            [self.var_fed],
+            RANK_INPUT,
+            start_name=self.sm_flow_fed_name,
+        )
 
 
 class FlowIn(FlowDiscreteIn):
@@ -1191,8 +1205,14 @@ class FlowDiscreteOut(FlowDiscrete):
         #     self.sm_flow_fed_name, self.sm_flow_fed_fun
         # )
 
-        # Start method
-        comp.addStartMethod(self.sm_flow_fed_name, self.sm_flow_fed_fun)
+        # Start method, and a member of the initial fixpoint (#12)
+        register_initial_evaluation(
+            comp,
+            self.sm_flow_fed_fun,
+            [self.var_fed],
+            RANK_OUTPUT,
+            start_name=self.sm_flow_fed_name,
+        )
 
         # Update flow out
         # sens_meth_flow_out = self.create_sensitive_set_flow_out()
@@ -1243,8 +1263,26 @@ class FlowDiscreteOut(FlowDiscrete):
         # correct value at t=0 with a start method. GATED on the extended operand
         # forms so a plain condition keeps the exact legacy wiring
         # (change-subscriptions only) -> byte-identical.
-        if self.var_prod_cond_negate or self.var_prod_cond_compare:
+        #
+        # The initial fixpoint replays it in EVERY case (#12): a plain
+        # condition reaches its value through the change-subscriptions above,
+        # which fire after the start phase and are then counted as a change.
+        # Only the start method stays gated, so the start wiring of a plain
+        # condition is unchanged.
+        #
+        # An output declaring NO condition is left out of the fixpoint: its
+        # ``var_prod_default`` is its value, and evaluating the empty condition
+        # would replace a declared False by ``all([])``.
+        gated = bool(self.var_prod_cond_negate or self.var_prod_cond_compare)
+        if gated:
             comp.addStartMethod(sm_flow_prod_available_name, sm_flow_prod_available_fun)
+        if self.var_prod_cond:
+            register_initial_evaluation(
+                comp,
+                sm_flow_prod_available_fun,
+                [self.var_prod_available],
+                RANK_CONDITION,
+            )
 
     def add_automata(self, comp, **kwargs):
 

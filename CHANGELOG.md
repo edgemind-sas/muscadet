@@ -4,6 +4,45 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 5.14.0 (2026-10-11)
+
+- The initial state is the fixpoint of the deterministic interactions,
+  whatever the declaration order (#12). The start phase now ends on a settle
+  step (`muscadet.initial_state`) that replays every discrete start
+  evaluation, the result of every combinational gate and the effects of the
+  state each mode starts in, until nothing moves. A predicate true at that
+  fixpoint is not an occurrence; a transition firing at t = 0 is.
+- Behaviour change: an `nb-occurrences` indicator on a predicate true from
+  t = 0 used to read 0 or 1 depending on which component was declared first.
+  It now reads 0 in every order. Measured on a Source feeding a Target with no
+  failure, "target fed" counted 1 with the target declared first and now
+  counts 0. An initiating failure written as a delay-0 transition still counts
+  one occurrence in both orders.
+- Behaviour change: a mode declared in its second state (`init_st2=True`)
+  applies that state's effect from t = 0. It never did: starting in a state is
+  not a state change, so the scenario started healthy. Only the second state
+  is replayed, the first restoring the nominal values the variables are
+  created at.
+- Behaviour change: a discrete output declaring a production condition takes
+  the value of that condition at t = 0. It used to keep its
+  `var_prod_default` until an input changed, so an input that never moved left
+  it at the default whatever the condition said. An output declaring no
+  condition keeps its `var_prod_default`, which is its value.
+- The engine conformance registry gains `initial_state_occurrence`. RAICHU
+  departs from it: it reaches the fixpoint, then counts a predicate true there
+  as one occurrence (measured on the pyraichu checkout of 2026-09-21).
+- Behaviour change: a discrete loop with no fixpoint (a loop through one
+  negation) is refused at start with `InitialFixpointError` (a `ValueError`,
+  exported from the package root), naming the variables that never settle.
+  Such a model has no initial state. Up to 5.13.0 it started only because the
+  loop stayed dormant until its first change; settling it woke the loop and
+  the start never returned. A loop with several fixpoints (a latch) settles on
+  the one the sweep order reaches.
+- The settle runs components along their connections and, within one, inputs
+  before effects before conditions before outputs, so a chain settles in two
+  sweeps whatever its declaration order. Measured on a 400-block chain over
+  100 runs: 0.42 s, against 0.51 s on 5.13.0.
+
 ## 5.13.0 (2026-10-11)
 
 - A derating allocated from outside its component survives a declaration
