@@ -26,6 +26,11 @@ reconstructing them.
   (`ObjFlow.mode_owned_deratings`): the H2 platform round trip pre-allocates
   exactly that shape. A component carrying no outside derating therefore
   writes no section, and its spec is byte-identical to what it was.
+- The system declaration format moves to 1.0.3, the patch its versioning
+  rule prescribes for an optional key. A reader that does not know
+  `deratings` should refuse it rather than drop it: dropped, the component is
+  rebuilt without the variable the outside mode clamps. muscadet before
+  5.13.0 refuses it as an unknown declaration key.
 - `check_spec` refuses a `deratings` entry that is not exactly a non-empty
   `mode` and `flow`, before anything is built; `build_component` refuses one
   naming no continuous output with a `ComponentSpecError` naming the

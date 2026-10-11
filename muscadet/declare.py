@@ -2742,7 +2742,16 @@ def build_controller_component(system, spec):
 #: muscadet's own engine observes the declared indicators either way -- and a
 #: 1.0.1 document rebuilds here unchanged, taking the default of the format
 #: (absent means false).
-SYSTEM_SPEC_VERSION = "1.0.2"
+#:
+#: 1.0.3 adds ``deratings`` on a component (#13): the ``(mode, flow)`` pairs
+#: whose derating variable was allocated for a mode declared OUTSIDE it.
+#: Optional, and absent means no such allocation, so a 1.0.2 document
+#: rebuilds here unchanged. Unlike the two keys above it carries no default a
+#: reader may fall back on: a reader ignoring it rebuilds the component
+#: without ``{mode}_derating_{flow}`` and the outside mode that clamps it is
+#: refused or loses its effect, so a reader that does not know the key should
+#: refuse it rather than drop it, as muscadet before 5.13.0 does.
+SYSTEM_SPEC_VERSION = "1.0.3"
 
 
 #: The model-level key by which a declaration says whether it wants the

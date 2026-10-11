@@ -26,6 +26,7 @@ import pytest
 
 import muscadet
 from muscadet.declare import (
+    SYSTEM_SPEC_VERSION,
     ComponentSpecError,
     build_component,
     build_system,
@@ -168,6 +169,71 @@ def test_a_preallocated_derating_a_declared_mode_reuses_is_not_written(
         system.deleteSys()
 
     assert spec["deratings"] == [{"mode": "M", "flow": "q"}]
+
+
+def test_a_mode_owned_pair_left_out_of_the_spec_comes_back_on_the_rebuild():
+    """Left out is only safe if the mode really recreates the variable."""
+    system = muscadet.System(name="DdOwnedRebuild")
+    try:
+        src = system.add_component(cls="DdSource", name="Src")
+        src.add_derating("wear", "q")
+        src.add_delay_failure_mode(
+            name="wear",
+            failure_time=DD_DELAY,
+            repair_time=DD_DELAY,
+            failure_effects=[("q", 0.5)],
+        )
+        spec = component_spec(src)
+    finally:
+        system.deleteSys()
+
+    rebuilt = muscadet.System(name="DdOwnedRebuilt")
+    try:
+        comp = build_component(rebuilt, spec)
+        assert "wear" in comp.flows_out["q"].derating
+    finally:
+        rebuilt.deleteSys()
+
+
+def test_the_section_is_replayed_before_a_mode_naming_its_variable():
+    """The position in POST_SET_FLOWS_SECTIONS is load bearing.
+
+    A mode declared ON the component that clamps the outside variable by its
+    exact basename resolves it at declaration: replayed after the modes, the
+    variable would not exist yet and the mode would be refused.
+    """
+    spec = {
+        "name": "Src",
+        "cls": "DdSource",
+        "deratings": [{"mode": "M", "flow": "q"}],
+        "automata": [
+            {
+                "name": "cut",
+                "occ_law_12": {"cls": "delay", "time": DD_DELAY},
+                "effects_12": [["M_derating_q", 0.0]],
+                "cond_occ_21": False,
+            }
+        ],
+    }
+    system = muscadet.System(name="DdOrder")
+    try:
+        comp = build_component(system, spec)
+        assert component_spec(comp)["deratings"] == [{"mode": "M", "flow": "q"}]
+        # The effect must actually reach the variable once the mode fires.
+        system.isimu_start()
+        system.isimu_step_to(DD_DELAY + 1.0)
+        assert comp.variable("M_derating_q").value() == 0.0
+        system.isimu_stop()
+    finally:
+        system.deleteSys()
+
+
+def test_the_format_version_records_the_section():
+    """An optional section is a patch of the declaration format (1.0.3)."""
+    version = tuple(int(part) for part in SYSTEM_SPEC_VERSION.split("."))
+
+    assert version[0] == 1
+    assert version >= (1, 0, 3)
 
 
 def test_a_component_with_no_derating_writes_no_section():
