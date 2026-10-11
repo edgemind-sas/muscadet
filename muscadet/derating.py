@@ -11,9 +11,10 @@ own two variables rather than sharing one, so neither overwrites the other and
 repairing one while the other still stands leaves the surviving degradation in
 force (R20, KTD8). The composition itself lives on the flow, in
 ``FlowContinuousOut.get_effective_rate``; what lives here is the allocation
-(:func:`add_derating`, :func:`allocate_derating`), the resolution of a mode's declared effects onto it
-(:func:`resolve_mode_effects`) and the return to nominal a mode owes its own
-variables (:func:`release_deratings`), a derating having no per-step reset.
+(:func:`add_derating`, :func:`allocate_derating`), the resolution of a mode's
+declared effects onto it (:func:`resolve_mode_effects`) and the return to
+nominal a mode owes its own variables (:func:`release_deratings`), a derating
+having no per-step reset.
 """
 
 import re

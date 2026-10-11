@@ -448,9 +448,9 @@ class ObjFailureMode(cod3s.ObjFM):
         :meth:`ObjFlow.allocate_derating`, the allocation without the record
         the public ``add_derating`` keeps: this mode recreates the variable
         itself when it is rebuilt, so the target's declaration does not have
-        to carry it (#13). Two modes derating one output then compose by minimum (R18,
-        R20) instead of overwriting one another, exactly as they do for a mode
-        declared inside the component.
+        to carry it (#13). Two modes derating one output then compose by
+        minimum (R18, R20) instead of overwriting one another, exactly as they
+        do for a mode declared inside the component.
 
         The value is the RATE the mode leaves on a continuous output, so the
         boolean spelling of a 1.x effect keeps meaning what it did: ``False``
