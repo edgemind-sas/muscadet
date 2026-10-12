@@ -1,0 +1,18 @@
+# Display attribution, not history rewriting.
+#
+# On 2026-09-11 at 17:52, the COD3S platform's release script
+# (`.gitlab/post_release_tag.sh`) was run by hand on a developer machine. It
+# set its bot tagger identity with `git config --global`, so every commit made
+# on that machine for the next six days carries
+# "COD3S release bot <ci@edgemind.net>" as its author. Forty-one of them are
+# in this repository, six of those on master, including the 5.4.0 release
+# commit. None of it is the bot's work.
+#
+# This file fixes what `git log`, `git blame` and `git shortlog` display,
+# without touching a single commit: rewriting a shared history would cost more
+# than the wrong attribution.
+#
+# No side effect: the release bot only posts tags, never commits, and tags do
+# not go through mailmap. The cause is closed upstream (the platform job now
+# passes its identity through the environment, with tests pinning it).
+Roland Donat <roland.donat@edgemind.net> <ci@edgemind.net>
