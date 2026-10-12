@@ -42,12 +42,14 @@ dependencies = [
     # ObjMode2S.footprint, which counts what a mode builds without building it;
     # and, from 1.20.0, a one-shot repair effect allowed beside a held
     # occurrence effect on one variable, and one-shot effects fired on each
-    # target's mirror automaton in external behaviour).
+    # target's mirror automaton in external behaviour; and, from 1.21.0,
+    # one-shot effects accepted on a mode over several targets and on inst
+    # directions).
     #
     # This pin is also why a maintenance release can exist over nothing else:
     # a downstream consumer cannot raise its own cod3s ref above the one
     # muscadet embeds, uv refusing to resolve two URLs for the same package.
-    "cod3s @ git+https://github.com/edgemind-sas/cod3s.git@1.20.0",
+    "cod3s @ git+https://github.com/edgemind-sas/cod3s.git@1.21.0",
     "graphviz==0.20.1",
 ]
 
