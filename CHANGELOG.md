@@ -4,6 +4,24 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 5.14.1 (2026-10-12)
+
+Maintenance over 5.14.0: one line of `pyproject.toml`, no muscadet code. The
+embedded cod3s ref moves from 1.19.0 to 1.20.0.
+
+It exists for the reason 5.3.1 existed over 5.3.0: a downstream consumer cannot
+raise its own cod3s ref above the one muscadet embeds, uv refusing to resolve
+two URLs for the same package, so the two pins move together or neither does.
+What the consumer gains is the fix of edgemind-sas/cod3s#8: a held occurrence
+effect and a one-shot repair effect on one variable are accepted (the same-face
+overlap is still refused), and in `external` and `external_rep_indep`
+behaviour one-shot effects fire on each target's mirror automaton, when that
+target actually changes state. Two modes clamping one variable also hold it
+while either is occurred and hand it back when the last one is repaired.
+
+Validated by running the 5.14.0 suite unchanged against cod3s 1.20.0: 2105
+passed, 2 skipped. No expectation moved.
+
 ## 5.14.0 (2026-10-11)
 
 - The initial state is the fixpoint of the deterministic interactions,
