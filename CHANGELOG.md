@@ -4,6 +4,29 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 5.14.2 (2026-10-12)
+
+Maintenance over 5.14.1: one line of `pyproject.toml`, no muscadet code. The
+embedded cod3s ref moves from 1.20.0 to 1.21.0.
+
+It exists for the reason 5.14.1 existed over 5.14.0: a downstream consumer
+cannot raise its own cod3s ref above the one muscadet embeds, so the two pins
+move together or neither does. What the consumer gains is
+edgemind-sas/cod3s#9: one-shot effects are accepted on a mode over several
+targets, and on `inst` directions, where they are guarded on the destination
+state (a pulse on a draw fires only when the draw succeeds).
+
+One construction now refuses what used to run: in `internal` behaviour, when
+the kept CC orders make several combination automata write the same target, a
+variable held on both faces with different values (`failure_effects` and
+`repair_effects`) is refused with a `ValueError`. Such a model never converged
+(edgemind-sas/cod3s#4, an unbounded run with no diagnostic); the refusal names
+the variables and the two ways out.
+
+Validated by running the 5.14.1 suite unchanged against cod3s 1.21.0: 2105
+passed, 2 skipped. No expectation moved, and no model of `examples/` reaches
+the new refusal.
+
 ## 5.14.1 (2026-10-12)
 
 Maintenance over 5.14.0: one line of `pyproject.toml`, no muscadet code. The
