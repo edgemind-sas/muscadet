@@ -42,6 +42,15 @@ name; the combination itself is recovered from that name through the same
 are therefore kept AWAY from the engine (it is handed empty ones, and would
 otherwise reject a flow name as an unknown variable) and restored onto the
 public attributes once construction is over.
+
+When the combinations overlap on a target (the engine's
+``shared_target_clamps``), several automata cover it and the availability gate
+of a discrete output is ONE variable they would all clamp, a combination at
+rest asserting the repair value over another in ``occ`` (cod3s#4, cod3s#10).
+Those records are set aside in ``_build_fm_automaton`` and handed back through
+the engine's ``_shared_target_clamp_effects`` hook, which applies them once per
+target over the covering combinations. The deratings stay on the automata: each
+owns its own variable.
 """
 
 import copy
@@ -276,6 +285,11 @@ class ObjFailureMode(cod3s.ObjFM):
             "not_occ": copy.deepcopy(repair_effects),
         }
         self._cc_target_index = None
+        # Availability records the engine's shared clamp applies, per target
+        # (``id`` of the component), filled by ``_build_fm_automaton`` when
+        # the combinations overlap and read back by
+        # ``_shared_target_clamp_effects`` once they are all built.
+        self._shared_held = {}
 
         super().__init__(
             fm_name=fm_name,
@@ -411,6 +425,32 @@ class ObjFailureMode(cod3s.ObjFM):
                 repair_by_target[key],
             )
 
+        if self.shared_target_clamps:
+            # Overlapping combinations cover each target several times. Its
+            # availability gate is ONE variable they would all clamp, a
+            # combination at rest asserting the repair value over another in
+            # occ (cod3s#4): it goes to the engine's shared clamp instead,
+            # applied once per target over the covering combinations. The
+            # deratings stay on the automaton, each owning its own variable.
+            for comp_target_cur in target_comps:
+                key = id(comp_target_cur)
+                deratings = comp_target_cur.derating_vars_of(mode_key)
+                held = self._shared_held.setdefault(key, {})
+                for face, by_target in (
+                    ("occ", failure_by_target),
+                    ("not_occ", repair_by_target),
+                ):
+                    held[face] = [
+                        record
+                        for record in by_target[key]
+                        if record["var"].basename() not in deratings
+                    ]
+                    by_target[key] = [
+                        record
+                        for record in by_target[key]
+                        if record["var"].basename() in deratings
+                    ]
+
         failure_effects_cur = [
             record
             for comp_target_cur in target_comps
@@ -436,6 +476,20 @@ class ObjFailureMode(cod3s.ObjFM):
             failure_effects_trans=failure_effects_trans,
             repair_effects_trans=repair_effects_trans,
         )
+
+    def _shared_target_clamp_effects(self, target_comp, target_name):
+        """The availability records of one target, for the shared clamp.
+
+        The engine's hook, called once per target after every combination
+        is built when :attr:`shared_target_clamps` is true. The default
+        resolves the effects by exact variable name, which a flow pattern
+        never matches; this returns what ``_build_fm_automaton`` resolved
+        and set aside instead. The records do not depend on the
+        combination, so any one of the combinations covering the target
+        left the right ones.
+        """
+        held = self._shared_held.get(id(target_comp), {})
+        return held.get("occ", []), held.get("not_occ", [])
 
     def resolve_effects_on(self, comp_target, effects, mode_key, direction):
         """

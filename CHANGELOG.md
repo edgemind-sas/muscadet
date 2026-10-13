@@ -4,6 +4,32 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 5.16.0 (2026-10-13)
+
+- A standalone failure mode (`ObjFailureMode*`) over overlapping common-cause
+  combinations (two kept orders, or one order strictly between 1 and the
+  number of targets) gates each target's discrete outputs ONCE, over the
+  combinations covering it: `failure_effects` while one of them is in `occ`,
+  `repair_effects` only while all of them are at rest. Each combination used to
+  clamp the shared availability gate on its own, so a combination at rest kept
+  asserting `repair_effects` on a target another combination had put in
+  `occ`.
+- An availability held on both faces (`failure_effects={"f1": False}`,
+  `repair_effects={"f1": True}`) over such combinations no longer spins
+  forever at the first failure (cod3s#4). Measured on two targets with delay
+  laws: the run returns and each output follows its covering combinations.
+- Behaviour change: an availability held only at rest (`repair_effects`) is
+  released while the target is in `occ`, as a single-target mode releases it,
+  instead of staying held by the combinations at rest (cod3s#10).
+  `tests/test_comp_failure_003.py` pinned the old reading: `f3`, held `False`
+  at rest, now reads `True` while `cc_1_3_4` is in `occ` and its inputs are
+  fed.
+- The deratings of continuous outputs are unchanged: each automaton still owns
+  its own derating variable, composed by minimum, which never had the fault.
+- The embedded cod3s ref moves from 1.21.0 to 1.23.0, whose engine applies the
+  shared clamp and lets this façade feed it (`shared_target_clamps`,
+  `_shared_target_clamp_effects`).
+
 ## 5.15.0 (2026-10-13)
 
 - The COD3S Platform importer reads an interface through an allowlist, like
