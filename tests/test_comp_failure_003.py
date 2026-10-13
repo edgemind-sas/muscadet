@@ -182,11 +182,15 @@ def test_system(the_system):
     the_system.isimu_set_transition("TXX__frun.occ__cc_1_3_4")
     trans_fired = the_system.isimu_step_forward()
 
+    # f3 is held only at rest (repair_effects). In occ the mode releases it,
+    # as a single-target mode does, and its fed inputs make it True again.
+    # Up to 5.15.0 the combinations still at rest covering T1, T3 and T4
+    # (cc_1, cc_1_2, ...) kept it False (cod3s#10).
     for cname in ["T1", "T3", "T4"]:
-        for fname in ["f1", "f2", "f3"]:
+        for fname in ["f1", "f2"]:
             assert the_system.comp[cname].flows_out[fname].var_fed.value() is False
-        # for fname in ["f3"]:
-        #     assert the_system.comp[cname].flows_out[fname].var_fed.value() is True
+        for fname in ["f3"]:
+            assert the_system.comp[cname].flows_out[fname].var_fed.value() is True
 
     for cname in ["T2"]:
         for fname in ["f1", "f2"]:
