@@ -2846,7 +2846,8 @@ do, in one of three ways:
 - a key another cell reads names that cell (a `production_profile` on an
   input);
 - any other key says to upgrade muscadet if the export comes from a more
-  recent COD3S Platform, and to drop the key otherwise.
+  recent COD3S Platform, and to correct or drop the key otherwise. A near
+  miss carries that advice too: the suggestion is a hint, not a verdict.
 
 A key that carries nothing (`null`, an empty list or mapping, or the default
 the platform serialises on every port) passes whatever its name, so an unset

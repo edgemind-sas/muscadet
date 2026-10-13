@@ -1159,15 +1159,19 @@ def _check_interface_keys(
     """Refuse, by name, a declared key no reader of this port's cell reads.
 
     A key that says nothing (see :func:`_declared_interface_keys`) passes
-    whatever its name: the platform omits a default from what it serialises, so
-    an unset field sent by a NEWER platform still means what its absence means,
-    and its export stays importable.
+    whatever its name, so an unset field sent by a NEWER platform still means
+    what its absence means and its export stays importable. That holds because
+    the platform serialises a field it ADDS only when set (its content-hash
+    rule, cf. ``_omit_interface_defaults``); the older fields it serialises at
+    their default are listed in :data:`_NEUTRAL_INTERFACE_VALUES`.
 
     A key that says something is refused, in one of three wordings because each
     calls for a different fix: a key another cell reads names that cell; a near
     miss of a key this cell reads names the key it was probably meant to be;
     anything else says to upgrade muscadet if the export comes from a more
-    recent platform. Not a warning: it would land in the log of a worker no
+    recent platform. A near miss says so too: a key a newer platform added may
+    sit one letter away from one this cell reads (``var_out_default``), so the
+    suggestion is a hint and not a verdict. Not a warning: it would land in the log of a worker no
     modeller reads, which is the silence this guard exists to end.
     """
     read = _INTERFACE_KEYS_READ[(family, direction)]
@@ -1203,7 +1207,7 @@ def _check_interface_keys(
             problems.append(f"{key!r} is unknown (did you mean {near[0]!r}?)")
         else:
             problems.append(f"{key!r} is unknown")
-            unknown = True
+        unknown = True
 
     message = (
         f"Interface {name!r}, a {family} {direction} port: "
@@ -1213,7 +1217,7 @@ def _check_interface_keys(
     if unknown:
         message += (
             " If the export comes from a more recent COD3S Platform, upgrade "
-            "muscadet; otherwise drop the key."
+            "muscadet; otherwise correct or drop the key."
         )
     raise Cod3sPlatformImportError(message)
 

@@ -147,6 +147,9 @@ class TestUnreadKeys:
         assert "'valve'" in message
         assert "'prod_conds'" in message
         assert "did you mean 'prod_cond'" in message
+        # A suggestion is a hint, not a verdict: a key a newer platform added
+        # may sit one letter away from one this cell reads.
+        assert "upgrade muscadet" in message
 
     def test_a_near_miss_on_a_discrete_input_names_its_key(self):
         with pytest.raises(

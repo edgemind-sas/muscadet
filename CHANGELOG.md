@@ -22,7 +22,8 @@ reconstructing them.
   cell reads names the cell (a `production_profile` on a continuous input, a
   `prod_cond` on a discrete input, a `var_in_default` on a continuous output);
   any other key says to upgrade muscadet if the export comes from a more recent
-  platform, and to drop the key otherwise.
+  platform, and to correct or drop the key otherwise. A near miss carries that
+  advice too, the suggestion being a hint rather than a verdict.
 - A key carrying nothing (`null`, `[]`, `{}`, or the neutral value the
   platform serialises by default) still passes whatever its name, so an export
   from a newer platform that sends an unset field stays importable. The refusal
