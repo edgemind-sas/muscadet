@@ -4,6 +4,33 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 5.15.0 (2026-10-13)
+
+- The COD3S Platform importer reads an interface through an allowlist, like
+  capacities, rules, controllers and profile parameters already were
+  (COD3S Platform #150). Each cell, a flow family and a direction, has the set
+  of keys its parser reads (`_INTERFACE_KEYS_READ`); beside it a port may carry
+  its identity (`name`, `port_type`, `flow_family`), the two keys the platform
+  keeps for itself (`metadata`, `component_authorized`) and the dead
+  `prod_init` that released libraries still store.
+- Behaviour change: a key no reader of the port's cell reads is refused, by
+  name, where it used to be dropped in silence. Measured on a continuous output
+  carrying `prod_conds: [["ctrl"]]`: the condition arrived empty and the valve
+  stayed open for the whole run; the import now stops on
+  `'prod_conds' is unknown (did you mean 'prod_cond'?)`. Three wordings, one
+  per fix: a near miss of a key the cell reads names that key; a key another
+  cell reads names the cell (a `production_profile` on a continuous input, a
+  `prod_cond` on a discrete input, a `var_in_default` on a continuous output);
+  any other key says to upgrade muscadet if the export comes from a more recent
+  platform, and to drop the key otherwise.
+- A key carrying nothing (`null`, `[]`, `{}`, or the neutral value the
+  platform serialises by default) still passes whatever its name, so an export
+  from a newer platform that sends an unset field stays importable. The refusal
+  is not softened to a warning: it would land in the log of a worker no
+  modeller reads.
+- The ports stored on the two local platform instances were inventoried before
+  the change (2026-10-13): every key they carry is accepted.
+
 ## 5.14.2 (2026-10-12)
 
 Maintenance over 5.14.1: one line of `pyproject.toml`, no muscadet code. The
