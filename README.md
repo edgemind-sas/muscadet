@@ -2832,6 +2832,26 @@ Out of scope (deferred to later phases) :
   `attributes_initial` but not yet wired as `var_in_default`)
 - Indicators / observation points
 
+### Interface keys
+
+An interface is read through an allowlist, indexed by its cell: a flow family
+and a direction. A key that no reader of the port's cell reads, and that carries
+a value, is refused by name rather than dropped, because a dropped key is a
+declaration the model silently does not have: a misspelt `prod_conds` on a
+continuous output builds a valve that never closes. The refusal says what to
+do, in one of three ways:
+
+- a near miss of a key the cell reads names the key it was probably meant to
+  be (`'prod_conds' is unknown (did you mean 'prod_cond'?)`);
+- a key another cell reads names that cell (a `production_profile` on an
+  input);
+- any other key says to upgrade muscadet if the export comes from a more
+  recent COD3S Platform, and to drop the key otherwise.
+
+A key that carries nothing (`null`, an empty list or mapping, or the default
+the platform serialises on every port) passes whatever its name, so an unset
+field sent by a newer platform keeps its export importable.
+
 See `tests/test_importer_cod3s_platform_*` for the full behaviour
 specification and `tests/fixtures/` for sample inputs.
 
