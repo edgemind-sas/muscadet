@@ -82,6 +82,7 @@ class does not declare is REFUSED, never dropped.
 from __future__ import annotations
 
 import copy
+import difflib
 import hashlib
 import logging
 import math
@@ -910,9 +911,9 @@ _DISCRETE_ONLY_INTERFACE_KEYS: Tuple[str, ...] = (
 # with the rest of the operand vocabulary: that one negates what an operand
 # READS, this one what the port produces.
 #
-# The mirror gap, a ``prod_cond`` written on a DISCRETE input, is untouched and
-# still dropped in silence. Closing it is a change to the discrete path, which
-# is 1.x surface: it belongs to its own change, not to this bridge.
+# The mirror gap, a ``prod_cond`` written on a DISCRETE input, is closed by the
+# interface allowlist below (:data:`_INTERFACE_KEYS_READ`), with the generic
+# message: this tuple keeps its own for the continuous case it was written for.
 _OUTPUT_ONLY_CONTINUOUS_KEYS: Tuple[str, ...] = (
     "prod_cond",
     "logic_inner_mode",
@@ -955,6 +956,64 @@ _NEUTRAL_INTERFACE_VALUES: Dict[str, Tuple[Any, ...]] = {
     "flow_type": ("classic",),
     "allocation": (_ALLOCATION_PROPORTIONAL,),
 }
+
+# The interface keys each CELL reads, a cell being a family and a direction.
+# An allowlist, like the capacity, rule, controller and profile-parameter ones
+# of this module, and for the same reason: a key nothing reads is otherwise
+# dropped in silence, and the misspelt ``prod_conds`` of a continuous output
+# then builds a valve that never closes (COD3S Platform #150).
+#
+# Indexed by cell and not by family, because the question a key answers is
+# "does anything on THIS port read it". A production profile is continuous, and
+# still means nothing on an input; a production condition is read on both
+# outputs, and on neither input.
+#
+# The specific guards above run FIRST and keep their messages: they know why a
+# key is wrong where it stands (a boolean port, a negation on a rate, a
+# condition on an input). What reaches :func:`_check_interface_keys` is what no
+# guard was written for. A key added to a parser below is added here, or the
+# parser never sees it.
+_INTERFACE_KEYS_READ: Dict[Tuple[str, str], frozenset] = {
+    (DISCRETE_FAMILY, "input"): frozenset({"input_logic"}),
+    (DISCRETE_FAMILY, "output"): frozenset(
+        {
+            "prod_cond",
+            "logic_inner_mode",
+            "negate",
+            "flow_type",
+            "occ_enable",
+            "occ_disable",
+            "init_enable",
+            "trigger_time_up",
+            "trigger_time_down",
+            "trigger_logic",
+        }
+    ),
+    (CONTINUOUS_FAMILY, "input"): frozenset({"demand_profile", "var_in_default"}),
+    (CONTINUOUS_FAMILY, "output"): frozenset(
+        {"production_profile", "prod_cond", "logic_inner_mode", "allocation"}
+    ),
+}
+
+# Keys every interface may carry whatever its cell, and that no cell lists:
+# what identifies the port, read before the cell is even known.
+_INTERFACE_IDENTITY_KEYS = frozenset({"name", "port_type", "flow_family"})
+
+# Keys the platform stores on a port for its own use, and that say nothing to a
+# simulation: a free description, and the peer classes a link may reach, which
+# the platform enforces when the link is DRAWN.
+_PLATFORM_ONLY_INTERFACE_KEYS = frozenset({"metadata", "component_authorized"})
+
+# Keys only dead data carries. ``prod_init`` has lived in the attribute cascade
+# since the platform's kb/004, and nothing reads the interface key; released,
+# therefore immutable, libraries still carry it, so refusing it would make them
+# unsimulable. The twin of the platform's ``_LEGACY_IGNORED_FIELDS``.
+_DEAD_INTERFACE_KEYS = frozenset({"prod_init"})
+
+# How close a key must be to one its cell reads to be taken for a misspelling
+# of it (``difflib`` ratio). ``prod_conds`` scores 0.95 against ``prod_cond``;
+# 0.8 keeps a one- or two-letter slip and leaves unrelated names alone.
+_NEAR_MISS_CUTOFF = 0.8
 
 # ---------------------------------------------------------------------------
 # Profile decomposition (2026-08)
@@ -1092,6 +1151,75 @@ def _check_output_only_keys(interface: Dict[str, Any], *, name: str) -> None:
         f"A production condition conditions what a port PRODUCES, and an input "
         f"produces nothing. Declare it on the output whose rate it gates."
     )
+
+
+def _check_interface_keys(
+    interface: Dict[str, Any], *, name: str, family: str, direction: str
+) -> None:
+    """Refuse, by name, a declared key no reader of this port's cell reads.
+
+    A key that says nothing (see :func:`_declared_interface_keys`) passes
+    whatever its name, so an unset field sent by a NEWER platform still means
+    what its absence means and its export stays importable. That holds because
+    the platform serialises a field it ADDS only when set (its content-hash
+    rule, cf. ``_omit_interface_defaults``); the older fields it serialises at
+    their default are listed in :data:`_NEUTRAL_INTERFACE_VALUES`.
+
+    A key that says something is refused, in one of three wordings because each
+    calls for a different fix: a key another cell reads names that cell; a near
+    miss of a key this cell reads names the key it was probably meant to be;
+    anything else says to upgrade muscadet if the export comes from a more
+    recent platform. A near miss says so too: a key a newer platform added may
+    sit one letter away from one this cell reads (``var_out_default``), so the
+    suggestion is a hint and not a verdict. Not a warning: it would land in the log of a worker no
+    modeller reads, which is the silence this guard exists to end.
+    """
+    read = _INTERFACE_KEYS_READ[(family, direction)]
+    accepted = (
+        read
+        | _INTERFACE_IDENTITY_KEYS
+        | _PLATFORM_ONLY_INTERFACE_KEYS
+        | _DEAD_INTERFACE_KEYS
+    )
+    offending = _declared_interface_keys(
+        interface, tuple(key for key in interface if key not in accepted)
+    )
+    if not offending:
+        return
+
+    problems = []
+    unknown = False
+    for key in offending:
+        readers = [
+            f"{reader_family} {reader_direction}"
+            for (reader_family, reader_direction), keys in _INTERFACE_KEYS_READ.items()
+            if key in keys
+        ]
+        if readers:
+            problems.append(
+                f"{key!r} is read on a {' or '.join(readers)} port, not here"
+            )
+            continue
+        near = difflib.get_close_matches(
+            key, sorted(read), n=1, cutoff=_NEAR_MISS_CUTOFF
+        )
+        if near:
+            problems.append(f"{key!r} is unknown (did you mean {near[0]!r}?)")
+        else:
+            problems.append(f"{key!r} is unknown")
+        unknown = True
+
+    message = (
+        f"Interface {name!r}, a {family} {direction} port: "
+        f"{'; '.join(problems)}. This port reads "
+        f"{', '.join(repr(key) for key in sorted(read))}."
+    )
+    if unknown:
+        message += (
+            " If the export comes from a more recent COD3S Platform, upgrade "
+            "muscadet; otherwise correct or drop the key."
+        )
+    raise Cod3sPlatformImportError(message)
 
 
 def _parse_profile(
@@ -1246,9 +1374,13 @@ def _parse_continuous_interface(
         other_family=DISCRETE_FAMILY,
     )
     _check_negation(interface, name=name)
-
     if port_type == "input":
         _check_output_only_keys(interface, name=name)
+    _check_interface_keys(
+        interface, name=name, family=CONTINUOUS_FAMILY, direction=port_type
+    )
+
+    if port_type == "input":
         rate, _ = _parse_profile(
             interface.get("demand_profile"),
             flow_name=name,
@@ -1357,6 +1489,9 @@ def _parse_interface(interface: Dict[str, Any]) -> FlowSpec:
         family=DISCRETE_FAMILY,
         forbidden=_CONTINUOUS_ONLY_INTERFACE_KEYS,
         other_family=CONTINUOUS_FAMILY,
+    )
+    _check_interface_keys(
+        interface, name=name, family=DISCRETE_FAMILY, direction=port_type
     )
 
     if port_type == "input":
