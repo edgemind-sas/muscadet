@@ -32,6 +32,7 @@ so a threshold the solver did not watch would be seen a whole step late.
 """
 
 import cod3s
+import pydantic
 import pytest
 
 import muscadet
@@ -545,6 +546,24 @@ def test_a_flat_production_condition_is_refused_at_declaration():
     """
     with pytest.raises(ValueError, match="list of GROUPS"):
         muscadet.FlowContinuousOut(name="q", var_prod_cond=["ctrl"])
+
+
+@pytest.mark.parametrize("condition", ["ctrl", {"name": "ctrl"}])
+def test_a_bare_production_condition_names_the_expected_groups(condition):
+    """A bare name or a mapping is not a list at all.
+
+    Pydantic's list coercion would refuse it first with a generic
+    ``list_type`` that says nothing of what to write instead; the field gate
+    speaks before it and names the stored form and the declaration door.
+    """
+    with pytest.raises(pydantic.ValidationError) as caught:
+        muscadet.FlowContinuousOut(name="q", var_prod_cond=condition)
+
+    message = str(caught.value)
+    assert "Flow 'q': var_prod_cond must be a list of groups" in message
+    assert f"got {type(condition).__name__}" in message
+    assert "Declare the condition on the component" in message
+    assert "list_type" not in message
 
 
 def test_a_continuous_output_still_refuses_the_discrete_production_default():

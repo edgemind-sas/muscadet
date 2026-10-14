@@ -1070,6 +1070,27 @@ class FlowContinuousOut(FlowContinuous):
     #: means. Private, it cannot be declared and cannot be dumped.
     _prod_cond_readers: typing.Any = pydantic.PrivateAttr(default=None)
 
+    @pydantic.field_validator("var_prod_cond", mode="before")
+    @classmethod
+    def check_prod_cond_container(
+        cls, value: typing.Any, info: pydantic.ValidationInfo
+    ) -> typing.Any:
+        """Name the stored form when the condition is not a list at all.
+
+        A BEFORE validator, deliberately: the field is typed ``list``, so
+        Pydantic's coercion refuses a bare name or a mapping first, with a
+        generic ``list_type`` that says nothing of what to write instead. Placed
+        after coercion, as it once was, this message could never be reached.
+        """
+        if isinstance(value, (str, dict)):
+            raise ValueError(
+                f"Flow {info.data.get('name')!r}: var_prod_cond must be a list "
+                f"of groups, got {type(value).__name__}. Declare the condition "
+                f"on the component (add_flow / add_flow_continuous_out), which "
+                f"resolves it."
+            )
+        return value
+
     @pydantic.model_validator(mode="after")
     def check_prod_cond_shape(self):
         """Refuse a production condition that is not in its STORED form.
@@ -1094,13 +1115,6 @@ class FlowContinuousOut(FlowContinuous):
             return self
 
         where = f"Flow {self.name!r}: var_prod_cond"
-
-        if isinstance(self.var_prod_cond, (str, dict)):
-            raise ValueError(
-                f"{where} must be a list of groups, got {type(self.var_prod_cond).__name__}. "
-                f"Declare the condition on the component (add_flow / "
-                f"add_flow_continuous_out), which resolves it."
-            )
 
         for group in self.var_prod_cond:
             if isinstance(group, (str, dict)) or not isinstance(
