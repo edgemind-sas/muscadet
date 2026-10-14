@@ -2019,7 +2019,16 @@ def _self_hosted_automaton_name(comp):
     from there, and written only when the two differ -- which is the only case
     where omitting it would rebuild the automaton under another name and lose
     every indicator that named it.
+
+    Only a self-hosted mode has one. A targeted mode left with a single
+    combination also shows one automaton named otherwise than the mode
+    (``<mode>__cc_1_2`` for a pure common cause over two targets), and the
+    engine refuses an ``aut_name`` on a targeted mode, so reading that suffix
+    as one would make the document impossible to build back.
     """
+    if not getattr(comp, "_self_hosted", False):
+        return None
+
     names = list(getattr(comp, "automata_d", None) or {})
 
     if len(names) == 1 and names[0] != comp.mode_name:
