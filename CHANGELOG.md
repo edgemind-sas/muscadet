@@ -4,6 +4,16 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 5.16.1 (2026-10-14)
+
+- A targeted two-state mode left with a single common-cause combination (a
+  pure common cause over two targets, whose order 1 is inactive) is read back
+  without an `aut_name`. `system_spec` took the lone automaton's suffix
+  (`<mode>__cc_1_2`) for the name of a self-hosted mode, and cod3s refuses an
+  `aut_name` on a targeted mode, so the document could not be built back. The
+  COD3S Platform rebuilds every PyCATSHOO run from its declaration, so a study
+  holding such a mode failed at launch.
+
 ## 5.16.0 (2026-10-13)
 
 - A standalone failure mode (`ObjFailureMode*`) over overlapping common-cause
