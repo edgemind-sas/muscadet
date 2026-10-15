@@ -4,6 +4,15 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 5.16.2 (2026-10-14)
+
+- A continuous output given a bare name or a mapping as `var_prod_cond` is
+  told that the field holds a list of groups, and that the condition is
+  declared on the component (`add_flow` / `add_flow_continuous_out`). The
+  check ran after Pydantic's list coercion, which refused first with its
+  generic `list_type` error, so this message was never delivered. It now runs
+  before coercion. What is accepted and refused is unchanged.
+
 ## 5.16.1 (2026-10-14)
 
 - A targeted two-state mode left with a single common-cause combination (a
