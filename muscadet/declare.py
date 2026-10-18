@@ -689,7 +689,7 @@ RUNTIME_HANDLE_PREFIXES = ("sm_",)
 #: when a mode outside it did (#13) -- ``automaton`` / ``state_empty``
 #: / ``state_full`` are a capacity's built bound automaton, ``mode`` is the
 #: automaton a rule set's guards compile into, and ``flow`` is the object a
-#: guard operand resolved onto. ``mixture`` is the binding the pre-run step
+#: guard operand resolved onto. ``mixture_draws`` holds the bindings the pre-run step
 #: writes on a volume from its CONSUMER's ``mixtures`` section, so a system read
 #: back after a run gives the spec it gave before. Every one is rebuilt by the
 #: declaration it comes from.
@@ -704,7 +704,7 @@ DERIVED_EXCLUDED_FIELDS = frozenset(
         "state_full",
         "mode",
         "flow",
-        "mixture",
+        "mixture_draws",
     }
 )
 
@@ -948,6 +948,15 @@ SERVE_COND_FIELDS = (
     "serve_cond",
     "serve_cond_negate",
     "serve_cond_compare",
+)
+
+
+#: The same three fields on a MIXTURE GROUP, where the vocabulary commands the
+#: machine on and off (R52). Stored resolved, walked back by the same function.
+RUN_COND_FIELDS = (
+    "run_cond",
+    "run_cond_negate",
+    "run_cond_compare",
 )
 
 
@@ -1795,6 +1804,25 @@ def flow_component_spec(comp):
         if entry.get("serve_rate") == math.inf:
             entry.pop("serve_rate")
 
+        # A closed volume says nothing about the atmosphere, and writing a null
+        # would change the bytes of every capacity spec ever stored (R53).
+        if entry.get("makeup_flow") is None:
+            entry.pop("makeup_flow", None)
+
+    # A machine's on/off command is stored RESOLVED too (R52), and handled as
+    # the discharge command is just above, for the same two reasons.
+    mixtures = dump_all(comp.mixtures, "mixture group", skip=RUN_COND_FIELDS)
+
+    for entry, group in zip(mixtures, comp.mixtures.values()):
+        run_cond = _prod_cond_spec(
+            comp, group.run_cond, group.run_cond_negate, group.run_cond_compare
+        )
+
+        if run_cond:
+            entry["run_cond"] = run_cond
+        else:
+            entry.pop("run_cond_inner_mode", None)
+
     transfers = []
     for pair_name, pair in comp.transfers.items():
         transfers.append(
@@ -1820,7 +1848,7 @@ def flow_component_spec(comp):
             "measurements_out": dump_all(comp.measurements_out, "measurement out"),
             "rules": dump_all(comp.rule_sets, "rule set"),
             "transfers": transfers,
-            "mixtures": dump_all(comp.mixtures, "mixture group"),
+            "mixtures": mixtures,
         }
     )
 
@@ -2760,7 +2788,15 @@ def build_controller_component(system, spec):
 #: without ``{mode}_derating_{flow}`` and the outside mode that clamps it is
 #: refused or loses its effect, so a reader that does not know the key should
 #: refuse it rather than drop it, as muscadet before 5.13.0 does.
-SYSTEM_SPEC_VERSION = "1.0.3"
+#:
+#: 1.0.4 adds ``makeup_flow`` on a capacity (R53) and ``run_cond`` on a mixture
+#: group (R52), both optional and both absent from a document that does not use
+#: them, so a 1.0.3 document rebuilds here unchanged. Like ``deratings`` they
+#: carry no default a reader may fall back on: a reader ignoring ``makeup_flow``
+#: builds a closed volume that refuses what an open one vents, and one ignoring
+#: ``run_cond`` runs a machine the document stops. A reader that does not know
+#: either key refuses it rather than drop it.
+SYSTEM_SPEC_VERSION = "1.0.4"
 
 
 #: The model-level key by which a declaration says whether it wants the

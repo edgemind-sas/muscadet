@@ -1408,16 +1408,24 @@ class ObjFlow(cod3s.PycComponent):
         ``muscadet.declare.DECLARATION_SECTIONS`` writes down for the same
         reason: an operand names something that has to exist first.
         """
-        if not capacity.serve_cond:
-            return capacity
+        return self._resolve_command(capacity, "serve_cond")
 
-        resolved = self.apply_prod_cond({"var_prod_cond": capacity.serve_cond})
+    def _resolve_command(self, carrier, field):
+        """Resolve the command stored under ``field`` on ``carrier``, in place.
 
-        capacity.serve_cond = resolved["var_prod_cond"]
-        capacity.serve_cond_negate = resolved.get("var_prod_cond_negate", [])
-        capacity.serve_cond_compare = resolved.get("var_prod_cond_compare", [])
+        One body for the discharge command and the machine command (R49, R52),
+        which store the same three fields under two prefixes.
+        """
+        if not getattr(carrier, field):
+            return carrier
 
-        return capacity
+        resolved = self.apply_prod_cond({"var_prod_cond": getattr(carrier, field)})
+
+        setattr(carrier, field, resolved["var_prod_cond"])
+        setattr(carrier, f"{field}_negate", resolved.get("var_prod_cond_negate", []))
+        setattr(carrier, f"{field}_compare", resolved.get("var_prod_cond_compare", []))
+
+        return carrier
 
     def resolve_capacity(self, capacity, side_declared=None):
         """
@@ -1651,10 +1659,24 @@ class ObjFlow(cod3s.PycComponent):
         group = MixtureIn(name=name, flows=flows, flow_rate=flow_rate, **params)
 
         self.check_mixture_flows(group)
+        self.resolve_run_cond(group)
+
+        group.add_variables(self)
+        group.add_run_cond_automata(self)
 
         self.mixtures[name] = group
 
         return group
+
+    def resolve_run_cond(self, group):
+        """Resolve a mixture group's on/off command, if it declared one (R52).
+
+        Routed through :meth:`apply_prod_cond`, exactly as a discharge command
+        is (:meth:`resolve_serve_cond`), so the three vocabularies cannot drift:
+        same operand shapes, same input-first resolution, same refusal naming
+        an operand that does not exist.
+        """
+        return self._resolve_command(group, "run_cond")
 
     def check_mixture_flows(self, group):
         """Refuse a mixture group naming something it cannot draw (R51).

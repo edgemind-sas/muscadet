@@ -475,6 +475,22 @@ class Capacity(cod3s.ObjCOD3S):
         ),
     )
 
+    makeup_flow: typing.Optional[str] = pydantic.Field(
+        None,
+        description=(
+            "Declares the volume OPEN to the atmosphere and names the held "
+            "constituent the outside supplies (R53). None -- the default -- is "
+            "a closed volume, which is every capacity declared before the field "
+            "existed. An open volume stays FULL by construction: the make-up "
+            "constituent enters at the rate the volume runs short, and what "
+            "exceeds it leaves to the atmosphere at the composition, so no "
+            "arrival is ever refused for want of room. What it asks upstream "
+            "follows fill_rate as for any volume: math.inf takes whatever the "
+            "producers deliver, the default 0 asks for what it releases. What "
+            "remains of the declared volume at t=0 is the make-up constituent."
+        ),
+    )
+
     serve_cond: list = pydantic.Field(
         default_factory=list,
         description=(
@@ -569,6 +585,26 @@ class Capacity(cod3s.ObjCOD3S):
         ),
     )
 
+    var_makeup: typing.Any = pydantic.Field(
+        None,
+        exclude=True,
+        repr=False,
+        description=(
+            "What the atmosphere supplies an OPEN volume right now, "
+            "{c}_makeup, explicit and written by the capacity equation (R53)."
+        ),
+    )
+
+    var_vent: typing.Dict[str, typing.Any] = pydantic.Field(
+        default_factory=dict,
+        exclude=True,
+        repr=False,
+        description=(
+            "What an OPEN volume vents of each constituent right now, "
+            "{c}_vent_{f}, explicit and written by the capacity equation (R53)."
+        ),
+    )
+
     var_qty_total: typing.Any = pydantic.Field(
         None, exclude=True, repr=False, description="Total raw quantity ODE variable"
     )
@@ -592,21 +628,26 @@ class Capacity(cod3s.ObjCOD3S):
         None, exclude=True, repr=False, description="Backend 'full' state"
     )
 
-    mixture: typing.Any = pydantic.Field(
-        None,
+    mixture_draws: typing.List[typing.Any] = pydantic.Field(
+        default_factory=list,
         exclude=True,
         repr=False,
         description=(
-            "The mixture group drawing this volume as ONE fluid (R51), a "
-            "muscadet.mixture.MixtureDraw bound at the pre-run step and written "
-            "by nothing else. None on every volume served per flow, which is "
-            "every volume declared before this notion existed."
+            "The mixture groups drawing this volume as ONE fluid (R51, R52), "
+            "one muscadet.mixture.MixtureDraw each, bound at the pre-run step "
+            "and written by nothing else. Empty on every volume served per "
+            "flow, which is every volume declared before this notion existed."
         ),
     )
 
     #: Memoised :attr:`flow_names`. A private attribute rather than a field: it
     #: is derived from ``flows`` and must never reach a dump.
     _flow_names: typing.Optional[typing.List[str]] = pydantic.PrivateAttr(default=None)
+
+    #: Memoised :attr:`weights`, for the same reason.
+    _weights: typing.Optional[typing.Dict[str, float]] = pydantic.PrivateAttr(
+        default=None
+    )
 
     # ------------------------------------------------------------------
     # Declaration-time validation
@@ -715,7 +756,44 @@ class Capacity(cod3s.ObjCOD3S):
 
         self.check_content_init()
 
+        if self.makeup_flow is not None:
+            self.check_open_volume(names)
+
         return self
+
+    def check_open_volume(self, names):
+        """Validate an OPEN volume and fill what its declared content leaves (R53).
+
+        A make-up constituent the volume does not hold has nowhere to enter, and
+        is refused.
+
+        ``fill_rate`` keeps its meaning on an open volume, and that was decided
+        against an unbounded claim measured wrong: an open room asking upstream
+        for ``math.inf`` whatever it was declared with drained a stocked tank
+        feeding it at its whole content per unit of time (a tank of 100 at
+        36.8 after one time unit, against 99.0 behind a closed room). What an
+        open volume removes is the throttling of a FULL volume, never the claim
+        a modeller states: ``math.inf`` takes whatever the producers deliver,
+        the default 0 asks for what the volume releases.
+
+        The volume then starts FULL: what the declared content leaves of the
+        volume is the make-up constituent, which is what a room open to the
+        outside holds before anything else arrives. Written into
+        ``content_init`` rather than kept aside, exactly as a held flow missing
+        from it is written at zero above, so the dumped declaration states what
+        the volume holds and another engine reads it as it stands.
+        """
+        if self.makeup_flow not in names:
+            raise ValueError(
+                f"Capacity {self.name}: makeup_flow {self.makeup_flow!r} names a "
+                f"constituent the volume does not hold ({', '.join(names)}). The "
+                "outside supplies one of the constituents already in the volume."
+            )
+
+        room = self.capacity - self.content_init_volume()
+
+        if room > 0.0:
+            self.content_init[self.makeup_flow] += room / self.weights[self.makeup_flow]
 
     def check_content_init(self):
         """Refuse a starting content the capacity could never reach (R-5).
@@ -779,6 +857,24 @@ class Capacity(cod3s.ObjCOD3S):
         if self._flow_names is None:
             self._flow_names = [entry.name for entry in self.flows]
         return self._flow_names
+
+    @property
+    def weights(self) -> typing.Dict[str, float]:
+        """``{held flow: the volume one unit of it occupies}``, memoised.
+
+        Settled at declaration like :attr:`flow_names`, and read by the
+        breathing terms of an open volume at every integration step (R53).
+        """
+        if self._weights is None:
+            self._weights = {entry.name: entry.weight for entry in self.flows}
+        return self._weights
+
+    def content_init_volume(self) -> float:
+        """The volume the declared initial content occupies, weights applied."""
+        weights = self.weights
+        return sum(
+            quantity * weights[name] for name, quantity in self.content_init.items()
+        )
 
     def flow_entry(self, flow_name) -> CapacityFlow:
         """The declaration entry of one held flow."""
@@ -844,6 +940,16 @@ class Capacity(cod3s.ObjCOD3S):
 
             fill_total += fill_init
 
+            if self.is_open:
+                self.var_vent[entry.name] = comp.addVariable(
+                    f"{self.name}_vent_{entry.name}", pyc.TVarType.t_double, 0.0
+                )
+
+        if self.is_open:
+            self.var_makeup = comp.addVariable(
+                f"{self.name}_makeup", pyc.TVarType.t_double, 0.0
+            )
+
         self.var_qty_total = comp.addVariable(
             f"{self.name}_qty", pyc.TVarType.t_double, qty_total
         )
@@ -904,7 +1010,16 @@ class Capacity(cod3s.ObjCOD3S):
         return [entry.name for entry in self.flows]
 
     def add_automaton(self, comp):
-        """Build the empty/full automaton driven by the total weighted fill."""
+        """Build the empty/full automaton driven by the total weighted fill.
+
+        An OPEN volume builds none (R53). It is full by construction, its
+        occupied volume held constant by the make-up and the venting, so an
+        automaton watching ``fill >= 1`` would sit on its own bound and toggle
+        at every integration step for nothing to report.
+        """
+        if self.is_open:
+            return None
+
         st_empty = f"{self.name}_empty"
         st_partial = f"{self.name}_partial"
         st_full = f"{self.name}_full"
@@ -1002,7 +1117,13 @@ class Capacity(cod3s.ObjCOD3S):
         system.pdmp_add_ode_variable(self.var_qty_total)
         system.pdmp_add_explicit_variable(self.var_fill_total)
 
-        system.pdmp_add_watched_automaton(self.automaton)
+        for var in self.var_vent.values():
+            system.pdmp_add_explicit_variable(var)
+        if self.var_makeup is not None:
+            system.pdmp_add_explicit_variable(self.var_makeup)
+
+        if self.automaton is not None:
+            system.pdmp_add_watched_automaton(self.automaton)
 
     # ------------------------------------------------------------------
     # The capacity's own equation
@@ -1032,11 +1153,13 @@ class Capacity(cod3s.ObjCOD3S):
         rate_total = 0.0
         fill_total = 0.0
         qty_total = sum(self.var_qty[entry.name].value() for entry in self.flows)
+        breath = self.breathe()
 
         for entry in self.flows:
             rate = (
                 self.var_inflow[entry.name].value()
                 - self.var_outflow[entry.name].value()
+                + breath.get(entry.name, 0.0)
             )
             self.var_qty[entry.name].setDvdtODE(rate)
             rate_total += rate
@@ -1051,6 +1174,56 @@ class Capacity(cod3s.ObjCOD3S):
 
         self.var_qty_total.setDvdtODE(rate_total)
         self.var_fill_total.setValue(fill_total)
+
+    @property
+    def is_open(self) -> bool:
+        """True when the volume is open to the atmosphere (R53)."""
+        return self.makeup_flow is not None
+
+    def breathe(self) -> typing.Dict[str, float]:
+        """What the atmosphere adds to each constituent of an OPEN volume, now.
+
+        Empty for a closed volume. For an open one, with
+        ``D = sum_f w_f (in_f - out_f)`` the volume the transit adds per unit of
+        time, the make-up constituent gains ``max(-D, 0) / w`` and every
+        constituent loses ``max(D, 0) . m_f / sum_g m_g w_g``, the excess
+        leaving at the composition. The weighted sum of the two is ``-D``, so the
+        occupied volume does not move: the terms close the balance rather than
+        approximate it, and they read only what the step already holds, so no
+        algebraic loop is formed.
+
+        Publishes both on ``{c}_makeup`` and ``{c}_vent_{f}``, which is what
+        lets an indicator count the outside air a room needed or what it
+        released.
+        """
+        if not self.is_open:
+            return {}
+
+        weights = self.weights
+        surplus = sum(
+            weights[name]
+            * (self.var_inflow[name].value() - self.var_outflow[name].value())
+            for name in weights
+        )
+
+        makeup = max(-surplus, 0.0) / weights[self.makeup_flow]
+        occupied = self.occupied_volume()
+        excess = max(surplus, 0.0)
+
+        breath = {}
+        for name in weights:
+            vent = (
+                excess * max(self.var_qty[name].value(), 0.0) / occupied
+                if occupied > 0.0
+                else 0.0
+            )
+            self.var_vent[name].setValue(vent)
+            breath[name] = -vent
+
+        breath[self.makeup_flow] += makeup
+        self.var_makeup.setValue(makeup)
+
+        return breath
 
     # ------------------------------------------------------------------
     # Reported state (R28)
@@ -1148,14 +1321,23 @@ class Capacity(cod3s.ObjCOD3S):
 
     @property
     def is_empty(self) -> bool:
-        """True while the capacity holds nothing."""
+        """True while the capacity holds nothing. Never, for an open volume."""
+        if self.is_open:
+            return False
         if self.state_empty is None:
             return self.total_fill() <= 0.0
         return bool(self.state_empty.isActive())
 
     @property
     def is_full(self) -> bool:
-        """True once the capacity has reached its volume."""
+        """True once the capacity has reached its volume.
+
+        Never for an OPEN volume, although it sits at its volume (R53): "full"
+        is what makes a capacity throttle what arrives, and an open volume
+        vents the excess instead of refusing it.
+        """
+        if self.is_open:
+            return False
         if self.state_full is None:
             return self.total_fill() >= 1.0
         return bool(self.state_full.isActive())
@@ -1487,6 +1669,10 @@ class Capacity(cod3s.ObjCOD3S):
         between a source of 100 and a load of 100 rose by 60 per unit of time.
         A model that wants the charging says so with a ``fill_rate``.
 
+        **An OPEN volume is never full** (R53), so the throttling half does not
+        apply to it: what arrives beyond what leaves is vented rather than
+        refused. Its claim is the ordinary one, a ``fill_rate`` included.
+
         Parameters
         ----------
         demand : float
@@ -1518,7 +1704,27 @@ class Capacity(cod3s.ObjCOD3S):
         included, which is what makes this notion cost nothing to a model written
         before it.
         """
-        return self.mixture is not None
+        return bool(self.mixture_draws)
+
+    @property
+    def mixture(self):
+        """The ONE mixture draw on this volume, or None when nobody draws it.
+
+        Kept for a volume drawn by a single machine, which is what R51 allowed
+        and what an inspection script written against it reads. A volume drawn
+        by several machines has no single answer, so asking for one is refused
+        rather than answered with the first: :attr:`mixture_draws` lists them.
+        """
+        if not self.mixture_draws:
+            return None
+
+        if len(self.mixture_draws) > 1:
+            raise ValueError(
+                f"Capacity {self.name} is drawn by "
+                f"{len(self.mixture_draws)} mixture groups; read mixture_draws."
+            )
+
+        return self.mixture_draws[0]
 
     def occupied_volume(self) -> float:
         """The volume the contents occupy: the sum of quantity times weight.
@@ -1538,7 +1744,29 @@ class Capacity(cod3s.ObjCOD3S):
         )
 
     def mixture_share(self, flow_name) -> float:
-        """What a volumetric draw of ``R`` takes of one constituent (R51).
+        """What every volumetric draw on this volume takes of one constituent.
+
+        The sum over the machines bound to it (R52) of
+        :meth:`mixture_share_of`: each takes its own rate at the composition,
+        and the draws add up. With one machine this is R51's share exactly.
+        """
+        self.flow_entry(flow_name)
+
+        if not self.mixture_draws:
+            raise ValueError(
+                f"Capacity {self.name} is not drawn as a mixture: no volumetric "
+                f"rate to compose. Declare add_mixture_in on the consumer."
+            )
+
+        occupied = self.occupied_volume()
+
+        return sum(
+            self.mixture_share_of(draw, flow_name, occupied)
+            for draw in self.mixture_draws
+        )
+
+    def mixture_share_of(self, draw, flow_name, occupied=None) -> float:
+        """What ONE volumetric draw of ``R`` takes of one constituent (R51).
 
         ``R . m_f / sum_g (m_g . w_g)``, so that ``sum_f share_f . w_f`` is
         exactly ``R``: the machine moves a volume, and the composition decides
@@ -1557,23 +1785,21 @@ class Capacity(cod3s.ObjCOD3S):
         Clamped at zero: a level standing a ``dtCond``-sized residue below zero
         between a bound crossing and its reset map would otherwise turn into a
         negative rate, and the sign of a draw is not a direction here.
+
+        ``occupied`` lets a caller composing several draws in one evaluation
+        read the occupied volume once; it is recomputed when omitted.
         """
         # Before the group, as serve_ceiling does: a typo in a held flow name must
         # not become a diagnostic that depends on what the volume is drawn by.
         self.flow_entry(flow_name)
 
-        if self.mixture is None:
-            raise ValueError(
-                f"Capacity {self.name} is not drawn as a mixture: no volumetric "
-                f"rate to compose. Declare add_mixture_in on the consumer."
-            )
-
-        occupied = self.occupied_volume()
+        if occupied is None:
+            occupied = self.occupied_volume()
 
         if occupied <= 0.0:
             return 0.0
 
-        share = float(self.mixture.flow_rate) * self.get_quantity(flow_name) / occupied
+        share = draw.rate() * self.get_quantity(flow_name) / occupied
 
         return max(share, 0.0)
 

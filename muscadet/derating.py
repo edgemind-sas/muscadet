@@ -249,7 +249,8 @@ def solver_owned_endpoints(comp):
             + list(capacity.var_ratio.values())
             + list(capacity.var_inflow.values())
             + list(capacity.var_outflow.values())
-            + [capacity.var_qty_total, capacity.var_fill_total]
+            + list(capacity.var_vent.values())
+            + [capacity.var_qty_total, capacity.var_fill_total, capacity.var_makeup]
         )
         for var in variables:
             if var is not None:

@@ -602,6 +602,25 @@ def capacity_clause(capacities: typing.Sequence[str], what: str) -> str:
     return f" The {what} is declared on the {plural} {names} (serve_cond, R49)."
 
 
+def mixture_clause(groups: typing.Sequence[typing.Tuple[str, str]], what: str) -> str:
+    """The sentence a refusal names the mixture groups carrying a command with.
+
+    ``groups`` holds ``(component, group)`` pairs. Empty when none takes part,
+    so a loop closed without a machine reads exactly as it always did: the
+    clause is APPENDED, never woven in, as :func:`capacity_clause` is.
+    """
+    if not groups:
+        return ""
+
+    names = ", ".join(f"{group!r} of {comp}" for comp, group in groups)
+    plural = "mixture group" if len(groups) == 1 else "mixture groups"
+
+    return (
+        f" The {what} is the on/off command of the {plural} {names} "
+        "(run_cond, R52), which decides what the volume it draws delivers."
+    )
+
+
 class RateComparisonLoopError(ContinuousFlowCycleError):
     """A discrete signal thresholded on a RATE, wired back upstream (R30).
 
@@ -618,9 +637,12 @@ class RateComparisonLoopError(ContinuousFlowCycleError):
     cycle catches this one too.
     """
 
-    def __init__(self, reader, flow, operand, connections, capacities=()):
+    def __init__(self, reader, flow, operand, connections, capacities=(), groups=()):
         #: Component carrying the comparison.
         self.reader = reader
+        #: Mixture groups of the ARRIVING component whose command the signal
+        #: gates, as ``(component, group)`` pairs (R52).
+        self.groups = list(groups)
         #: Continuous input flow it compares.
         self.flow = flow
         #: The comparison, rendered as it was declared.
@@ -652,6 +674,7 @@ class RateComparisonLoopError(ContinuousFlowCycleError):
                 "a CAPACITY LEVEL over a measurement link: a level is "
                 "integrated, so it does break the loop."
                 + capacity_clause(self.capacities, "command it arrives at")
+                + mixture_clause(self.groups, "command it arrives at")
             ),
         )
 
@@ -691,12 +714,23 @@ class RateObservationLoopError(ContinuousFlowCycleError):
     )
 
     def __init__(
-        self, reader, channel, flow, producer, operand, connections, capacities=()
+        self,
+        reader,
+        channel,
+        flow,
+        producer,
+        operand,
+        connections,
+        capacities=(),
+        groups=(),
     ):
         #: Capacities whose discharge condition takes part, empty when none
         #: does (R50). Assigned FIRST, and a subclass forwards its own rather
         #: than assigning before ``super()``: this line would clobber it.
         self.capacities = list(capacities)
+        #: Mixture groups whose command takes part, as ``(component, group)``
+        #: pairs (R52). Assigned first for the same reason.
+        self.groups = list(groups)
         #: Component carrying the threshold.
         self.reader = reader
         #: Its measurement channel the threshold reads.
@@ -732,6 +766,7 @@ class RateObservationLoopError(ContinuousFlowCycleError):
             f"{self.flow} it reads. "
             + self.RATE_IS_NOT_STATE
             + capacity_clause(self.capacities, "command it arrives at")
+            + mixture_clause(self.groups, "command it arrives at")
         )
 
 
@@ -849,6 +884,68 @@ class CommandedRateSelfLoopError(ContinuousFlowCycleError):
                 "CAPACITY LEVEL read over a measurement link, a level being "
                 "integrated and therefore carried between instants."
             ),
+        )
+
+
+class MixtureCommandSelfLoopError(ContinuousFlowCycleError):
+    """A machine commanded by a reading of the very rate it draws (R52).
+
+    The mixture counterpart of :class:`CommandedRateSelfLoopError`. A group's
+    command reads one of the flows the group itself draws, so what the command
+    reads is what it decides, within one instant and over no connection: the
+    volume composes the draw from the group's rate, and the rate is zero or not
+    according to the command.
+
+    Reported with no connection, because there is none.
+    """
+
+    def __init__(self, reader, group, flow, operand):
+        #: Component carrying the machine.
+        self.reader = reader
+        #: The mixture group whose command closes it.
+        self.group = group
+        #: The drawn flow the command reads.
+        self.flow = flow
+        #: The operand, rendered as it was declared.
+        self.operand = operand
+
+        super().__init__(
+            [reader],
+            [],
+            message=(
+                "Continuous flow graph must be acyclic (R30, R52): "
+                f"{reader} closes a loop inside itself. The mixture group "
+                f"{group!r} commands its machine on {operand}, and {flow} is "
+                "a flow a machine of this component draws: what the command "
+                "reads is what a command decides, within one instant and over "
+                "no connection at all. Command the machine on something it does not itself "
+                "draw -- a boolean signal, or a CAPACITY LEVEL read over a "
+                "measurement link, a level being integrated and therefore "
+                "carried between instants."
+            ),
+        )
+
+
+class MixtureCommandLoopError(RateObservationLoopError):
+    """A machine commanded DIRECTLY by a threshold on an observed rate (R52).
+
+    The zero-hop shape of the observation path for a mixture group: the
+    group's command thresholds a reading, that reading is a rate delivered by
+    a component upstream of the volume the machine draws, and no discrete
+    signal carries the verdict, so there is nothing for the walk to follow.
+    """
+
+    def default_message(self) -> str:
+        return (
+            "Continuous flow graph must be acyclic (R30, R52): "
+            f"{self.path} closes a loop through a commanded machine. "
+            f"Connections closing the loop: {self.wiring}. "
+            f"{self.reader} thresholds the reading {self.channel} "
+            f"({self.operand}) in the command of its mixture machine; that "
+            f"reading is the rate {self.flow} delivered by {self.producer}, "
+            "and the machine decides what the volume it draws delivers. "
+            + self.RATE_IS_NOT_STATE
+            + mixture_clause(self.groups, "command")
         )
 
 
@@ -1197,11 +1294,172 @@ def serve_cond_operands(capacity):
     capacity is not a flow and spells them differently, and identical in shape
     because the vocabulary is one.
     """
-    compare_matrix = getattr(capacity, "serve_cond_compare", None) or []
+    return _cond_operands(capacity, "serve_cond")
 
-    for i, group in enumerate(getattr(capacity, "serve_cond", None) or []):
+
+def _cond_operands(carrier, field):
+    """``(source, comparison)`` over the condition stored under ``field``.
+
+    A capacity and a mixture group store their command in the same three
+    fields under two prefixes, ``serve_cond`` and ``run_cond``.
+    """
+    compare_matrix = getattr(carrier, f"{field}_compare", None) or []
+
+    for i, group in enumerate(getattr(carrier, field, None) or []):
         for j, source in enumerate(group):
             yield source, _prod_cond_matrix_entry(compare_matrix, i, j)
+
+
+def render_operand(name, compare):
+    """An operand as a refusal names it: ``name op value``, or the bare name."""
+    if compare is None:
+        return name
+
+    return f"{name} {compare['op']} {compare['value']:g}"
+
+
+def run_cond_operands(group):
+    """``(source, comparison)`` for every operand of a machine's command (R52).
+
+    The mixture-group counterpart of :func:`serve_cond_operands`, over the
+    three fields its command is stored in.
+    """
+    return _cond_operands(group, "run_cond")
+
+
+def is_capacity_carrier(carrier):
+    """True when a condition carrier is a capacity (R49)."""
+    return hasattr(carrier, "serve_cond")
+
+
+def is_mixture_carrier(carrier):
+    """True when a condition carrier is a mixture group (R52)."""
+    return hasattr(carrier, "run_cond")
+
+
+def is_flow_carrier(carrier):
+    """True when a condition carrier is an OUTPUT flow.
+
+    Duck-typed on the fields the two other carriers declare, for the reason
+    :func:`is_controller` gives: this module must stay free of an import of the
+    units it orders. Asked that way round because an output without a
+    production condition may lack the condition fields altogether, which is
+    why :func:`prod_cond_operands` reads them through ``getattr``.
+    """
+    return not is_capacity_carrier(carrier) and not is_mixture_carrier(carrier)
+
+
+def condition_carriers(comp):
+    """``(carrier, operands)`` for every declaration of ``comp`` carrying a condition.
+
+    The ONE enumeration of the operand vocabulary (R22, R44, R49), read by every
+    site of this module that asks what a condition reads. Before it existed the
+    same walk was copy-pasted into six places, one per pair of a site and a
+    mechanism, and the R50 review found a fifth site the fourth mechanism had
+    not been taught: a carrier added here reaches every site at once.
+
+    ``operands`` is the list of ``(source, comparison)`` pairs, empty for an
+    output declaring no production condition. Outputs come first, in
+    declaration order, then capacities, then mixture groups (R52): the order
+    every site walked them in, kept because a refusal names the first
+    comparison it meets.
+    """
+    for flow in (getattr(comp, "flows_out", None) or {}).values():
+        yield flow, list(prod_cond_operands(flow))
+
+    for capacity in (getattr(comp, "capacities", None) or {}).values():
+        yield capacity, list(serve_cond_operands(capacity))
+
+    for group in (getattr(comp, "mixtures", None) or {}).values():
+        yield group, list(run_cond_operands(group))
+
+
+def condition_operands(comp):
+    """``(carrier, source, comparison)`` for every operand ``comp`` declares.
+
+    :func:`condition_carriers`, flattened: the shape a site asking "who reads
+    this source, and how" iterates.
+    """
+    for carrier, operands in condition_carriers(comp):
+        for source, compare in operands:
+            yield carrier, source, compare
+
+
+def carrier_drives(comp, carrier):
+    """The state basenames a condition carrier decides inside ``comp``.
+
+    An output decides its own state, ``{flow}_fed_out`` when it declares no
+    state variable of its own. A capacity decides what its discharge releases
+    into, which :func:`commanded_discharge_outputs` derives. This is the hop a
+    verdict takes from the condition to what the walk then follows.
+
+    A mixture group decides NOTHING inside its component: the machine is
+    terminal and claims its inputs outright, so no output and no rule of the
+    component receives what it draws. What it decides is what the volume it
+    draws DELIVERS, in another component, which :func:`commands_a_draw_from`
+    answers for the walk.
+    """
+    if is_flow_carrier(carrier):
+        return {state_var_name(carrier) or f"{carrier.name}_fed_out"}
+
+    if is_mixture_carrier(carrier):
+        return set()
+
+    return commanded_discharge_outputs(comp, carrier)
+
+
+def carrier_gates_production(comp, carrier):
+    """True when what a carrier decides is a PRODUCTION of ``comp`` (R44, R50).
+
+    A continuous output's condition is a factor on what it produces. A discrete
+    output's condition decides a status, which is not production. A capacity's
+    command decides production only when what it releases leaves the component,
+    into an output or a rule: an inert volume reads its signal and decides
+    nothing, and refusing on it would be the expensive error.
+    """
+    if is_flow_carrier(carrier):
+        return isinstance(carrier, FlowContinuous)
+
+    if is_mixture_carrier(carrier):
+        return False
+
+    return bool(commanded_discharge_outputs(comp, carrier))
+
+
+def mixture_groups_reading(comp, source):
+    """The mixture groups of ``comp`` whose command READS ``source`` (R52)."""
+    return [
+        group
+        for group in (getattr(comp, "mixtures", None) or {}).values()
+        if any(operand is source for operand, _ in run_cond_operands(group))
+    ]
+
+
+def commands_a_draw_from(comp, flow_name, upstream):
+    """Mixture groups of ``comp`` commanded on that input AND drawing upstream.
+
+    The arrival end of a walk for a machine (R52). A group's command decides
+    what the volume it draws DELIVERS, so the signal closes a loop when the
+    component holding that volume -- bound to the group at the pre-run step --
+    is upstream of the quantity the walk started from. That is the reading of
+    "upstream" the two walks already share, over-approximation included: a
+    producer behind a buffer stays an ancestor of what the buffer serves.
+
+    Returns
+    -------
+    list of str
+        Names of the groups, empty when none closes the loop.
+    """
+    flow_in = (getattr(comp, "flows_in", None) or {}).get(flow_name)
+
+    if flow_in is None:
+        return []
+
+    return [
+        group.name
+        for group in mixture_groups_reading(comp, flow_in)
+        if getattr(group, "_producer", None) in upstream
+    ]
 
 
 def commanded_discharge_outputs(comp, capacity):
@@ -1360,33 +1618,16 @@ def compared_continuous_inputs(comp):
                 if flows_in.get(operand.name) is flow:
                     compared.setdefault(operand.name, operand.to_expression())
 
-    for flow in (getattr(comp, "flows_out", None) or {}).values():
-        for source, compare in prod_cond_operands(flow):
-            name = getattr(source, "name", None)
+    # Every declaration carrying the vocabulary, through `condition_operands`:
+    # the offence is the comparison, whatever declaration carries it.
+    for _, source, compare in condition_operands(comp):
+        name = getattr(source, "name", None)
 
-            if compare is None or not isinstance(source, FlowContinuous):
-                continue
+        if compare is None or not isinstance(source, FlowContinuous):
+            continue
 
-            if flows_in.get(name) is source:
-                compared.setdefault(
-                    name, f"{name} {compare['op']} {compare['value']:g}"
-                )
-
-    # A capacity's DISCHARGE condition is a third place the same comparison can
-    # live (R49, R50), and a capacity is not a flow, so the two loops above
-    # walk past it. Read here rather than in a path of its own: the offence is
-    # the comparison, whatever declaration carries it.
-    for capacity in (getattr(comp, "capacities", None) or {}).values():
-        for source, compare in serve_cond_operands(capacity):
-            name = getattr(source, "name", None)
-
-            if compare is None or not isinstance(source, FlowContinuous):
-                continue
-
-            if flows_in.get(name) is source:
-                compared.setdefault(
-                    name, f"{name} {compare['op']} {compare['value']:g}"
-                )
+        if flows_in.get(name) is source:
+            compared.setdefault(name, f"{name} {compare['op']} {compare['value']:g}")
 
     return compared
 
@@ -1531,35 +1772,34 @@ def tainted_output_states(comp, seeds):
             if state in tainted:
                 continue
 
-            reads = {
-                state_var_name(source)
-                for source, _ in prod_cond_operands(flow)
-                if state_var_name(source) is not None
-            }
-
+            # Only the derating clamps are read here: what the output's own
+            # condition reads is the carrier hop below, the same for every
+            # carrier.
             clamped = clamped_production_endpoints(name, flow)
 
-            if not tainted.isdisjoint(clamped) or not tainted.isdisjoint(reads):
+            if not tainted.isdisjoint(clamped):
                 tainted.add(state)
                 changed = True
 
-        # A capacity's discharge condition is the THIRD hop, and it was the
-        # one place the vocabulary lived that this fixpoint did not read.
-        # Seeding and gating on a capacity is not enough: a signal RELAYED
-        # through a discharge -- commanding a volume whose output another
-        # condition then thresholds -- was not propagated inside the component,
-        # so the walk stopped there and a multi-hop loop went unreported.
-        for capacity in (getattr(comp, "capacities", None) or {}).values():
+        # A condition READING a tainted state taints what its carrier decides:
+        # an output its own state, a capacity what its discharge releases into.
+        # The capacity half was the fifth site of R50, found by review: a
+        # signal RELAYED through a discharge -- commanding a volume whose output
+        # another condition then thresholds -- was not propagated inside the
+        # component, so the walk stopped there and a multi-hop loop went
+        # unreported. One enumeration for every carrier keeps that from
+        # recurring with the next mechanism.
+        for carrier, operands in condition_carriers(comp):
             reads = {
                 state_var_name(source)
-                for source, _ in serve_cond_operands(capacity)
+                for source, _ in operands
                 if state_var_name(source) is not None
             }
 
             if tainted.isdisjoint(reads):
                 continue
 
-            for state in commanded_discharge_outputs(comp, capacity):
+            for state in carrier_drives(comp, carrier):
                 if state not in tainted:
                     tainted.add(state)
                     changed = True
@@ -1631,23 +1871,13 @@ def comparison_driven_outputs(comp, flow_name):
     walk follows is the connection carrying it, not its type.
     """
     flow_in = (getattr(comp, "flows_in", None) or {}).get(flow_name)
-    seeds = set()
+    seeds = rule_guard_comparison_seeds(comp, flow_in)
 
-    for name, flow in (getattr(comp, "flows_out", None) or {}).items():
+    for carrier, operands in condition_carriers(comp):
         if any(
-            compare is not None and source is flow_in
-            for source, compare in prod_cond_operands(flow)
+            compare is not None and source is flow_in for source, compare in operands
         ):
-            seeds.add(state_var_name(flow) or f"{name}_fed_out")
-
-    seeds |= rule_guard_comparison_seeds(comp, flow_in)
-
-    for capacity in (getattr(comp, "capacities", None) or {}).values():
-        if any(
-            compare is not None and source is flow_in
-            for source, compare in serve_cond_operands(capacity)
-        ):
-            seeds |= commanded_discharge_outputs(comp, capacity)
+            seeds |= carrier_drives(comp, carrier)
 
     return signal_driven_outputs(comp, seeds) if seeds else []
 
@@ -1704,23 +1934,12 @@ def gates_production_on(comp, flow_name):
             if any(operand.flow is flow_in for operand in rule.cond):
                 return True
 
-    for flow in (getattr(comp, "flows_out", None) or {}).values():
-        if not isinstance(flow, FlowContinuous):
+    # Naming the signal is not enough: see `carrier_gates_production`.
+    for carrier, operands in condition_carriers(comp):
+        if not any(source is flow_in for source, _ in operands):
             continue
 
-        if any(source is flow_in for source, _ in prod_cond_operands(flow)):
-            return True
-
-    for capacity in (getattr(comp, "capacities", None) or {}).values():
-        if not any(source is flow_in for source, _ in serve_cond_operands(capacity)):
-            continue
-
-        # Naming the signal is not enough: what the volume releases has to
-        # LEAVE, or the command reaches no production and refusing would be the
-        # expensive error. The two ends of this route therefore ask one
-        # question -- a hand-declared volume releasing into neither an output
-        # nor a rule commands nothing, whatever its condition says.
-        if commanded_discharge_outputs(comp, capacity):
+        if carrier_gates_production(comp, carrier):
             return True
 
     state = state_var_name(flow_in)
@@ -1772,10 +1991,11 @@ def find_rate_comparison_loops(system, graph):
                 if cnct.target != key or cnct.flow != flow_name:
                     continue
 
+                upstream = graph.ancestors(cnct.source)
                 path = _walk_signal(
                     key,
                     outputs,
-                    graph.ancestors(cnct.source),
+                    upstream,
                     components,
                     by_engine_name,
                     connections_of,
@@ -1804,10 +2024,28 @@ def find_rate_comparison_loops(system, graph):
                                 if gated is None
                                 else capacities_reading(arrival, gated)
                             ),
+                            groups=arriving_groups(arrival, path[-1], upstream),
                         )
                     )
 
     return loops
+
+
+def arriving_groups(arrival, last, upstream):
+    """``(component, group)`` pairs for the machines a walk arrived at (R52).
+
+    What a refusal names beside the wiring when the signal lands on a mixture
+    group's command rather than on a production: empty otherwise, so the
+    message of every other loop reads as it always did.
+    """
+    if arrival is None:
+        return []
+
+    inbound = last.inbound or last.flow
+
+    return [
+        (last.target, name) for name in commands_a_draw_from(arrival, inbound, upstream)
+    ]
 
 
 def _walk_signal(reader, outputs, upstream, components, by_engine_name, connections_of):
@@ -1841,6 +2079,11 @@ def _walk_signal(reader, outputs, upstream, components, by_engine_name, connecti
             ]
 
             if target_key in upstream and gates_production_on(target_comp, inbound):
+                return walked
+
+            # A machine's command closes it too, one component over: what it
+            # decides is the delivery of the volume it draws (R52).
+            if commands_a_draw_from(target_comp, inbound, upstream):
                 return walked
 
             for onward in inbound_driven_outputs(target_comp, inbound):
@@ -2055,23 +2298,11 @@ def measurement_thresholds(comp, channel_name):
     if channel is None:
         return []
 
-    found = []
-
-    for flow in (getattr(comp, "flows_out", None) or {}).values():
-        for source, compare in prod_cond_operands(flow):
-            if compare is not None and source is channel:
-                found.append(f"{channel_name} {compare['op']} {compare['value']:g}")
-
-    # A capacity's DISCHARGE condition thresholds a reading in the same
-    # vocabulary (R49, R50), and a capacity is not a flow, so the loop above
-    # walks past it. Read here for the same reason the seeds read it: the
-    # offence is the comparison, whatever declaration carries it.
-    for capacity in (getattr(comp, "capacities", None) or {}).values():
-        for source, compare in serve_cond_operands(capacity):
-            if compare is not None and source is channel:
-                found.append(f"{channel_name} {compare['op']} {compare['value']:g}")
-
-    return found
+    return [
+        f"{channel_name} {compare['op']} {compare['value']:g}"
+        for _, source, compare in condition_operands(comp)
+        if compare is not None and source is channel
+    ]
 
 
 def ctrl_node_thresholds(node, input_name):
@@ -2181,19 +2412,11 @@ def measurement_threshold_seeds(comp, channel_name):
     channel = measurement_channels(comp).get(channel_name)
     seeds = set()
 
-    for name, flow in (getattr(comp, "flows_out", None) or {}).items():
+    for carrier, operands in condition_carriers(comp):
         if any(
-            compare is not None and source is channel
-            for source, compare in prod_cond_operands(flow)
+            compare is not None and source is channel for source, compare in operands
         ):
-            seeds.add(state_var_name(flow) or f"{name}_fed_out")
-
-    for capacity in (getattr(comp, "capacities", None) or {}).values():
-        if any(
-            compare is not None and source is channel
-            for source, compare in serve_cond_operands(capacity)
-        ):
-            seeds |= commanded_discharge_outputs(comp, capacity)
+            seeds |= carrier_drives(comp, carrier)
 
     return seeds
 
@@ -2499,14 +2722,58 @@ def find_self_commanded_discharges(system):
                 if state not in driven:
                     continue
 
-                operand = (
-                    f"{name} {compare['op']} {compare['value']:g}"
-                    if compare is not None
-                    else name
+                loops.append(
+                    CommandedRateSelfLoopError(
+                        key, capacity.name, name, render_operand(name, compare)
+                    )
                 )
 
+    return loops
+
+
+def find_self_commanded_mixtures(system):
+    """Every machine commanded by a reading of a flow it itself draws (R52).
+
+    The mixture counterpart of :func:`find_self_commanded_discharges`, and for
+    the same reason it needs no graph and no walk: the loop closes inside one
+    component. Both operand shapes count, a comparison and a bare read of a
+    continuous flow alike (R46).
+
+    Returns
+    -------
+    list of MixtureCommandSelfLoopError
+        In declaration order, empty for a model closing no such loop.
+    """
+    loops = []
+
+    for key, comp in (getattr(system, "comp", None) or {}).items():
+        flows_in = getattr(comp, "flows_in", None) or {}
+
+        groups = getattr(comp, "mixtures", None) or {}
+
+        # Every flow ANY machine of the component draws, not only the group's
+        # own: two machines commanded on each other's draw decide within one
+        # instant what the other reads, and the solver settles on whichever
+        # was declared first (measured, mirrored by the declaration order).
+        drawn = [
+            flows_in[name]
+            for other in groups.values()
+            for name in other.flows
+            if flows_in.get(name) is not None
+        ]
+
+        for group in groups.values():
+            for source, compare in run_cond_operands(group):
+                if not any(source is flow for flow in drawn):
+                    continue
+
                 loops.append(
-                    CommandedRateSelfLoopError(key, capacity.name, name, operand)
+                    MixtureCommandSelfLoopError(
+                        key,
+                        group.name,
+                        source.name,
+                        render_operand(source.name, compare),
+                    )
                 )
 
     return loops
@@ -2620,7 +2887,13 @@ def find_rate_observation_loops(system, graph):
 
             outputs, commanded, thresholds = reading_driven_signals(comp, channel_name)
 
-            if not outputs and not commanded:
+            # A threshold written in a machine's own command decides the
+            # delivery of the volume it draws, with no signal to follow (R52).
+            machines = mixture_groups_reading(
+                comp, measurement_channels(comp).get(channel_name)
+            )
+
+            if not outputs and not commanded and not machines:
                 continue
 
             operand = ", ".join(thresholds) or channel_name
@@ -2662,6 +2935,28 @@ def find_rate_observation_loops(system, graph):
                                     if gated is None
                                     else capacities_reading(arrival, gated)
                                 ),
+                                groups=arriving_groups(
+                                    arrival, walked[-1], upstream_of[producer]
+                                ),
+                            )
+                        )
+
+                # It closes when the volume's holder is upstream of the
+                # producer whose rate is read.
+                for group in machines:
+                    if producer not in upstream_of:
+                        upstream_of[producer] = graph.ancestors(producer)
+
+                    if getattr(group, "_producer", None) in upstream_of[producer]:
+                        commanded_loops.append(
+                            MixtureCommandLoopError(
+                                key,
+                                channel_name,
+                                flow_name,
+                                producer,
+                                operand,
+                                path,
+                                groups=[(key, group.name)],
                             )
                         )
 
@@ -3071,6 +3366,13 @@ def compute_equation_order(system):
 
     if self_loops:
         raise self_loops[0]
+
+    # The same shape on a machine's command (R52), last of the self loops for
+    # the same reason: a model a walk can see keeps the walk's diagnostic.
+    machine_loops = find_self_commanded_mixtures(system)
+
+    if machine_loops:
+        raise machine_loops[0]
 
     # Last of the three, so a model closing a loop BOTH walks can see keeps the
     # diagnostic written for it: this one refuses the shape they terminate on

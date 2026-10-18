@@ -405,9 +405,13 @@ def evaluate_demand(comp):
     # in the grouped branch of ``get_output_request``. Assigned rather than
     # accumulated because a group owns its inputs outright -- a flow a rule set,
     # a transfer or a near-side capacity also claims is refused at declaration.
+    #
+    # The rate is read LIVE (R52): a failure mode clamping ``{group}_flow_rate``
+    # stops the demand within the instant, as it stops the draw.
     for group in comp.mixtures.values():
+        rate = group.rate()
         for flow_name in group.flows:
-            demands[flow_name] = float(group.flow_rate)
+            demands[flow_name] = rate
 
     # A continuous input no rule and no transfer covers claims what it was
     # declared with: a pure consumer has no output to map a demand back from.
@@ -2193,9 +2197,10 @@ def allocate_output(comp, flow, available):
     below 1: a volume holding only a constituent at ``weight 0.5`` has
     ``sum_g m_g w_g`` equal to half its raw total, hence a share of ``2 R``.
     Capping at the published figure would then quietly serve less than the
-    volume released, and the difference would leave the balance. The volume is
-    drawn by that group alone, which is refused otherwise at the pre-run step,
-    so there is nobody to arbitrate against.
+    volume released, and the difference would leave the balance.
+
+    **Several groups are served pro rata of their composed shares** (R52), as
+    the comments below the docstring detail.
 
     Returns
     -------
@@ -2204,7 +2209,32 @@ def allocate_output(comp, flow, available):
     """
     capacity = comp.get_capacity_of_flow(flow.name, "out")
 
+    # Several machines may draw the volume (R52), each asking its own composed
+    # share. The proportional allocation then serves each of them in proportion
+    # to that share whenever the volume delivers less than their sum, which is
+    # the pro-rata a volume that cannot serve everybody owes them; the pre-run
+    # step refuses any other policy on a volume drawn by several groups.
     if capacity is not None and capacity.serves_a_mixture:
-        return flow.allocate(available, demands={capacity.mixture.consumer: available})
+        occupied = capacity.occupied_volume()
+        shares = {
+            draw.consumer: capacity.mixture_share_of(draw, flow.name, occupied)
+            for draw in capacity.mixture_draws
+        }
+        total = sum(shares.values())
+
+        if total <= 0.0:
+            # Nobody asks for anything: split what was delivered evenly rather
+            # than leave it unallocated, which is the R51 rule for one machine.
+            shares = {consumer: float(available) for consumer in shares}
+        else:
+            # Scaled to sum to what was delivered, both ways. Upwards, so the
+            # shares never cap what the volume released. Downwards, because the
+            # allocation truncates every claim at the available quantity before
+            # splitting, which bends a pro-rata: measured, machines of 100 and 1
+            # behind a ceiling of 50.5 got 49.52 and 0.98 instead of 50 and 0.5.
+            scale = float(available) / total
+            shares = {consumer: share * scale for consumer, share in shares.items()}
+
+        return flow.allocate(available, demands=shares)
 
     return flow.allocate(available)
