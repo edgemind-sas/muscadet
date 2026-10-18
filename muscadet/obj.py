@@ -1651,10 +1651,31 @@ class ObjFlow(cod3s.PycComponent):
         group = MixtureIn(name=name, flows=flows, flow_rate=flow_rate, **params)
 
         self.check_mixture_flows(group)
+        self.resolve_run_cond(group)
 
         group.add_variables(self)
+        group.add_run_cond_automata(self)
 
         self.mixtures[name] = group
+
+        return group
+
+    def resolve_run_cond(self, group):
+        """Resolve a mixture group's on/off command, if it declared one (R52).
+
+        Routed through :meth:`apply_prod_cond`, exactly as a discharge command
+        is (:meth:`resolve_serve_cond`), so the three vocabularies cannot drift:
+        same operand shapes, same input-first resolution, same refusal naming
+        an operand that does not exist.
+        """
+        if not group.run_cond:
+            return group
+
+        resolved = self.apply_prod_cond({"var_prod_cond": group.run_cond})
+
+        group.run_cond = resolved["var_prod_cond"]
+        group.run_cond_negate = resolved.get("var_prod_cond_negate", [])
+        group.run_cond_compare = resolved.get("var_prod_cond_compare", [])
 
         return group
 

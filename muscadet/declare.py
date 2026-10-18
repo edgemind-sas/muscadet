@@ -951,6 +951,15 @@ SERVE_COND_FIELDS = (
 )
 
 
+#: The same three fields on a MIXTURE GROUP, where the vocabulary commands the
+#: machine on and off (R52). Stored resolved, walked back by the same function.
+RUN_COND_FIELDS = (
+    "run_cond",
+    "run_cond_negate",
+    "run_cond_compare",
+)
+
+
 def _matrix_at(matrix, row, column):
     """One cell of a parallel matrix that may be empty or short.
 
@@ -1795,6 +1804,20 @@ def flow_component_spec(comp):
         if entry.get("serve_rate") == math.inf:
             entry.pop("serve_rate")
 
+    # A machine's on/off command is stored RESOLVED too (R52), and handled as
+    # the discharge command is just above, for the same two reasons.
+    mixtures = dump_all(comp.mixtures, "mixture group", skip=RUN_COND_FIELDS)
+
+    for entry, group in zip(mixtures, comp.mixtures.values()):
+        run_cond = _prod_cond_spec(
+            comp, group.run_cond, group.run_cond_negate, group.run_cond_compare
+        )
+
+        if run_cond:
+            entry["run_cond"] = run_cond
+        else:
+            entry.pop("run_cond_inner_mode", None)
+
     transfers = []
     for pair_name, pair in comp.transfers.items():
         transfers.append(
@@ -1820,7 +1843,7 @@ def flow_component_spec(comp):
             "measurements_out": dump_all(comp.measurements_out, "measurement out"),
             "rules": dump_all(comp.rule_sets, "rule set"),
             "transfers": transfers,
-            "mixtures": dump_all(comp.mixtures, "mixture group"),
+            "mixtures": mixtures,
         }
     )
 

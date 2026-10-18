@@ -95,6 +95,8 @@ import cod3s
 import Pycatshoo as pyc
 import pydantic
 
+from .flow import add_cond_threshold_automata, cond_readers, prod_cond_holds
+
 
 class MixtureGroupError(ValueError):
     """A mixture group no single volume can compose for.
@@ -135,9 +137,56 @@ class MixtureIn(cod3s.ObjCOD3S):
         ),
     )
 
+    run_cond: list = pydantic.Field(
+        default_factory=list,
+        description=(
+            "Condition commanding the machine on and off (R52), in the operand "
+            "vocabulary a discharge command uses (R49): the same shapes, the "
+            "same conjunctive-normal form, the same comparison grammar, "
+            "resolved by the same implementation. EMPTY -- the default -- "
+            "holds, so a group declaring none runs whenever its rate allows, "
+            "which is every model written before the field existed. Stored "
+            "RESOLVED once the component has read it, the negation and the "
+            "comparison lifted into the two matrices below."
+        ),
+    )
+
+    run_cond_negate: list = pydantic.Field(
+        default_factory=list,
+        description=(
+            "Per-operand negation matrix of 'run_cond', aligned index-for-index "
+            "with it. Empty unless an operand is negated."
+        ),
+    )
+
+    run_cond_compare: list = pydantic.Field(
+        default_factory=list,
+        description=(
+            "Per-operand comparison matrix of 'run_cond', aligned index-for-index "
+            "with it. Empty unless an operand compares."
+        ),
+    )
+
+    run_cond_inner_mode: str = pydantic.Field(
+        "or",
+        description=(
+            "How 'run_cond' reads its two levels, exactly as "
+            "'serve_cond_inner_mode' does: 'or' is a conjunction of "
+            "disjunctions, 'and' the other way round."
+        ),
+    )
+
     #: Backend handle of ``{name}_flow_rate``, created by :meth:`add_variables`.
     #: Private because it holds a PyCATSHOO object and no spec may carry it.
     _var_rate: typing.Any = pydantic.PrivateAttr(default=None)
+
+    #: Memoised readers of :attr:`run_cond`, built on first use.
+    _run_cond_readers: typing.Any = pydantic.PrivateAttr(default=None)
+
+    #: Engine key of the component the pre-run step bound this group to, written
+    #: by :func:`resolve_mixture_groups` and read by the loop detection, which
+    #: has to know whose delivery the command decides (R52).
+    _producer: typing.Optional[str] = pydantic.PrivateAttr(default=None)
 
     @pydantic.field_validator("flows", mode="before")
     @classmethod
@@ -189,6 +238,20 @@ class MixtureIn(cod3s.ObjCOD3S):
 
         return value
 
+    @pydantic.field_validator("run_cond_inner_mode")
+    @classmethod
+    def check_run_cond_inner_mode(cls, value):
+        """Refuse a mode that is not one of the two, as a capacity does.
+
+        ``prod_cond_holds`` reads anything that is not the literal ``"or"`` as
+        ``"and"``, so ``"OR"`` would silently invert the whole command.
+        """
+        if value not in ("and", "or"):
+            raise ValueError(
+                f"run_cond_inner_mode must be 'and' or 'or', got {value!r}"
+            )
+        return value
+
     def rate_var_name(self) -> str:
         """Basename of the public variable carrying this group's rate (R52)."""
         return f"{self.name}_flow_rate"
@@ -207,18 +270,54 @@ class MixtureIn(cod3s.ObjCOD3S):
             self.rate_var_name(), pyc.TVarType.t_double, float(self.flow_rate)
         )
 
+    def runs(self) -> bool:
+        """True when the command lets the machine run (R52).
+
+        An EMPTY condition holds, so an uncommanded group pays a single truth
+        test. Read live rather than mirrored, for the reason a discharge command
+        is (R49): a comparison against a continuous quantity would otherwise lag
+        one step behind the value it watches.
+        """
+        if not self.run_cond:
+            return True
+
+        if self._run_cond_readers is None:
+            self._run_cond_readers = cond_readers(
+                self.run_cond, self.run_cond_negate, self.run_cond_compare
+            )
+
+        return prod_cond_holds(self._run_cond_readers, self.run_cond_inner_mode)
+
+    def add_run_cond_automata(self, comp):
+        """Watch every continuous threshold the command carries (R52).
+
+        The watched two-state automaton a discharge command's comparison gets,
+        from the same implementation, so a level crossing inside an integration
+        step starts or stops the machine at the crossing rather than one step
+        late. The ``_run`` tag keeps the states apart from those of a flow or a
+        capacity of the same name, the engine's states being one namespace.
+        """
+        return add_cond_threshold_automata(
+            comp, self.run_cond, self.run_cond_compare, f"{self.name}_run"
+        )
+
     def rate(self) -> float:
         """The volume this group moves per unit of time, read live.
 
-        Read from the public variable, so a failure mode that clamped it is
-        honoured within the instant; falls back to the declaration before
-        :meth:`add_variables` has run, which is what lets a group be inspected
-        outside a built system.
+        Zero while the command does not hold, the published rate otherwise:
+        composed by BRANCHING, never by product, for the reason the discharge
+        command gives (R49). Read from the public variable, so a failure mode
+        that clamped it is honoured within the instant; falls back to the
+        declaration before :meth:`add_variables` has run, which is what lets a
+        group be inspected outside a built system.
 
         Clamped at zero: a mode writing a negative value states a direction, and
         the direction of a draw is the connection's, never the rate's -- the
         rule :meth:`check_rate` applies to the declaration.
         """
+        if not self.runs():
+            return 0.0
+
         if self._var_rate is None:
             return float(self.flow_rate)
 
@@ -291,6 +390,8 @@ def clear_mixture_bindings(system):
     for comp in (getattr(system, "comp", None) or {}).values():
         for capacity in (getattr(comp, "capacities", None) or {}).values():
             capacity.mixture = None
+        for group in component_mixtures(comp).values():
+            group._producer = None
 
 
 def resolve_mixture_groups(system):
@@ -369,6 +470,8 @@ def resolve_mixture_groups(system):
             group=group.name,
             mixture_group=group,
         )
+
+        group._producer = producer
 
         bound.setdefault(producer, {})[capacity.name] = f"{key}.{group.name}"
         resolved.append((key, group.name, producer, capacity.name))
