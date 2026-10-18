@@ -1804,6 +1804,11 @@ def flow_component_spec(comp):
         if entry.get("serve_rate") == math.inf:
             entry.pop("serve_rate")
 
+        # A closed volume says nothing about the atmosphere, and writing a null
+        # would change the bytes of every capacity spec ever stored (R53).
+        if entry.get("makeup_flow") is None:
+            entry.pop("makeup_flow", None)
+
     # A machine's on/off command is stored RESOLVED too (R52), and handled as
     # the discharge command is just above, for the same two reasons.
     mixtures = dump_all(comp.mixtures, "mixture group", skip=RUN_COND_FIELDS)
