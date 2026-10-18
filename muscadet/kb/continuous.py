@@ -501,7 +501,8 @@ class CapacityContinuous(ContinuousComponent):
         constituent the outside supplies (R53): it stays full, the make-up
         entering at the rate it runs short and the excess venting at the
         composition, so no arrival is refused. What the declared content leaves
-        of the volume is the make-up at t=0. Excludes a ``fill_rate``.
+        of the volume is the make-up at t=0. ``fill_rate`` keeps its meaning:
+        ``math.inf`` to take whatever the producers deliver.
     capacity_name : str, optional
         Name of the declared capacity, and therefore of the measurement channel
         a sensor observes it through. Defaults to ``"capacity"``.

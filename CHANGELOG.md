@@ -23,12 +23,17 @@ rate tuned by hand.
 - Several mixture groups may draw one volume. Each takes its own rate at the
   composition, the draws add up, and a volume that cannot serve their sum
   serves each pro rata of its composed share. `Capacity.mixture_draws` lists
-  them; `Capacity.mixture` still answers for a volume drawn by one group (R52).
+  them; `Capacity.mixture` still answers for a volume drawn by one group and
+  refuses to choose between several. `MixtureDraw.flow_rate` is now read-only
+  and live: the group's effective rate, command and failure modes included
+  (R52).
 - `makeup_flow` opens a capacity to the atmosphere: it stays full, the make-up
   entering at the rate it runs short and the excess venting at the
   composition, published on `{c}_makeup` and `{c}_vent_{f}`. It has no
-  empty/full automaton, never refuses an arrival, and completes its initial
-  content with the make-up. `CapacityContinuous` accepts it (R53).
+  empty/full automaton, never throttles an arrival for want of room, and
+  completes its initial content with the make-up; what it asks upstream
+  follows `fill_rate` as for any volume. `CapacityContinuous` accepts it
+  (R53).
 - The loop detection walks every condition through one enumeration,
   `ordering.condition_carriers`, as R50 asked before a sixth mechanism landed.
   No verdict moves.

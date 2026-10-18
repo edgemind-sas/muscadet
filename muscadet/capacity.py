@@ -484,8 +484,10 @@ class Capacity(cod3s.ObjCOD3S):
             "existed. An open volume stays FULL by construction: the make-up "
             "constituent enters at the rate the volume runs short, and what "
             "exceeds it leaves to the atmosphere at the composition, so no "
-            "arrival is ever refused for want of room. What remains of the "
-            "declared volume at t=0 is the make-up constituent."
+            "arrival is ever refused for want of room. What it asks upstream "
+            "follows fill_rate as for any volume: math.inf takes whatever the "
+            "producers deliver, the default 0 asks for what it releases. What "
+            "remains of the declared volume at t=0 is the make-up constituent."
         ),
     )
 
@@ -762,13 +764,17 @@ class Capacity(cod3s.ObjCOD3S):
     def check_open_volume(self, names):
         """Validate an OPEN volume and fill what its declared content leaves (R53).
 
-        Two refusals, each a declaration that would otherwise say something the
-        engine does not do:
+        A make-up constituent the volume does not hold has nowhere to enter, and
+        is refused.
 
-        * a make-up constituent the volume does not hold has nowhere to enter;
-        * a ``fill_rate`` claims room the volume does not need: an open volume
-          already takes everything that arrives, so the claim would be a figure
-          with no effect at all.
+        ``fill_rate`` keeps its meaning on an open volume, and that was decided
+        against an unbounded claim measured wrong: an open room asking upstream
+        for ``math.inf`` whatever it was declared with drained a stocked tank
+        feeding it at its whole content per unit of time (a tank of 100 at
+        36.8 after one time unit, against 99.0 behind a closed room). What an
+        open volume removes is the throttling of a FULL volume, never the claim
+        a modeller states: ``math.inf`` takes whatever the producers deliver,
+        the default 0 asks for what the volume releases.
 
         The volume then starts FULL: what the declared content leaves of the
         volume is the make-up constituent, which is what a room open to the
@@ -782,13 +788,6 @@ class Capacity(cod3s.ObjCOD3S):
                 f"Capacity {self.name}: makeup_flow {self.makeup_flow!r} names a "
                 f"constituent the volume does not hold ({', '.join(names)}). The "
                 "outside supplies one of the constituents already in the volume."
-            )
-
-        if self.fill_rate != 0.0:
-            raise ValueError(
-                f"Capacity {self.name}: an open volume accepts every arrival "
-                f"already, so fill_rate={self.fill_rate:g} would claim nothing. "
-                "Declare none."
             )
 
         room = self.capacity - self.content_init_volume()
@@ -1670,10 +1669,9 @@ class Capacity(cod3s.ObjCOD3S):
         between a source of 100 and a load of 100 rose by 60 per unit of time.
         A model that wants the charging says so with a ``fill_rate``.
 
-        **An OPEN volume asks for whatever its producers deliver** (R53): what
-        arrives beyond what leaves is vented, so no arrival is refused for want
-        of room, and the demand it carries upstream is unbounded whatever it
-        holds or releases.
+        **An OPEN volume is never full** (R53), so the throttling half does not
+        apply to it: what arrives beyond what leaves is vented rather than
+        refused. Its claim is the ordinary one, a ``fill_rate`` included.
 
         Parameters
         ----------
@@ -1689,9 +1687,6 @@ class Capacity(cod3s.ObjCOD3S):
         float
             The demand to carry further upstream, possibly ``math.inf``.
         """
-        if self.is_open:
-            return math.inf
-
         carried = min(float(demand), self.serve_ceiling(flow_name))
 
         return min(carried + self.fill_claim(flow_name), self.accept_limit(flow_name))

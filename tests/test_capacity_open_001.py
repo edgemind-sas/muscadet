@@ -12,7 +12,9 @@ room until arrivals are refused.
 every constituent vents at ``max(D, 0) . m_f / sum_g m_g w_g``, so the volume
 occupied never moves. What remains of the declared volume at t=0 is the
 make-up constituent. The room has no empty/full automaton: full by
-construction, it would toggle at every step around its own bound.
+construction, it would toggle at every step around its own bound. What it asks
+upstream follows ``fill_rate`` as for any volume: the showcase room declares
+``math.inf`` so the leaks deliver whatever they leak.
 
 The montage is the room of the platform's hydrogen showcase: 100 m^3 of air, a
 fan of 100 m^3/h and a natural draft of 1 m^3/h. The equilibrium share is what
@@ -56,6 +58,7 @@ class OpRoom(muscadet.ObjFlow):
             capacity=VOLUME,
             content_init={"H2": 0.0},
             makeup_flow="AIR",
+            fill_rate=kwargs.get("fill_rate", "inf"),
         )
 
 
@@ -256,7 +259,58 @@ class OpBadMakeup(muscadet.ObjFlow):
         )
 
 
-class OpClaimingRoom(muscadet.ObjFlow):
+def test_an_open_volume_refuses_a_makeup_it_does_not_hold():
+    system = muscadet.System(name="OpenBadMakeup")
+    try:
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore")
+            with pytest.raises(ValueError, match="does not hold"):
+                system.add_component(name="ROOM", cls="OpBadMakeup")
+    finally:
+        system.deleteSys()
+
+
+class OpTank(muscadet.ObjFlow):
+    """A stocked tank of hydrogen, closed, serving whatever it is asked."""
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        self.add_flow_continuous_out(name="H2")
+        self.add_capacity(
+            name="tank",
+            flow="H2",
+            side="out",
+            capacity=1000.0,
+            content_init={"H2": 100.0},
+        )
+
+
+def test_an_open_room_does_not_empty_a_tank_feeding_it():
+    """Review finding: an open volume used to ask upstream for ``math.inf``
+    whatever it declared, which drained a stocked tank at its whole content
+    per unit of time (100 to 36.8 in one time unit). At the default
+    ``fill_rate=0`` it asks for what it releases, the draft here."""
+    system = muscadet.System(name="OpenTank")
+    try:
+        system.add_component(name="TANK", cls="OpTank")
+        system.add_component(name="ROOM", cls="OpRoom", fill_rate=0.0)
+        system.add_component(name="DRAFT", cls="OpMachine", rate=DRAFT)
+        system.connect_flow(source="TANK", target="ROOM", flow_name="H2")
+        for flow in ("AIR", "H2"):
+            system.connect_flow(source="ROOM", target="DRAFT", flow_name=flow)
+        system.isimu_start()
+        system.isimu_step_to(10.0, max_events=100000)
+        held = system.comp["TANK"].capacities["tank"].get_quantity("H2")
+        system.isimu_stop()
+    finally:
+        system.deleteSys()
+
+    assert held == pytest.approx(100.0 - 10.0 * DRAFT, rel=1e-3)
+
+
+class OpWeightedRoom(muscadet.ObjFlow):
+    """An open room whose constituents occupy different volumes per unit."""
+
     def add_flows(self, **kwargs):
         super().add_flows(**kwargs)
         for flow in ("AIR", "H2"):
@@ -264,30 +318,52 @@ class OpClaimingRoom(muscadet.ObjFlow):
             self.add_flow_continuous_out(name=flow)
         self.add_capacity(
             name="room",
-            flows=["AIR", "H2"],
+            flows=[{"name": "AIR", "weight": 0.5}, {"name": "H2", "weight": 2.0}],
             side="out",
             capacity=VOLUME,
+            content_init={"H2": 5.0},
             makeup_flow="AIR",
-            fill_rate=5.0,
+            fill_rate="inf",
         )
 
 
-@pytest.mark.parametrize(
-    "cls, message",
-    [
-        ("OpBadMakeup", "does not hold"),
-        ("OpClaimingRoom", "fill_rate"),
-    ],
-)
-def test_an_open_volume_refuses_what_it_cannot_mean(cls, message):
-    system = muscadet.System(name=f"Open{cls}")
+@pytest.mark.parametrize("fan, leak", [(FAN, SEEP), (0.0, BREACH)])
+def test_weights_keep_the_occupied_volume_whatever_breathes(fan, leak):
+    """Make-up (fan running) and venting (breach beyond the draft), both with
+    weights other than 1: the volume is held in VOLUME terms, not quantities."""
+    system = muscadet.System(name="OpenWeighted")
     try:
-        with warnings.catch_warnings():
-            warnings.simplefilter("ignore")
-            with pytest.raises(ValueError, match=message):
-                system.add_component(name="ROOM", cls=cls)
+        system.add_component(name="LEAK", cls="SourceContinuous", flow="H2", rate=leak)
+        system.add_component(name="ROOM", cls="OpWeightedRoom")
+        system.add_component(name="FAN", cls="OpMachine", rate=fan)
+        system.add_component(name="DRAFT", cls="OpMachine", rate=DRAFT)
+        system.connect_flow(source="LEAK", target="ROOM", flow_name="H2")
+        for flow in ("AIR", "H2"):
+            system.connect_flow(source="ROOM", target="FAN", flow_name=flow)
+            system.connect_flow(source="ROOM", target="DRAFT", flow_name=flow)
+        capacity = system.comp["ROOM"].capacities["room"]
+        assert capacity.content_init["AIR"] == pytest.approx((VOLUME - 10.0) / 0.5)
+        system.isimu_start()
+        system.isimu_step_to(20.0, max_events=100000)
+        occupied = capacity.occupied_volume()
+        system.isimu_stop()
     finally:
         system.deleteSys()
+
+    assert occupied == pytest.approx(VOLUME, rel=1e-6)
+
+
+def test_the_breathing_variables_are_solver_owned():
+    """A mode may not clamp them: the capacity equation rewrites them."""
+    from muscadet.derating import solver_owned_endpoints
+
+    system = build("OpenOwned", SEEP)
+    try:
+        owned = solver_owned_endpoints(system.comp["ROOM"])
+    finally:
+        system.deleteSys()
+
+    assert {"room_makeup", "room_vent_AIR", "room_vent_H2"} <= set(owned)
 
 
 def test_an_open_volume_survives_the_spec_round_trip():

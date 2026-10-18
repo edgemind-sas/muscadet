@@ -363,7 +363,22 @@ class MixtureDraw(cod3s.ObjCOD3S):
 
     def rate(self) -> float:
         """The volume the machine moves per unit of time, read live."""
+        if self.mixture_group is None:
+            raise ValueError(
+                f"Mixture draw {self.consumer}.{self.group} is bound to no group: "
+                f"a draw is written by resolve_mixture_groups, which binds it."
+            )
         return self.mixture_group.rate()
+
+    @property
+    def flow_rate(self) -> float:
+        """The draw's rate, read live: :meth:`rate` under its 5.16 name.
+
+        It used to be a field holding a copy of the declared rate. It is now the
+        effective one, command and failure modes included, which is what a
+        reader of the draw was always asking for.
+        """
+        return self.rate()
 
     def __repr__(self) -> str:
         return (

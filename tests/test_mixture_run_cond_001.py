@@ -339,6 +339,76 @@ def test_a_command_on_the_room_level_builds():
     assert start_error(system) is None
 
 
+class McTwoRooms(muscadet.ObjFlow):
+    """A volume over one flow, so two machines can each draw their own."""
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        flow = kwargs["flow"]
+        self.add_flow_continuous_in(name=flow)
+        self.add_flow_continuous_out(name=flow)
+        self.add_capacity(
+            name="room", flow=flow, side="out", capacity=1e5, content_init={flow: V}
+        )
+
+
+class McCrossedFans(muscadet.ObjFlow):
+    """Two machines, each commanded on what the OTHER draws."""
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        for flow in ("A1", "A2"):
+            self.add_flow_continuous_in(name=flow)
+        self.add_mixture_in(
+            name="g1",
+            flows=["A1"],
+            flow_rate=Q,
+            run_cond=[{"name": "A2", "op": "<", "value": 1.0}],
+        )
+        self.add_mixture_in(
+            name="g2",
+            flows=["A2"],
+            flow_rate=Q,
+            run_cond=[{"name": "A1", "op": "<", "value": 1.0}],
+        )
+
+
+def test_machines_commanded_on_each_others_draw_are_refused():
+    """Review finding: each decides within one instant what the other reads,
+    and the answer used to follow the declaration order."""
+    system = muscadet.System(name="MixtureRunCrossed")
+    try:
+        system.add_component(name="R1", cls="McTwoRooms", flow="A1")
+        system.add_component(name="R2", cls="McTwoRooms", flow="A2")
+        system.add_component(name="F", cls="McCrossedFans")
+        system.connect_flow(source="R1", target="F", flow_name="A1")
+        system.connect_flow(source="R2", target="F", flow_name="A2")
+    except Exception:
+        system.deleteSys()
+        raise
+
+    error = start_error(system)
+
+    assert isinstance(error, ContinuousFlowCycleError)
+    assert "machine of this component draws" in str(error)
+
+
+def test_a_bound_draw_reads_its_rate_under_the_old_name():
+    """``MixtureDraw.flow_rate`` survives as a read-only, live view.
+
+    The fan's order is wired to nothing, so the command does not hold and the
+    effective rate is zero: the old name reads the live rate, not a copy of the
+    declared one.
+    """
+    system = build("MixtureRunDraw", "McOrderedFan")
+    try:
+        system.prerun()
+        draw = system.comp["ROOM"].capacities["room"].mixture
+        assert draw.flow_rate == draw.rate() == 0.0
+    finally:
+        system.deleteSys()
+
+
 def test_a_command_survives_the_spec_round_trip():
     system = build("MixtureRunSpec", "McClockedFan", sources=False)
     try:

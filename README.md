@@ -2063,6 +2063,7 @@ self.add_capacity(
     capacity=100.0,
     content_init={"H2": 0.0},     # the rest of the volume is air
     makeup_flow="AIR",
+    fill_rate=math.inf,           # take whatever the leaks deliver
 )
 ```
 
@@ -2074,12 +2075,16 @@ the outside air a room needed or what it released.
 
 What follows from it, each point a consequence rather than an option:
 
-- no arrival is refused for want of room: the demand an open volume carries upstream is
-  unbounded, and the excess vents at the composition;
+- no arrival is refused for want of room: an open volume is never full, so it does not
+  throttle what it accepts, and the excess vents at the composition;
+- what it asks upstream follows `fill_rate` as for any volume. A room fed by leaks
+  declares `math.inf`, as a closed room pushed into does. Forcing an unbounded claim was
+  tried and measured wrong: a stocked tank feeding the room was drained at its whole
+  content per unit of time;
 - it has no empty/full automaton, since it sits on its own bound at every step;
 - what the declared content leaves of the volume at t=0 is the make-up constituent,
   written into `content_init`;
-- a `fill_rate` is refused, as is a make-up the volume does not hold.
+- a make-up the volume does not hold is refused.
 
 Measured on a room of 100 m^3 with a fan of 100 m^3/h and a draft of 1 m^3/h, the share
 settles at what arrives over what leaves: a seep of 0.05 m^3/h at 0.05 %, a breach of

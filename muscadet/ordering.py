@@ -916,9 +916,9 @@ class MixtureCommandSelfLoopError(ContinuousFlowCycleError):
                 "Continuous flow graph must be acyclic (R30, R52): "
                 f"{reader} closes a loop inside itself. The mixture group "
                 f"{group!r} commands its machine on {operand}, and {flow} is "
-                "one of the flows that machine draws: what the command reads "
-                "is what it decides, within one instant and over no connection "
-                "at all. Command the machine on something it does not itself "
+                "a flow a machine of this component draws: what the command "
+                "reads is what a command decides, within one instant and over "
+                "no connection at all. Command the machine on something it does not itself "
                 "draw -- a boolean signal, or a CAPACITY LEVEL read over a "
                 "measurement link, a level being integrated and therefore "
                 "carried between instants."
@@ -2749,11 +2749,20 @@ def find_self_commanded_mixtures(system):
     for key, comp in (getattr(system, "comp", None) or {}).items():
         flows_in = getattr(comp, "flows_in", None) or {}
 
-        for group in (getattr(comp, "mixtures", None) or {}).values():
-            drawn = [
-                flows_in[name] for name in group.flows if flows_in.get(name) is not None
-            ]
+        groups = getattr(comp, "mixtures", None) or {}
 
+        # Every flow ANY machine of the component draws, not only the group's
+        # own: two machines commanded on each other's draw decide within one
+        # instant what the other reads, and the solver settles on whichever
+        # was declared first (measured, mirrored by the declaration order).
+        drawn = [
+            flows_in[name]
+            for other in groups.values()
+            for name in other.flows
+            if flows_in.get(name) is not None
+        ]
+
+        for group in groups.values():
             for source, compare in run_cond_operands(group):
                 if not any(source is flow for flow in drawn):
                     continue
