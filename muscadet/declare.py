@@ -689,7 +689,7 @@ RUNTIME_HANDLE_PREFIXES = ("sm_",)
 #: when a mode outside it did (#13) -- ``automaton`` / ``state_empty``
 #: / ``state_full`` are a capacity's built bound automaton, ``mode`` is the
 #: automaton a rule set's guards compile into, and ``flow`` is the object a
-#: guard operand resolved onto. ``mixture`` is the binding the pre-run step
+#: guard operand resolved onto. ``mixture_draws`` holds the bindings the pre-run step
 #: writes on a volume from its CONSUMER's ``mixtures`` section, so a system read
 #: back after a run gives the spec it gave before. Every one is rebuilt by the
 #: declaration it comes from.
@@ -704,7 +704,7 @@ DERIVED_EXCLUDED_FIELDS = frozenset(
         "state_full",
         "mode",
         "flow",
-        "mixture",
+        "mixture_draws",
     }
 )
 

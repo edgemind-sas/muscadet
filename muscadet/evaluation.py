@@ -2196,9 +2196,14 @@ def allocate_output(comp, flow, available):
     below 1: a volume holding only a constituent at ``weight 0.5`` has
     ``sum_g m_g w_g`` equal to half its raw total, hence a share of ``2 R``.
     Capping at the published figure would then quietly serve less than the
-    volume released, and the difference would leave the balance. The volume is
-    drawn by that group alone, which is refused otherwise at the pre-run step,
-    so there is nobody to arbitrate against.
+    volume released, and the difference would leave the balance.
+
+    **Several groups are served pro rata of their composed shares** (R52).
+    Each share is what that machine takes at the composition, so whenever the
+    volume delivers less than their sum the proportional split serves each in
+    proportion to it. The shares are scaled together to sum to the delivery
+    before they are handed over: never a cap on what the volume released, and
+    never above the delivery, where the allocation would truncate them first.
 
     Returns
     -------
@@ -2207,7 +2212,31 @@ def allocate_output(comp, flow, available):
     """
     capacity = comp.get_capacity_of_flow(flow.name, "out")
 
+    # Several machines may draw the volume (R52), each asking its own composed
+    # share. The proportional allocation then serves each of them in proportion
+    # to that share whenever the volume delivers less than their sum, which is
+    # the pro-rata a volume that cannot serve everybody owes them; the pre-run
+    # step refuses any other policy on a volume drawn by several groups.
     if capacity is not None and capacity.serves_a_mixture:
-        return flow.allocate(available, demands={capacity.mixture.consumer: available})
+        shares = {
+            draw.consumer: capacity.mixture_share_of(draw, flow.name)
+            for draw in capacity.mixture_draws
+        }
+        total = sum(shares.values())
+
+        if total <= 0.0:
+            # Nobody asks for anything: split what was delivered evenly rather
+            # than leave it unallocated, which is the R51 rule for one machine.
+            shares = {consumer: float(available) for consumer in shares}
+        else:
+            # Scaled to sum to what was delivered, both ways. Upwards, so the
+            # shares never cap what the volume released. Downwards, because the
+            # allocation truncates every claim at the available quantity before
+            # splitting, which bends a pro-rata: measured, machines of 100 and 1
+            # behind a ceiling of 50.5 got 49.52 and 0.98 instead of 50 and 0.5.
+            scale = float(available) / total
+            shares = {consumer: share * scale for consumer, share in shares.items()}
+
+        return flow.allocate(available, demands=shares)
 
     return flow.allocate(available)

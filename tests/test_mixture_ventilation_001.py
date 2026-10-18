@@ -551,17 +551,25 @@ def test_a_volume_serving_a_group_and_somebody_else_is_refused():
     refused(make, "also serves")
 
 
-def test_a_second_machine_on_the_same_flows_is_refused():
-    """Caught as a second CONSUMER, which is what it is on each of those flows."""
+def test_a_second_machine_on_the_same_flows_shares_the_volume():
+    """Refused up to 5.16, accepted since R52: two machines on one room.
 
-    def make():
-        system = build(MxFan)
+    Each takes its own rate at the composition and the draws add up, so the
+    second machine is a second draw on the volume, not a consumer competing
+    with the first one.
+    """
+    system = build(MxFan)
+    try:
         system.add_component(name="FAN2", cls="MxFan")
         for flow in ("AIR", "H2"):
             system.connect_flow(source="ROOM", target="FAN2", flow_name=flow)
-        return system
 
-    refused(make, "also serves")
+        system.prerun()
+
+        draws = system.comp["ROOM"].capacities["room"].mixture_draws
+        assert [draw.consumer for draw in draws] == ["LOAD", "FAN2"]
+    finally:
+        system.deleteSys()
 
 
 class MxThreeRoom(muscadet.ObjFlow):
@@ -592,10 +600,11 @@ class MxCO2Fan(muscadet.ObjFlow):
 
 
 def test_two_groups_over_disjoint_flows_of_one_volume_are_refused():
-    """Nothing arbitrates two volumetric rates against one composition.
+    """Each group leaves out a constituent of the volume it draws (R52).
 
-    The flows are disjoint, so the exclusivity rule above passes: this is the
-    refusal that catches what it does not.
+    Up to 5.16 this was refused as a second group on one volume. Several groups
+    are allowed since, but a machine moves a volume of whatever the room holds,
+    so a group naming part of the room is refused for what it leaves out.
     """
 
     def make():
@@ -612,7 +621,7 @@ def test_two_groups_over_disjoint_flows_of_one_volume_are_refused():
             raise
         return system
 
-    refused(make, "already drawn by")
+    refused(make, "which the group does not draw")
 
 
 def test_a_group_whose_flow_is_not_connected_is_refused():

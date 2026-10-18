@@ -389,7 +389,7 @@ def clear_mixture_bindings(system):
     """
     for comp in (getattr(system, "comp", None) or {}).values():
         for capacity in (getattr(comp, "capacities", None) or {}).values():
-            capacity.mixture = None
+            capacity.mixture_draws = []
         for group in component_mixtures(comp).values():
             group._producer = None
 
@@ -411,9 +411,10 @@ def resolve_mixture_groups(system):
     ------
     MixtureGroupError
         When a group's flows do not all arrive from ONE capacity of ONE
-        producer, when that producer serves them to anybody else, or when two
-        groups claim one volume. Each message names the group, the component
-        and the flows it could not resolve.
+        producer, when the group leaves out a constituent of that volume, when
+        the producer serves those flows to anybody but mixture groups, or when
+        a volume drawn by several groups allocates other than proportionally.
+        Each message names the group, the component and the flows in cause.
     """
     # Deferred: muscadet.ordering imports the evaluation and capability units,
     # and this module is reached from muscadet.obj, which they must stay free of.
@@ -443,8 +444,17 @@ def resolve_mixture_groups(system):
         suppliers.setdefault((cnct.target, cnct.flow), []).append(cnct.source)
         customers.setdefault((cnct.source, cnct.flow), []).append(cnct.target)
 
-    bound = {}
+    # (producer, flow) -> the consumers drawing that flow as a mixture. What
+    # the exclusivity rule exempts: several machines on one room are the point
+    # of R52, a per-flow consumer beside them is still not arbitrated.
+    group_consumers = {}
+    for key, comp, group in declared:
+        for flow_name in group.flows:
+            for source in suppliers.get((key, flow_name), []):
+                group_consumers.setdefault((source, flow_name), set()).add(key)
+
     resolved = []
+    drawn = []
 
     for key, comp, group in declared:
         where = f"mixture group {group.name} of {key}"
@@ -454,27 +464,26 @@ def resolve_mixture_groups(system):
 
         capacity = _shared_capacity(where, group, producer, producer_comp)
 
-        _check_exclusive(where, group, producer, key, customers)
+        _check_covers_volume(where, group, producer, capacity)
 
-        if capacity.name in bound.get(producer, ()):
-            raise MixtureGroupError(
-                f"{where}: capacity {capacity.name} of {producer} is already "
-                f"drawn by {bound[producer][capacity.name]}. One volume serves "
-                f"one mixture group: two machines on one room would each have "
-                f"to be composed against what the other left, which nothing "
-                f"here arbitrates."
+        _check_exclusive(where, group, producer, key, customers, group_consumers)
+
+        capacity.mixture_draws.append(
+            MixtureDraw(
+                consumer=comp.name(),
+                group=group.name,
+                mixture_group=group,
             )
-
-        capacity.mixture = MixtureDraw(
-            consumer=comp.name(),
-            group=group.name,
-            mixture_group=group,
         )
 
         group._producer = producer
 
-        bound.setdefault(producer, {})[capacity.name] = f"{key}.{group.name}"
+        if (producer, capacity) not in drawn:
+            drawn.append((producer, capacity))
         resolved.append((key, group.name, producer, capacity.name))
+
+    for producer, capacity in drawn:
+        _check_proportional(producer, components[producer], capacity)
 
     return resolved
 
@@ -544,19 +553,81 @@ def _shared_capacity(where, group, producer, producer_comp):
     return capacities[0]
 
 
-def _check_exclusive(where, group, producer, consumer_key, customers):
+def _check_covers_volume(where, group, producer, capacity):
+    """Refuse a group that leaves out a constituent of the volume it draws (R52).
+
+    A volume drawn as a mixture serves mixture groups alone, so a constituent
+    no group names would still be composed into the draw of the volume and
+    sent down an output no machine is wired to: drawn out of the room, received
+    by nobody, recorded by no balance. A machine moves a volume of whatever the
+    room holds, so it names everything the room holds.
+    """
+    missing = [name for name in capacity.flow_names if name not in group.flows]
+
+    if missing:
+        raise MixtureGroupError(
+            f"{where}: capacity {capacity.name} of {producer} also holds "
+            f"{', '.join(missing)}, which the group does not draw. A machine "
+            f"moves a volume of whatever the room holds, so a group names "
+            f"every constituent of the volume it draws; what it left out would "
+            f"leave the volume towards nobody."
+        )
+
+
+def _check_proportional(producer, producer_comp, capacity):
+    """Refuse a volume drawn by several groups that allocates otherwise (R52).
+
+    Several machines are served pro rata of their composed shares when the
+    volume cannot serve their sum, and that pro-rata IS the proportional
+    allocation. A declared ``shares`` or ``priority`` policy, or a Python
+    ``allocation_fun``, would serve them by another rule while the model reads
+    as ventilated at the composition. A volume drawn by ONE group has nobody to
+    arbitrate against and keeps whatever it declared.
+    """
+    if len(capacity.mixture_draws) < 2:
+        return
+
+    from .flow_continuous import ALLOCATION_PROPORTIONAL
+
+    for flow_name in capacity.flow_names:
+        flow = (producer_comp.flows_out or {}).get(flow_name)
+
+        if flow is None:
+            continue
+
+        custom = callable(getattr(flow, "allocation_fun", None))
+        policy = getattr(flow, "allocation", ALLOCATION_PROPORTIONAL)
+
+        if custom or policy != ALLOCATION_PROPORTIONAL:
+            consumers = ", ".join(
+                f"{draw.consumer}.{draw.group}" for draw in capacity.mixture_draws
+            )
+            declared = "allocation_fun" if custom else f"allocation={policy!r}"
+            raise MixtureGroupError(
+                f"capacity {capacity.name} of {producer} is drawn by several "
+                f"mixture groups ({consumers}), and its output {flow_name} "
+                f"declares {declared}. Machines on one volume are served pro "
+                f"rata of their composed shares, which is the proportional "
+                f"allocation: declare none on that output."
+            )
+
+
+def _check_exclusive(where, group, producer, consumer_key, customers, group_consumers):
     """Refuse a volume serving the group and an ordinary consumer at once.
 
     Recorded rather than designed: what a per-flow request and a composed share
     should do to each other is a genuine arbitration, and a silent wrong answer
-    is exactly the failure this notion exists to remove.
+    is exactly the failure this notion exists to remove. Another MIXTURE group
+    on the same flow is not such a consumer (R52): each machine takes its own
+    rate at the composition, and the draws add up.
     """
     for flow_name in group.flows:
+        mixtures = group_consumers.get((producer, flow_name), set())
         others = sorted(
             {
                 target
                 for target in customers.get((producer, flow_name), [])
-                if target != consumer_key
+                if target != consumer_key and target not in mixtures
             }
         )
 

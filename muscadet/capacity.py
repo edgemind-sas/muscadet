@@ -592,15 +592,15 @@ class Capacity(cod3s.ObjCOD3S):
         None, exclude=True, repr=False, description="Backend 'full' state"
     )
 
-    mixture: typing.Any = pydantic.Field(
-        None,
+    mixture_draws: typing.List[typing.Any] = pydantic.Field(
+        default_factory=list,
         exclude=True,
         repr=False,
         description=(
-            "The mixture group drawing this volume as ONE fluid (R51), a "
-            "muscadet.mixture.MixtureDraw bound at the pre-run step and written "
-            "by nothing else. None on every volume served per flow, which is "
-            "every volume declared before this notion existed."
+            "The mixture groups drawing this volume as ONE fluid (R51, R52), "
+            "one muscadet.mixture.MixtureDraw each, bound at the pre-run step "
+            "and written by nothing else. Empty on every volume served per "
+            "flow, which is every volume declared before this notion existed."
         ),
     )
 
@@ -1518,7 +1518,27 @@ class Capacity(cod3s.ObjCOD3S):
         included, which is what makes this notion cost nothing to a model written
         before it.
         """
-        return self.mixture is not None
+        return bool(self.mixture_draws)
+
+    @property
+    def mixture(self):
+        """The ONE mixture draw on this volume, or None when nobody draws it.
+
+        Kept for a volume drawn by a single machine, which is what R51 allowed
+        and what an inspection script written against it reads. A volume drawn
+        by several machines has no single answer, so asking for one is refused
+        rather than answered with the first: :attr:`mixture_draws` lists them.
+        """
+        if not self.mixture_draws:
+            return None
+
+        if len(self.mixture_draws) > 1:
+            raise ValueError(
+                f"Capacity {self.name} is drawn by "
+                f"{len(self.mixture_draws)} mixture groups; read mixture_draws."
+            )
+
+        return self.mixture_draws[0]
 
     def occupied_volume(self) -> float:
         """The volume the contents occupy: the sum of quantity times weight.
@@ -1538,7 +1558,26 @@ class Capacity(cod3s.ObjCOD3S):
         )
 
     def mixture_share(self, flow_name) -> float:
-        """What a volumetric draw of ``R`` takes of one constituent (R51).
+        """What every volumetric draw on this volume takes of one constituent.
+
+        The sum over the machines bound to it (R52) of
+        :meth:`mixture_share_of`: each takes its own rate at the composition,
+        and the draws add up. With one machine this is R51's share exactly.
+        """
+        self.flow_entry(flow_name)
+
+        if not self.mixture_draws:
+            raise ValueError(
+                f"Capacity {self.name} is not drawn as a mixture: no volumetric "
+                f"rate to compose. Declare add_mixture_in on the consumer."
+            )
+
+        return sum(
+            self.mixture_share_of(draw, flow_name) for draw in self.mixture_draws
+        )
+
+    def mixture_share_of(self, draw, flow_name) -> float:
+        """What ONE volumetric draw of ``R`` takes of one constituent (R51).
 
         ``R . m_f / sum_g (m_g . w_g)``, so that ``sum_f share_f . w_f`` is
         exactly ``R``: the machine moves a volume, and the composition decides
@@ -1562,18 +1601,12 @@ class Capacity(cod3s.ObjCOD3S):
         # not become a diagnostic that depends on what the volume is drawn by.
         self.flow_entry(flow_name)
 
-        if self.mixture is None:
-            raise ValueError(
-                f"Capacity {self.name} is not drawn as a mixture: no volumetric "
-                f"rate to compose. Declare add_mixture_in on the consumer."
-            )
-
         occupied = self.occupied_volume()
 
         if occupied <= 0.0:
             return 0.0
 
-        share = self.mixture.rate() * self.get_quantity(flow_name) / occupied
+        share = draw.rate() * self.get_quantity(flow_name) / occupied
 
         return max(share, 0.0)
 
