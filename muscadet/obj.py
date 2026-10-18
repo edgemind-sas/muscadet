@@ -1652,6 +1652,8 @@ class ObjFlow(cod3s.PycComponent):
 
         self.check_mixture_flows(group)
 
+        group.add_variables(self)
+
         self.mixtures[name] = group
 
         return group

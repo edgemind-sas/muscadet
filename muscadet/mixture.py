@@ -92,6 +92,7 @@ import math
 import typing
 
 import cod3s
+import Pycatshoo as pyc
 import pydantic
 
 
@@ -133,6 +134,10 @@ class MixtureIn(cod3s.ObjCOD3S):
             "declaration's."
         ),
     )
+
+    #: Backend handle of ``{name}_flow_rate``, created by :meth:`add_variables`.
+    #: Private because it holds a PyCATSHOO object and no spec may carry it.
+    _var_rate: typing.Any = pydantic.PrivateAttr(default=None)
 
     @pydantic.field_validator("flows", mode="before")
     @classmethod
@@ -184,6 +189,41 @@ class MixtureIn(cod3s.ObjCOD3S):
 
         return value
 
+    def rate_var_name(self) -> str:
+        """Basename of the public variable carrying this group's rate (R52)."""
+        return f"{self.name}_flow_rate"
+
+    def add_variables(self, comp):
+        """Publish the rate as ``{group}_flow_rate`` on the consuming component.
+
+        Created at the declared ``flow_rate``, public and writable, and muscadet
+        never writes it: it is the endpoint a failure mode clamps by name to stop
+        or throttle the machine, exactly as ``{capacity}_serve_rate_{flow}`` is for
+        a discharge ceiling (R48). For the same reason it is neither declared
+        explicit to the PDMP nor owned by the solver: its only writer acts from a
+        transition's reset map, never during the differential resolution.
+        """
+        self._var_rate = comp.addVariable(
+            self.rate_var_name(), pyc.TVarType.t_double, float(self.flow_rate)
+        )
+
+    def rate(self) -> float:
+        """The volume this group moves per unit of time, read live.
+
+        Read from the public variable, so a failure mode that clamped it is
+        honoured within the instant; falls back to the declaration before
+        :meth:`add_variables` has run, which is what lets a group be inspected
+        outside a built system.
+
+        Clamped at zero: a mode writing a negative value states a direction, and
+        the direction of a draw is the connection's, never the rate's -- the
+        rule :meth:`check_rate` applies to the declaration.
+        """
+        if self._var_rate is None:
+            return float(self.flow_rate)
+
+        return max(float(self._var_rate.value()), 0.0)
+
     def __repr__(self) -> str:
         return (
             f"{self.__class__.__name__} {self.name} "
@@ -211,14 +251,25 @@ class MixtureDraw(cod3s.ObjCOD3S):
 
     group: str = pydantic.Field(..., description="Name of the group on that consumer")
 
-    flow_rate: float = pydantic.Field(
-        ..., description="The volume the machine moves per unit of time"
+    mixture_group: typing.Any = pydantic.Field(
+        None,
+        exclude=True,
+        repr=False,
+        description=(
+            "The consumer's MixtureIn itself. Held by reference rather than "
+            "copying its rate, so that a failure mode clamping "
+            "{group}_flow_rate reaches the volume within the instant (R52)."
+        ),
     )
+
+    def rate(self) -> float:
+        """The volume the machine moves per unit of time, read live."""
+        return self.mixture_group.rate()
 
     def __repr__(self) -> str:
         return (
             f"{self.__class__.__name__} {self.consumer}.{self.group} "
-            f"@ {self.flow_rate:g}"
+            f"@ {self.rate():g}"
         )
 
     def __str__(self) -> str:
@@ -316,7 +367,7 @@ def resolve_mixture_groups(system):
         capacity.mixture = MixtureDraw(
             consumer=comp.name(),
             group=group.name,
-            flow_rate=group.flow_rate,
+            mixture_group=group,
         )
 
         bound.setdefault(producer, {})[capacity.name] = f"{key}.{group.name}"

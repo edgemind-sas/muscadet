@@ -405,9 +405,12 @@ def evaluate_demand(comp):
     # in the grouped branch of ``get_output_request``. Assigned rather than
     # accumulated because a group owns its inputs outright -- a flow a rule set,
     # a transfer or a near-side capacity also claims is refused at declaration.
+    #
+    # The rate is read LIVE (R52): a failure mode clamping ``{group}_flow_rate``
+    # stops the demand within the instant, as it stops the draw.
     for group in comp.mixtures.values():
         for flow_name in group.flows:
-            demands[flow_name] = float(group.flow_rate)
+            demands[flow_name] = group.rate()
 
     # A continuous input no rule and no transfer covers claims what it was
     # declared with: a pure consumer has no output to map a demand back from.
