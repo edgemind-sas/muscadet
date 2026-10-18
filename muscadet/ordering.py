@@ -1204,6 +1204,79 @@ def serve_cond_operands(capacity):
             yield source, _prod_cond_matrix_entry(compare_matrix, i, j)
 
 
+def is_flow_carrier(carrier):
+    """True when a condition carrier is an OUTPUT flow rather than a capacity.
+
+    Duck-typed on the field a capacity carries, for the reason
+    :func:`is_controller` gives: this module must stay free of an import of the
+    units it orders. Asked that way round because an output without a
+    production condition may lack the condition fields altogether, which is
+    why :func:`prod_cond_operands` reads them through ``getattr``.
+    """
+    return not hasattr(carrier, "serve_cond")
+
+
+def condition_carriers(comp):
+    """``(carrier, operands)`` for every declaration of ``comp`` carrying a condition.
+
+    The ONE enumeration of the operand vocabulary (R22, R44, R49), read by every
+    site of this module that asks what a condition reads. Before it existed the
+    same walk was copy-pasted into six places, one per pair of a site and a
+    mechanism, and the R50 review found a fifth site the fourth mechanism had
+    not been taught: a carrier added here reaches every site at once.
+
+    ``operands`` is the list of ``(source, comparison)`` pairs, empty for an
+    output declaring no production condition. Outputs come first, in
+    declaration order, then capacities: the order every site walked them in,
+    kept because a refusal names the first comparison it meets.
+    """
+    for flow in (getattr(comp, "flows_out", None) or {}).values():
+        yield flow, list(prod_cond_operands(flow))
+
+    for capacity in (getattr(comp, "capacities", None) or {}).values():
+        yield capacity, list(serve_cond_operands(capacity))
+
+
+def condition_operands(comp):
+    """``(carrier, source, comparison)`` for every operand ``comp`` declares.
+
+    :func:`condition_carriers`, flattened: the shape a site asking "who reads
+    this source, and how" iterates.
+    """
+    for carrier, operands in condition_carriers(comp):
+        for source, compare in operands:
+            yield carrier, source, compare
+
+
+def carrier_drives(comp, carrier):
+    """The state basenames a condition carrier decides inside ``comp``.
+
+    An output decides its own state, ``{flow}_fed_out`` when it declares no
+    state variable of its own. A capacity decides what its discharge releases
+    into, which :func:`commanded_discharge_outputs` derives. This is the hop a
+    verdict takes from the condition to what the walk then follows.
+    """
+    if is_flow_carrier(carrier):
+        return {state_var_name(carrier) or f"{carrier.name}_fed_out"}
+
+    return commanded_discharge_outputs(comp, carrier)
+
+
+def carrier_gates_production(comp, carrier):
+    """True when what a carrier decides is a PRODUCTION of ``comp`` (R44, R50).
+
+    A continuous output's condition is a factor on what it produces. A discrete
+    output's condition decides a status, which is not production. A capacity's
+    command decides production only when what it releases leaves the component,
+    into an output or a rule: an inert volume reads its signal and decides
+    nothing, and refusing on it would be the expensive error.
+    """
+    if is_flow_carrier(carrier):
+        return isinstance(carrier, FlowContinuous)
+
+    return bool(commanded_discharge_outputs(comp, carrier))
+
+
 def commanded_discharge_outputs(comp, capacity):
     """The continuous outputs a capacity's discharge command decides (R50).
 
@@ -1360,33 +1433,18 @@ def compared_continuous_inputs(comp):
                 if flows_in.get(operand.name) is flow:
                     compared.setdefault(operand.name, operand.to_expression())
 
-    for flow in (getattr(comp, "flows_out", None) or {}).values():
-        for source, compare in prod_cond_operands(flow):
-            name = getattr(source, "name", None)
+    # Every other declaration carrying the vocabulary -- a production condition
+    # on either family of output, a capacity's discharge condition (R49, R50).
+    # Read in one place: the offence is the comparison, whatever declaration
+    # carries it.
+    for _, source, compare in condition_operands(comp):
+        name = getattr(source, "name", None)
 
-            if compare is None or not isinstance(source, FlowContinuous):
-                continue
+        if compare is None or not isinstance(source, FlowContinuous):
+            continue
 
-            if flows_in.get(name) is source:
-                compared.setdefault(
-                    name, f"{name} {compare['op']} {compare['value']:g}"
-                )
-
-    # A capacity's DISCHARGE condition is a third place the same comparison can
-    # live (R49, R50), and a capacity is not a flow, so the two loops above
-    # walk past it. Read here rather than in a path of its own: the offence is
-    # the comparison, whatever declaration carries it.
-    for capacity in (getattr(comp, "capacities", None) or {}).values():
-        for source, compare in serve_cond_operands(capacity):
-            name = getattr(source, "name", None)
-
-            if compare is None or not isinstance(source, FlowContinuous):
-                continue
-
-            if flows_in.get(name) is source:
-                compared.setdefault(
-                    name, f"{name} {compare['op']} {compare['value']:g}"
-                )
+        if flows_in.get(name) is source:
+            compared.setdefault(name, f"{name} {compare['op']} {compare['value']:g}")
 
     return compared
 
@@ -1531,35 +1589,34 @@ def tainted_output_states(comp, seeds):
             if state in tainted:
                 continue
 
-            reads = {
-                state_var_name(source)
-                for source, _ in prod_cond_operands(flow)
-                if state_var_name(source) is not None
-            }
-
+            # Only the derating clamps are read here: what the output's own
+            # condition reads is the carrier hop below, the same for every
+            # carrier.
             clamped = clamped_production_endpoints(name, flow)
 
-            if not tainted.isdisjoint(clamped) or not tainted.isdisjoint(reads):
+            if not tainted.isdisjoint(clamped):
                 tainted.add(state)
                 changed = True
 
-        # A capacity's discharge condition is the THIRD hop, and it was the
-        # one place the vocabulary lived that this fixpoint did not read.
-        # Seeding and gating on a capacity is not enough: a signal RELAYED
-        # through a discharge -- commanding a volume whose output another
-        # condition then thresholds -- was not propagated inside the component,
-        # so the walk stopped there and a multi-hop loop went unreported.
-        for capacity in (getattr(comp, "capacities", None) or {}).values():
+        # A condition READING a tainted state taints what its carrier decides:
+        # an output its own state, a capacity what its discharge releases into.
+        # The capacity half was the fifth site of R50, found by review: a
+        # signal RELAYED through a discharge -- commanding a volume whose output
+        # another condition then thresholds -- was not propagated inside the
+        # component, so the walk stopped there and a multi-hop loop went
+        # unreported. One enumeration for every carrier keeps that from
+        # recurring with the next mechanism.
+        for carrier, operands in condition_carriers(comp):
             reads = {
                 state_var_name(source)
-                for source, _ in serve_cond_operands(capacity)
+                for source, _ in operands
                 if state_var_name(source) is not None
             }
 
             if tainted.isdisjoint(reads):
                 continue
 
-            for state in commanded_discharge_outputs(comp, capacity):
+            for state in carrier_drives(comp, carrier):
                 if state not in tainted:
                     tainted.add(state)
                     changed = True
@@ -1631,23 +1688,13 @@ def comparison_driven_outputs(comp, flow_name):
     walk follows is the connection carrying it, not its type.
     """
     flow_in = (getattr(comp, "flows_in", None) or {}).get(flow_name)
-    seeds = set()
+    seeds = rule_guard_comparison_seeds(comp, flow_in)
 
-    for name, flow in (getattr(comp, "flows_out", None) or {}).items():
+    for carrier, operands in condition_carriers(comp):
         if any(
-            compare is not None and source is flow_in
-            for source, compare in prod_cond_operands(flow)
+            compare is not None and source is flow_in for source, compare in operands
         ):
-            seeds.add(state_var_name(flow) or f"{name}_fed_out")
-
-    seeds |= rule_guard_comparison_seeds(comp, flow_in)
-
-    for capacity in (getattr(comp, "capacities", None) or {}).values():
-        if any(
-            compare is not None and source is flow_in
-            for source, compare in serve_cond_operands(capacity)
-        ):
-            seeds |= commanded_discharge_outputs(comp, capacity)
+            seeds |= carrier_drives(comp, carrier)
 
     return signal_driven_outputs(comp, seeds) if seeds else []
 
@@ -1704,23 +1751,15 @@ def gates_production_on(comp, flow_name):
             if any(operand.flow is flow_in for operand in rule.cond):
                 return True
 
-    for flow in (getattr(comp, "flows_out", None) or {}).values():
-        if not isinstance(flow, FlowContinuous):
+    # Naming the signal is not enough: what the carrier decides has to be a
+    # PRODUCTION. A discrete output decides a status, and a hand-declared volume
+    # releasing into neither an output nor a rule commands nothing, whatever its
+    # condition says: refusing on either would be the expensive error.
+    for carrier, operands in condition_carriers(comp):
+        if not any(source is flow_in for source, _ in operands):
             continue
 
-        if any(source is flow_in for source, _ in prod_cond_operands(flow)):
-            return True
-
-    for capacity in (getattr(comp, "capacities", None) or {}).values():
-        if not any(source is flow_in for source, _ in serve_cond_operands(capacity)):
-            continue
-
-        # Naming the signal is not enough: what the volume releases has to
-        # LEAVE, or the command reaches no production and refusing would be the
-        # expensive error. The two ends of this route therefore ask one
-        # question -- a hand-declared volume releasing into neither an output
-        # nor a rule commands nothing, whatever its condition says.
-        if commanded_discharge_outputs(comp, capacity):
+        if carrier_gates_production(comp, carrier):
             return True
 
     state = state_var_name(flow_in)
@@ -2055,23 +2094,14 @@ def measurement_thresholds(comp, channel_name):
     if channel is None:
         return []
 
-    found = []
-
-    for flow in (getattr(comp, "flows_out", None) or {}).values():
-        for source, compare in prod_cond_operands(flow):
-            if compare is not None and source is channel:
-                found.append(f"{channel_name} {compare['op']} {compare['value']:g}")
-
     # A capacity's DISCHARGE condition thresholds a reading in the same
-    # vocabulary (R49, R50), and a capacity is not a flow, so the loop above
-    # walks past it. Read here for the same reason the seeds read it: the
-    # offence is the comparison, whatever declaration carries it.
-    for capacity in (getattr(comp, "capacities", None) or {}).values():
-        for source, compare in serve_cond_operands(capacity):
-            if compare is not None and source is channel:
-                found.append(f"{channel_name} {compare['op']} {compare['value']:g}")
-
-    return found
+    # vocabulary (R49, R50): the offence is the comparison, whatever
+    # declaration carries it.
+    return [
+        f"{channel_name} {compare['op']} {compare['value']:g}"
+        for _, source, compare in condition_operands(comp)
+        if compare is not None and source is channel
+    ]
 
 
 def ctrl_node_thresholds(node, input_name):
@@ -2181,19 +2211,11 @@ def measurement_threshold_seeds(comp, channel_name):
     channel = measurement_channels(comp).get(channel_name)
     seeds = set()
 
-    for name, flow in (getattr(comp, "flows_out", None) or {}).items():
+    for carrier, operands in condition_carriers(comp):
         if any(
-            compare is not None and source is channel
-            for source, compare in prod_cond_operands(flow)
+            compare is not None and source is channel for source, compare in operands
         ):
-            seeds.add(state_var_name(flow) or f"{name}_fed_out")
-
-    for capacity in (getattr(comp, "capacities", None) or {}).values():
-        if any(
-            compare is not None and source is channel
-            for source, compare in serve_cond_operands(capacity)
-        ):
-            seeds |= commanded_discharge_outputs(comp, capacity)
+            seeds |= carrier_drives(comp, carrier)
 
     return seeds
 
