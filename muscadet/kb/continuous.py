@@ -496,6 +496,12 @@ class CapacityContinuous(ContinuousComponent):
         rate, since a delivery is already the lesser of production and demand.
     content_init : dict, optional
         Initial raw quantity per held flow.
+    makeup_flow : str, optional
+        Declares the volume OPEN to the atmosphere and names the held
+        constituent the outside supplies (R53): it stays full, the make-up
+        entering at the rate it runs short and the excess venting at the
+        composition, so no arrival is refused. What the declared content leaves
+        of the volume is the make-up at t=0. Excludes a ``fill_rate``.
     capacity_name : str, optional
         Name of the declared capacity, and therefore of the measurement channel
         a sensor observes it through. Defaults to ``"capacity"``.
@@ -516,6 +522,7 @@ class CapacityContinuous(ContinuousComponent):
         "control",
         "control_logic",
         "content_init",
+        "makeup_flow",
         "capacity_name",
     ) + ALLOCATION_KEYS
 
@@ -589,6 +596,7 @@ class CapacityContinuous(ContinuousComponent):
             fill_rate=float(kwargs.get("fill_rate", 0.0)),
             serve_rate=serve_rate,
             serve_cond=list(serve_cond) if serve_cond else [],
+            makeup_flow=kwargs.get("makeup_flow"),
         )
 
 
@@ -661,10 +669,33 @@ class MixturePumpContinuous(ContinuousComponent):
         writing ``ports="both"`` is told why rather than told the key is
         unknown.
     name_group : str, optional
-        Name of the declared group. Defaults to ``"mixture"``.
+        Name of the declared group. Defaults to ``"mixture"``. The machine's
+        rate is published as ``{name_group}_flow_rate``, the variable a failure
+        mode clamps by name to stop or throttle it (R52).
+    control : str, optional
+        Name of a discrete input to declare. It commands nothing by itself: it
+        is the PORT a ``run_cond`` operand then names, the split
+        :class:`CapacityContinuous` makes between ``control`` and
+        ``serve_cond``, for the same reasons.
+    control_logic : str or int, optional
+        Input logic of that port, as ``add_flow_in`` takes it.
+    run_cond : list, optional
+        Condition commanding the machine on and off (R52), in the operand
+        vocabulary a discharge command uses. Empty, the default, runs the
+        machine whenever its rate allows. Command it on a boolean signal or on
+        a LEVEL, never on a rate it draws: that loop is refused.
     """
 
-    DECLARATION_KEYS = ("flows", "flow", "flow_rate", "ports", "name_group")
+    DECLARATION_KEYS = (
+        "flows",
+        "flow",
+        "flow_rate",
+        "ports",
+        "name_group",
+        "control",
+        "control_logic",
+        "run_cond",
+    )
 
     #: The one shape this release carries. See the class docstring for what
     #: carrying the mixture onward would take.
@@ -697,10 +728,19 @@ class MixturePumpContinuous(ContinuousComponent):
         for entry in entries:
             self.add_flow_continuous_in(name=entry["name"])
 
+        # Declared BEFORE the group, since a ``run_cond`` operand naming it is
+        # resolved as the group is declared.
+        control = kwargs.get("control")
+        if control is not None:
+            self.add_flow_in(name=control, logic=kwargs.get("control_logic", "and"))
+
+        run_cond = kwargs.get("run_cond")
+
         self.add_mixture_in(
             name=kwargs.get("name_group", "mixture"),
             flows=[entry["name"] for entry in entries],
             flow_rate=float(kwargs.get("flow_rate", 0.0)),
+            run_cond=list(run_cond) if run_cond else [],
         )
 
 

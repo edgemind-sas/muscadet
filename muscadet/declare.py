@@ -2788,7 +2788,15 @@ def build_controller_component(system, spec):
 #: without ``{mode}_derating_{flow}`` and the outside mode that clamps it is
 #: refused or loses its effect, so a reader that does not know the key should
 #: refuse it rather than drop it, as muscadet before 5.13.0 does.
-SYSTEM_SPEC_VERSION = "1.0.3"
+#:
+#: 1.0.4 adds ``makeup_flow`` on a capacity (R53) and ``run_cond`` on a mixture
+#: group (R52), both optional and both absent from a document that does not use
+#: them, so a 1.0.3 document rebuilds here unchanged. Like ``deratings`` they
+#: carry no default a reader may fall back on: a reader ignoring ``makeup_flow``
+#: builds a closed volume that refuses what an open one vents, and one ignoring
+#: ``run_cond`` runs a machine the document stops. A reader that does not know
+#: either key refuses it rather than drop it.
+SYSTEM_SPEC_VERSION = "1.0.4"
 
 
 #: The model-level key by which a declaration says whether it wants the

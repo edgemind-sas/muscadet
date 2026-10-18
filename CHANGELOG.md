@@ -4,6 +4,49 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 5.17.0 (2026-10-18)
+
+A mixture machine can now be commanded, failed and shared, and a volume can be
+open to the atmosphere, so a ventilated room follows a well-mixed room with no
+rate tuned by hand.
+
+- A mixture group's rate is published as `{group}_flow_rate` on the consuming
+  component, at the declared value. A failure mode clamps it by name and its
+  repair restores the value it declares; the volume and the machine's demand
+  read it live (R52).
+- `run_cond` commands a mixture group on and off, in the operand vocabulary of
+  `serve_cond`, with its thresholds watched under `{group}_run_cond_*`. An
+  empty command holds. `MixturePumpContinuous` accepts `control`,
+  `control_logic` and `run_cond`. A command reading the rate its own group
+  draws, directly or through an observation of that delivery, is refused at
+  the pre-run step (R52).
+- Several mixture groups may draw one volume. Each takes its own rate at the
+  composition, the draws add up, and a volume that cannot serve their sum
+  serves each pro rata of its composed share. `Capacity.mixture_draws` lists
+  them; `Capacity.mixture` still answers for a volume drawn by one group (R52).
+- `makeup_flow` opens a capacity to the atmosphere: it stays full, the make-up
+  entering at the rate it runs short and the excess venting at the
+  composition, published on `{c}_makeup` and `{c}_vent_{f}`. It has no
+  empty/full automaton, never refuses an arrival, and completes its initial
+  content with the make-up. `CapacityContinuous` accepts it (R53).
+- The loop detection walks every condition through one enumeration,
+  `ordering.condition_carriers`, as R50 asked before a sixth mechanism landed.
+  No verdict moves.
+- Declaration format 1.0.4: `makeup_flow` on a capacity, `run_cond` on a
+  mixture group, both absent when unused.
+
+Behaviour changes a model may notice:
+
+- A second mixture group on a volume is no longer refused. Two groups over
+  disjoint flows of one volume are still refused, now because each leaves out
+  a constituent of the volume.
+- A mixture group that leaves out a constituent of its volume is refused at
+  the pre-run step. It used to compose the left-out constituent into the draw
+  and send it down an output no machine was wired to.
+- A volume drawn by several groups refuses a `shares` or `priority`
+  allocation, or an `allocation_fun`. A volume drawn by one group keeps
+  whatever it declared.
+
 ## 5.16.2 (2026-10-14)
 
 - A continuous output given a bare name or a mapping as `var_prod_cond` is

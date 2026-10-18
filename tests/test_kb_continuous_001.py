@@ -30,6 +30,7 @@ from muscadet.kb.continuous import (  # noqa: F401
     ALLOCATION_KEYS,
     CapacityContinuous,
     ConsumerContinuous,
+    MixturePumpContinuous,
     SensorContinuous,
     SourceContinuous,
     SourceSinusoidalContinuous,
@@ -92,6 +93,7 @@ UNKNOWN_KEY_DECLARATIONS = {
     "CapacityContinuous": dict(flow="q", capacity=10.0, content_intit={"q": 1.0}),
     "ConsumerContinuous": dict(flow="q", demmand=3.0),
     "SensorContinuous": dict(measurement="tank", activate=1.0, realease=2.0),
+    "MixturePumpContinuous": dict(flows=["AIR"], flow_rat=5.0),
 }
 
 #: R-3, the other way round: every key a component DOES declare, with a value
@@ -159,6 +161,9 @@ FULL_DECLARATIONS = {
         # implied by the key: the two are written together on purpose.
         serve_cond=["cmd"],
         content_init={"q": 1.0},
+        # R53: open to the atmosphere, the held flow as its own make-up. Legal
+        # beside the commanded discharge, and only at the default fill_rate.
+        makeup_flow="q",
         capacity_name="vessel",
         allocation="proportional",
         allocation_shares={},
@@ -166,6 +171,18 @@ FULL_DECLARATIONS = {
         allocation_fun=None,
     ),
     "ConsumerContinuous": dict(flow="q", flows=["q"], demand=3.0),
+    "MixturePumpContinuous": dict(
+        flow="AIR",
+        flows=["AIR", "H2"],
+        flow_rate=5.0,
+        ports="in",
+        name_group="extraction",
+        # R52: the port and the command naming it, written together as a
+        # capacity writes control and serve_cond.
+        control="vent",
+        control_logic="and",
+        run_cond=["vent"],
+    ),
     "SensorContinuous": dict(
         measurement="vessel",
         control="c",
@@ -1055,6 +1072,7 @@ def test_every_declared_key_still_builds(the_run):
     [
         CapacityContinuous,
         ConsumerContinuous,
+        MixturePumpContinuous,
         SensorContinuous,
         SourceContinuous,
         SourceSinusoidalContinuous,

@@ -1988,16 +1988,104 @@ What is refused, and why:
 | a group flow that is also a continuous **output** of the machine | it would destroy matter as soon as the outlet asked for less than the machine draws — measured, a pump at rate 50 behind a load asking 5 drew 49.16 of air, delivered 5, and 44.16 per unit of time entered no balance |
 | flows arriving from **several producers** | a mixture is composed inside one volume |
 | a producer with **no capacity** behind that output, or **several volumes** | there is no composition to split at |
-| a volume serving the group **and somebody else** | arbitrating a composed share against a per-flow request is not defined |
+| a volume serving the group **and a per-flow consumer** | arbitrating a composed share against a per-flow request is not defined |
+| a group leaving out a **constituent of its volume** | what it left out would leave the volume towards nobody |
+| a volume drawn by **several groups** allocating other than proportionally | the machines are served pro rata of their composed shares, which is the proportional allocation |
 | `flow_rate` negative or infinite | a direction is the connection's; `inf . share` is `NaN` on a constituent standing at zero |
 
-The last five are properties of the **connections**, so they are settled at the pre-run
-step and reported there, naming the group, the component and the flows.
+The connection-dependent refusals are settled at the pre-run step and reported there,
+naming the group, the component and the flows.
 
 An **empty** volume serves nothing and fills first: with no composition there is nothing
 to compose, and passing the inflow straight through is the short-circuit this whole
 notion removes. A discharge ceiling (`serve_rate`) still caps what leaves, per flow, and
 a discharge command (`serve_cond`) still gates it.
+
+### Commanding, failing and sharing a mixture machine
+
+Since 5.17.0 a mixture machine behaves like the other actuators of MUSCADET (R52).
+
+**Its rate is a published variable.** `add_mixture_in` creates `{group}_flow_rate` on
+the consuming component, at the declared `flow_rate`. MUSCADET never writes it: a failure
+mode clamps it by name, exactly as it clamps `{capacity}_serve_rate_{flow}`, and the
+repair restores the value the mode declares on its way back. The volume reads it live, so
+a fan that breaks down stops drawing within the instant.
+
+```python
+fan.add_atm2states(
+    name="breakdown",
+    occ_law_12={"cls": "delay", "time": 20.0},
+    effects_12=[("extraction_flow_rate", 0.0)],
+    occ_law_21={"cls": "delay", "time": 60.0},
+    effects_21=[("extraction_flow_rate", 100.0)],
+)
+```
+
+**It runs on an order.** `run_cond` takes the operand vocabulary of a discharge command
+(`serve_cond`): boolean operands, negations, comparisons, the same conjunctive-normal
+shape, resolved by the same code and watched by the same threshold automata. An empty
+command holds. On `MixturePumpContinuous`, `control` declares the port and `run_cond`
+names it, the split `CapacityContinuous` makes between `control` and `serve_cond`:
+
+```python
+system.add_component(
+    name="FAN",
+    cls="MixturePumpContinuous",
+    flows=["AIR", "H2"],
+    flow_rate=100.0,
+    name_group="extraction",
+    control="vent",
+    run_cond=["vent"],
+)
+```
+
+Command it on a boolean signal or on a LEVEL. A command reading the rate its own group
+draws, directly or through an observation of that delivery, closes a loop the solver
+cannot settle and is refused at the pre-run step, naming the group.
+
+**Several machines may draw one volume.** A fan and a natural draft on one room are two
+groups: each takes its own rate at the composition and the draws add up. When the volume
+cannot serve their sum, each is served pro rata of its composed share, so machines of 100
+and 1 behind a ceiling of 50.5 get 50 and 0.5. A group still names every constituent of
+its volume, and two groups of one component cannot draw the same volume, since they would
+share flows.
+
+### A volume open to the atmosphere
+
+A real room is open to the outside through its grilles (R53). `makeup_flow` declares a
+capacity open and names the held constituent the outside supplies:
+
+```python
+self.add_capacity(
+    name="room",
+    flows=["AIR", "H2"],
+    side="out",
+    capacity=100.0,
+    content_init={"H2": 0.0},     # the rest of the volume is air
+    makeup_flow="AIR",
+)
+```
+
+The volume stays full by construction. With `D = sum_f w_f (in_f - out_f)` the volume the
+transit adds per unit of time, the make-up enters at `max(-D, 0) / w` and every
+constituent vents at `max(D, 0) . m_f / sum_g (m_g . w_g)`, so the occupied volume never
+moves. Both are published, on `{c}_makeup` and `{c}_vent_{f}`, for an indicator to count
+the outside air a room needed or what it released.
+
+What follows from it, each point a consequence rather than an option:
+
+- no arrival is refused for want of room: the demand an open volume carries upstream is
+  unbounded, and the excess vents at the composition;
+- it has no empty/full automaton, since it sits on its own bound at every step;
+- what the declared content leaves of the volume at t=0 is the make-up constituent,
+  written into `content_init`;
+- a `fill_rate` is refused, as is a make-up the volume does not hold.
+
+Measured on a room of 100 m^3 with a fan of 100 m^3/h and a draft of 1 m^3/h, the share
+settles at what arrives over what leaves: a seep of 0.05 m^3/h at 0.05 %, a breach of
+2 m^3/h at 2 %. With the fan lost the seep drives the share toward 5 % with a time
+constant of 100 h, crossing 2 % about 50 h after the failure. A breach beyond the
+extraction vents and is never refused.
 
 ### Assemble the whole system before the first run
 
