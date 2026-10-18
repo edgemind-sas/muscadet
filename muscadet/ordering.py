@@ -1294,11 +1294,28 @@ def serve_cond_operands(capacity):
     capacity is not a flow and spells them differently, and identical in shape
     because the vocabulary is one.
     """
-    compare_matrix = getattr(capacity, "serve_cond_compare", None) or []
+    return _cond_operands(capacity, "serve_cond")
 
-    for i, group in enumerate(getattr(capacity, "serve_cond", None) or []):
+
+def _cond_operands(carrier, field):
+    """``(source, comparison)`` over the condition stored under ``field``.
+
+    A capacity and a mixture group store their command in the same three
+    fields under two prefixes, ``serve_cond`` and ``run_cond``.
+    """
+    compare_matrix = getattr(carrier, f"{field}_compare", None) or []
+
+    for i, group in enumerate(getattr(carrier, field, None) or []):
         for j, source in enumerate(group):
             yield source, _prod_cond_matrix_entry(compare_matrix, i, j)
+
+
+def render_operand(name, compare):
+    """An operand as a refusal names it: ``name op value``, or the bare name."""
+    if compare is None:
+        return name
+
+    return f"{name} {compare['op']} {compare['value']:g}"
 
 
 def run_cond_operands(group):
@@ -1307,11 +1324,7 @@ def run_cond_operands(group):
     The mixture-group counterpart of :func:`serve_cond_operands`, over the
     three fields its command is stored in.
     """
-    compare_matrix = getattr(group, "run_cond_compare", None) or []
-
-    for i, row in enumerate(getattr(group, "run_cond", None) or []):
-        for j, source in enumerate(row):
-            yield source, _prod_cond_matrix_entry(compare_matrix, i, j)
+    return _cond_operands(group, "run_cond")
 
 
 def is_capacity_carrier(carrier):
@@ -1347,8 +1360,9 @@ def condition_carriers(comp):
 
     ``operands`` is the list of ``(source, comparison)`` pairs, empty for an
     output declaring no production condition. Outputs come first, in
-    declaration order, then capacities: the order every site walked them in,
-    kept because a refusal names the first comparison it meets.
+    declaration order, then capacities, then mixture groups (R52): the order
+    every site walked them in, kept because a refusal names the first
+    comparison it meets.
     """
     for flow in (getattr(comp, "flows_out", None) or {}).values():
         yield flow, list(prod_cond_operands(flow))
@@ -1604,10 +1618,8 @@ def compared_continuous_inputs(comp):
                 if flows_in.get(operand.name) is flow:
                     compared.setdefault(operand.name, operand.to_expression())
 
-    # Every other declaration carrying the vocabulary -- a production condition
-    # on either family of output, a capacity's discharge condition (R49, R50).
-    # Read in one place: the offence is the comparison, whatever declaration
-    # carries it.
+    # Every declaration carrying the vocabulary, through `condition_operands`:
+    # the offence is the comparison, whatever declaration carries it.
     for _, source, compare in condition_operands(comp):
         name = getattr(source, "name", None)
 
@@ -1922,10 +1934,7 @@ def gates_production_on(comp, flow_name):
             if any(operand.flow is flow_in for operand in rule.cond):
                 return True
 
-    # Naming the signal is not enough: what the carrier decides has to be a
-    # PRODUCTION. A discrete output decides a status, and a hand-declared volume
-    # releasing into neither an output nor a rule commands nothing, whatever its
-    # condition says: refusing on either would be the expensive error.
+    # Naming the signal is not enough: see `carrier_gates_production`.
     for carrier, operands in condition_carriers(comp):
         if not any(source is flow_in for source, _ in operands):
             continue
@@ -2289,9 +2298,6 @@ def measurement_thresholds(comp, channel_name):
     if channel is None:
         return []
 
-    # A capacity's DISCHARGE condition thresholds a reading in the same
-    # vocabulary (R49, R50): the offence is the comparison, whatever
-    # declaration carries it.
     return [
         f"{channel_name} {compare['op']} {compare['value']:g}"
         for _, source, compare in condition_operands(comp)
@@ -2716,14 +2722,10 @@ def find_self_commanded_discharges(system):
                 if state not in driven:
                     continue
 
-                operand = (
-                    f"{name} {compare['op']} {compare['value']:g}"
-                    if compare is not None
-                    else name
-                )
-
                 loops.append(
-                    CommandedRateSelfLoopError(key, capacity.name, name, operand)
+                    CommandedRateSelfLoopError(
+                        key, capacity.name, name, render_operand(name, compare)
+                    )
                 )
 
     return loops
@@ -2756,15 +2758,13 @@ def find_self_commanded_mixtures(system):
                 if not any(source is flow for flow in drawn):
                     continue
 
-                name = source.name
-                operand = (
-                    f"{name} {compare['op']} {compare['value']:g}"
-                    if compare is not None
-                    else name
-                )
-
                 loops.append(
-                    MixtureCommandSelfLoopError(key, group.name, name, operand)
+                    MixtureCommandSelfLoopError(
+                        key,
+                        group.name,
+                        source.name,
+                        render_operand(source.name, compare),
+                    )
                 )
 
     return loops

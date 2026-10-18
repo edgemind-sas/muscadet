@@ -409,8 +409,9 @@ def evaluate_demand(comp):
     # The rate is read LIVE (R52): a failure mode clamping ``{group}_flow_rate``
     # stops the demand within the instant, as it stops the draw.
     for group in comp.mixtures.values():
+        rate = group.rate()
         for flow_name in group.flows:
-            demands[flow_name] = group.rate()
+            demands[flow_name] = rate
 
     # A continuous input no rule and no transfer covers claims what it was
     # declared with: a pure consumer has no output to map a demand back from.
@@ -2198,12 +2199,8 @@ def allocate_output(comp, flow, available):
     Capping at the published figure would then quietly serve less than the
     volume released, and the difference would leave the balance.
 
-    **Several groups are served pro rata of their composed shares** (R52).
-    Each share is what that machine takes at the composition, so whenever the
-    volume delivers less than their sum the proportional split serves each in
-    proportion to it. The shares are scaled together to sum to the delivery
-    before they are handed over: never a cap on what the volume released, and
-    never above the delivery, where the allocation would truncate them first.
+    **Several groups are served pro rata of their composed shares** (R52), as
+    the comments below the docstring detail.
 
     Returns
     -------
@@ -2218,8 +2215,9 @@ def allocate_output(comp, flow, available):
     # the pro-rata a volume that cannot serve everybody owes them; the pre-run
     # step refuses any other policy on a volume drawn by several groups.
     if capacity is not None and capacity.serves_a_mixture:
+        occupied = capacity.occupied_volume()
         shares = {
-            draw.consumer: capacity.mixture_share_of(draw, flow.name)
+            draw.consumer: capacity.mixture_share_of(draw, flow.name, occupied)
             for draw in capacity.mixture_draws
         }
         total = sum(shares.values())

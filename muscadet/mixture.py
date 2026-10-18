@@ -336,7 +336,7 @@ class MixtureIn(cod3s.ObjCOD3S):
 class MixtureDraw(cod3s.ObjCOD3S):
     """What a capacity is told at the pre-run step: who draws it, and how fast.
 
-    Held on :attr:`muscadet.capacity.Capacity.mixture`, written by
+    Held on :attr:`muscadet.capacity.Capacity.mixture_draws`, written by
     :func:`resolve_mixture_groups` and by nothing else.
     """
 
@@ -454,7 +454,9 @@ def resolve_mixture_groups(system):
                 group_consumers.setdefault((source, flow_name), set()).add(key)
 
     resolved = []
-    drawn = []
+    # Keyed on names, not on the capacity objects: a pydantic model compares
+    # by its fields, which is neither identity nor cheap.
+    drawn = {}
 
     for key, comp, group in declared:
         where = f"mixture group {group.name} of {key}"
@@ -478,11 +480,10 @@ def resolve_mixture_groups(system):
 
         group._producer = producer
 
-        if (producer, capacity) not in drawn:
-            drawn.append((producer, capacity))
+        drawn.setdefault((producer, capacity.name), capacity)
         resolved.append((key, group.name, producer, capacity.name))
 
-    for producer, capacity in drawn:
+    for (producer, _), capacity in drawn.items():
         _check_proportional(producer, components[producer], capacity)
 
     return resolved

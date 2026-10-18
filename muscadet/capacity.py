@@ -642,6 +642,11 @@ class Capacity(cod3s.ObjCOD3S):
     #: is derived from ``flows`` and must never reach a dump.
     _flow_names: typing.Optional[typing.List[str]] = pydantic.PrivateAttr(default=None)
 
+    #: Memoised :attr:`weights`, for the same reason.
+    _weights: typing.Optional[typing.Dict[str, float]] = pydantic.PrivateAttr(
+        default=None
+    )
+
     # ------------------------------------------------------------------
     # Declaration-time validation
     # ------------------------------------------------------------------
@@ -786,14 +791,10 @@ class Capacity(cod3s.ObjCOD3S):
                 "Declare none."
             )
 
-        weights = {entry.name: entry.weight for entry in self.flows}
-        occupied = sum(
-            quantity * weights[name] for name, quantity in self.content_init.items()
-        )
-        room = self.capacity - occupied
+        room = self.capacity - self.content_init_volume()
 
         if room > 0.0:
-            self.content_init[self.makeup_flow] += room / weights[self.makeup_flow]
+            self.content_init[self.makeup_flow] += room / self.weights[self.makeup_flow]
 
     def check_content_init(self):
         """Refuse a starting content the capacity could never reach (R-5).
@@ -857,6 +858,24 @@ class Capacity(cod3s.ObjCOD3S):
         if self._flow_names is None:
             self._flow_names = [entry.name for entry in self.flows]
         return self._flow_names
+
+    @property
+    def weights(self) -> typing.Dict[str, float]:
+        """``{held flow: the volume one unit of it occupies}``, memoised.
+
+        Settled at declaration like :attr:`flow_names`, and read by the
+        breathing terms of an open volume at every integration step (R53).
+        """
+        if self._weights is None:
+            self._weights = {entry.name: entry.weight for entry in self.flows}
+        return self._weights
+
+    def content_init_volume(self) -> float:
+        """The volume the declared initial content occupies, weights applied."""
+        weights = self.weights
+        return sum(
+            quantity * weights[name] for name, quantity in self.content_init.items()
+        )
 
     def flow_entry(self, flow_name) -> CapacityFlow:
         """The declaration entry of one held flow."""
@@ -1181,7 +1200,7 @@ class Capacity(cod3s.ObjCOD3S):
         if not self.is_open:
             return {}
 
-        weights = {entry.name: entry.weight for entry in self.flows}
+        weights = self.weights
         surplus = sum(
             weights[name]
             * (self.var_inflow[name].value() - self.var_outflow[name].value())
@@ -1744,11 +1763,14 @@ class Capacity(cod3s.ObjCOD3S):
                 f"rate to compose. Declare add_mixture_in on the consumer."
             )
 
+        occupied = self.occupied_volume()
+
         return sum(
-            self.mixture_share_of(draw, flow_name) for draw in self.mixture_draws
+            self.mixture_share_of(draw, flow_name, occupied)
+            for draw in self.mixture_draws
         )
 
-    def mixture_share_of(self, draw, flow_name) -> float:
+    def mixture_share_of(self, draw, flow_name, occupied=None) -> float:
         """What ONE volumetric draw of ``R`` takes of one constituent (R51).
 
         ``R . m_f / sum_g (m_g . w_g)``, so that ``sum_f share_f . w_f`` is
@@ -1768,12 +1790,16 @@ class Capacity(cod3s.ObjCOD3S):
         Clamped at zero: a level standing a ``dtCond``-sized residue below zero
         between a bound crossing and its reset map would otherwise turn into a
         negative rate, and the sign of a draw is not a direction here.
+
+        ``occupied`` lets a caller composing several draws in one evaluation
+        read the occupied volume once; it is recomputed when omitted.
         """
         # Before the group, as serve_ceiling does: a typo in a held flow name must
         # not become a diagnostic that depends on what the volume is drawn by.
         self.flow_entry(flow_name)
 
-        occupied = self.occupied_volume()
+        if occupied is None:
+            occupied = self.occupied_volume()
 
         if occupied <= 0.0:
             return 0.0
