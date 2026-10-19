@@ -29,6 +29,7 @@ import pytest
 
 import muscadet
 from muscadet.kb.continuous import SourceContinuous  # noqa: F401
+from muscadet.mixture import MixtureGroupError
 
 VOLUME = 100.0
 FAN = 100.0
@@ -285,13 +286,14 @@ class OpTank(muscadet.ObjFlow):
         )
 
 
-def test_an_open_room_does_not_empty_a_tank_feeding_it():
+def test_an_open_room_fed_by_a_tank_must_say_what_it_takes():
     """Review finding: an open volume used to ask upstream for ``math.inf``
     whatever it declared, which drained a stocked tank at its whole content
-    per unit of time (100 to 36.8 in one time unit). At the default
-    ``fill_rate=0`` it asks for what it releases of each constituent, its
-    composed share (5.18.0): the room holds no hydrogen, so it asks none and
-    the tank keeps its content, as the other engine computes."""
+    per unit of time (100 to 36.8 in one time unit). Its claim now follows
+    ``fill_rate`` as for any volume. At the default ``fill_rate=0`` a fed
+    volume drawn as a mixture would ask only its composed share, none of a
+    hydrogen it does not hold, so it is refused (5.18.0): the model says what
+    the room takes from the tank."""
     system = muscadet.System(name="OpenTank")
     try:
         system.add_component(name="TANK", cls="OpTank")
@@ -300,14 +302,10 @@ def test_an_open_room_does_not_empty_a_tank_feeding_it():
         system.connect_flow(source="TANK", target="ROOM", flow_name="H2")
         for flow in ("AIR", "H2"):
             system.connect_flow(source="ROOM", target="DRAFT", flow_name=flow)
-        system.isimu_start()
-        system.isimu_step_to(10.0, max_events=100000)
-        held = system.comp["TANK"].capacities["tank"].get_quantity("H2")
-        system.isimu_stop()
+        with pytest.raises(MixtureGroupError, match="fed on H2"):
+            system.isimu_start()
     finally:
         system.deleteSys()
-
-    assert held == pytest.approx(100.0, rel=1e-9)
 
 
 class OpWeightedRoom(muscadet.ObjFlow):

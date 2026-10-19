@@ -838,10 +838,12 @@ def get_output_demand(comp, flow_name):
     # on: its machines publish their whole volumetric rate on every member
     # flow, which says nothing about a constituent's share. Up to 5.17.0 that
     # published rate was carried upstream as it stood, so a room drawn at 10
-    # asked 10 of air AND 10 of hydrogen, twice the volume it releases, and a
-    # pure pass-through room filled; the other engine reading the same
-    # declaration asked the composed share. The share reads integrated levels
-    # only, so the demand band reads no production.
+    # asked 10 of air AND 10 of hydrogen on top of its own claim; the other
+    # engine reading the same declaration asked the composed share. A FED
+    # volume at fill_rate=0 is refused at the pre-run step, since the share
+    # alone would never admit a constituent the volume does not hold. The
+    # share reads integrated levels only, so the demand band reads no
+    # production.
     if capacity is not None and capacity.serves_a_mixture:
         demand = capacity.mixture_share(flow_name)
 

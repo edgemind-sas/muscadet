@@ -7,16 +7,21 @@ reconstructing them.
 ## 5.18.0 (2026-10-19)
 
 - A volume drawn as a mixture asks its supplies for the composed share it
-  releases of each constituent, `R . m_f / sum_g m_g w_g`, instead of the
-  machine's whole rate on every one (R51). A room claiming nothing for itself
-  (`fill_rate=0`) drawn at 10 with 10 % of hydrogen now asks 9 of air and 1 of
-  hydrogen; it asked 10 of each and filled, which the second engine reading
-  the same declaration did not do. A room declared with `fill_rate=inf`, which
-  takes whatever its producers deliver, is unchanged.
+  releases of each constituent, `R . m_f / sum_g m_g w_g`, plus its own
+  `fill_rate`, instead of the machine's whole rate on every one (R51). A room
+  claiming 1 drawn at 10 with 10 % of hydrogen now asks 10 of air and 2 of
+  hydrogen; it asked 11 of each, which the second engine reading the same
+  declaration did not do. A room declared with `fill_rate=inf`, which takes
+  whatever its producers deliver, is unchanged.
+- A FED volume drawn as a mixture at `fill_rate=0`, the default, is refused at
+  the pre-run step. Asking only its composed share, it would never admit a
+  constituent it does not hold (a leak into a room of air) and an empty one
+  would never start. Declare what it takes: `fill_rate=math.inf` takes
+  whatever the producers deliver. A volume nothing feeds keeps the default.
 
-Behaviour change a model may notice: the supplies of a mixture-drawn volume
-at a finite `fill_rate` deliver less, and the volume no longer fills by what
-the machine over-asked.
+Behaviour change a model may notice: a fed mixture-drawn volume left at the
+default `fill_rate` no longer runs; one at a finite `fill_rate` receives less
+from its supplies, no longer filling by what the machine over-asked.
 
 ## 5.17.0 (2026-10-18)
 
