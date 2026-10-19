@@ -1976,8 +1976,15 @@ by `q`, since `dM/dt = Q + q - R`.
 
 **`fill_rate` matters here.** A room takes what is blown into it, so its capacity is
 declared with `fill_rate=math.inf`, which R36 spells "whatever the producer delivers".
-At the default `fill_rate=0` the room would ask its sources only for what it releases,
-and the inflow would follow the extraction instead of the other way round.
+A room asks each supply for what it releases of that constituent, its composed share,
+plus its own claim: drawn at 10 with 10 % of hydrogen and `fill_rate=1`, it asks 10 of
+air and 2 of hydrogen (since 5.18.0; earlier versions asked the machine's whole rate of
+every constituent on top of the claim). A **fed** room at the default `fill_rate=0` is
+refused since 5.18.0: asking only what it releases at its own composition, it would
+never admit a constituent it does not hold, a leak into a room of air, and an empty room
+would never start. The composition would decide what is allowed to arrive, when it is
+what arrives that decides the composition. A room nothing feeds keeps the default and
+simply empties.
 
 What is refused, and why:
 
@@ -1991,6 +1998,7 @@ What is refused, and why:
 | a volume serving the group **and a per-flow consumer** | arbitrating a composed share against a per-flow request is not defined |
 | a group leaving out a **constituent of its volume** | what it left out would leave the volume towards nobody |
 | a volume drawn by **several groups** allocating other than proportionally | the machines are served pro rata of their composed shares, which is the proportional allocation |
+| a **fed** volume drawn as a mixture at `fill_rate=0` | it would ask only its composed share, so a constituent it does not hold would never enter and an empty volume would never fill |
 | `flow_rate` negative or infinite | a direction is the connection's; `inf . share` is `NaN` on a constituent standing at zero |
 
 The connection-dependent refusals are settled at the pre-run step and reported there,

@@ -428,7 +428,8 @@ def resolve_mixture_groups(system):
         When a group's flows do not all arrive from ONE capacity of ONE
         producer, when the group leaves out a constituent of that volume, when
         the producer serves those flows to anybody but mixture groups, or when
-        a volume drawn by several groups allocates other than proportionally.
+        a volume drawn by several groups allocates other than proportionally,
+        or when a fed volume drawn as a mixture keeps ``fill_rate=0``.
         Each message names the group, the component and the flows in cause.
     """
     # Deferred: muscadet.ordering imports the evaluation and capability units,
@@ -500,6 +501,7 @@ def resolve_mixture_groups(system):
 
     for (producer, _), capacity in drawn.items():
         _check_proportional(producer, components[producer], capacity)
+        _check_claims_what_arrives(producer, capacity, suppliers)
 
     return resolved
 
@@ -626,6 +628,39 @@ def _check_proportional(producer, producer_comp, capacity):
                 f"rata of their composed shares, which is the proportional "
                 f"allocation: declare none on that output."
             )
+
+
+def _check_claims_what_arrives(producer, capacity, suppliers):
+    """Refuse a fed volume drawn as a mixture that claims nothing for itself.
+
+    A volume at ``fill_rate=0`` asks upstream for what it releases, and a
+    volume drawn as a mixture releases each constituent at its composed share.
+    Fed that way, it asks nothing of a constituent it does not hold yet, so a
+    leak into a room of air never enters and an empty room never starts: the
+    composition it holds would decide what is allowed to arrive. What arrives
+    is decided by what is upstream, so a fed mixture volume says what it takes
+    with a ``fill_rate``; ``math.inf`` takes whatever the producers deliver.
+    A volume nothing feeds only empties and keeps the default.
+    """
+    if capacity.fill_rate > 0:
+        return
+
+    fed = [
+        name for name in capacity.flow_names if suppliers.get((producer, name))
+    ]
+
+    if fed:
+        consumers = ", ".join(
+            f"{draw.consumer}.{draw.group}" for draw in capacity.mixture_draws
+        )
+        raise MixtureGroupError(
+            f"capacity {capacity.name} of {producer} is drawn as a mixture "
+            f"({consumers}) and fed on {', '.join(fed)}, with fill_rate=0. At "
+            f"that rate it asks upstream only what the machines take at its "
+            f"composition, so a constituent it does not hold would never "
+            f"enter and an empty volume would never fill. Declare a fill_rate: "
+            f"math.inf takes whatever the producers deliver."
+        )
 
 
 def _check_exclusive(where, group, producer, consumer_key, customers, group_consumers):

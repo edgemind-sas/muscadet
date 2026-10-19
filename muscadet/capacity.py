@@ -486,7 +486,8 @@ class Capacity(cod3s.ObjCOD3S):
             "exceeds it leaves to the atmosphere at the composition, so no "
             "arrival is ever refused for want of room. What it asks upstream "
             "follows fill_rate as for any volume: math.inf takes whatever the "
-            "producers deliver, the default 0 asks for what it releases. What "
+            "producers deliver, the default 0 asks for what it releases (a fed "
+            "volume drawn as a mixture must declare one). What "
             "remains of the declared volume at t=0 is the make-up constituent."
         ),
     )
@@ -774,7 +775,8 @@ class Capacity(cod3s.ObjCOD3S):
         36.8 after one time unit, against 99.0 behind a closed room). What an
         open volume removes is the throttling of a FULL volume, never the claim
         a modeller states: ``math.inf`` takes whatever the producers deliver,
-        the default 0 asks for what the volume releases.
+        the default 0 asks for what the volume releases, which a fed volume
+        drawn as a mixture may not keep (see ``_check_claims_what_arrives``).
 
         The volume then starts FULL: what the declared content leaves of the
         volume is the make-up constituent, which is what a room open to the
