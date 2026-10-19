@@ -831,11 +831,24 @@ def get_output_demand(comp, flow_name):
 
     demand = comp.get_output_consumer_demand(flow)
 
+    capacity = comp.get_capacity_of_flow(flow_name, "out")
+
+    # A volume drawn as a MIXTURE releases each constituent at its composed
+    # share (R51), and that is what the rest of the volume's claim is built
+    # on: its machines publish their whole volumetric rate on every member
+    # flow, which says nothing about a constituent's share. Up to 5.17.0 that
+    # published rate was carried upstream as it stood, so a room drawn at 10
+    # asked 10 of air AND 10 of hydrogen, twice the volume it releases, and a
+    # pure pass-through room filled; the other engine reading the same
+    # declaration asked the composed share. The share reads integrated levels
+    # only, so the demand band reads no production.
+    if capacity is not None and capacity.serves_a_mixture:
+        demand = capacity.mixture_share(flow_name)
+
     # Kept for the production sweep of this same evaluation, which needs
     # the bound BEFORE the capacity claim below (see get_output_request).
     comp._demand_bound[flow_name] = demand
 
-    capacity = comp.get_capacity_of_flow(flow_name, "out")
     if capacity is not None:
         demand = capacity.demand_claim(demand, flow_name)
 

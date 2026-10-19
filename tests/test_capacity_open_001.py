@@ -289,7 +289,9 @@ def test_an_open_room_does_not_empty_a_tank_feeding_it():
     """Review finding: an open volume used to ask upstream for ``math.inf``
     whatever it declared, which drained a stocked tank at its whole content
     per unit of time (100 to 36.8 in one time unit). At the default
-    ``fill_rate=0`` it asks for what it releases, the draft here."""
+    ``fill_rate=0`` it asks for what it releases of each constituent, its
+    composed share (5.18.0): the room holds no hydrogen, so it asks none and
+    the tank keeps its content, as the other engine computes."""
     system = muscadet.System(name="OpenTank")
     try:
         system.add_component(name="TANK", cls="OpTank")
@@ -305,7 +307,7 @@ def test_an_open_room_does_not_empty_a_tank_feeding_it():
     finally:
         system.deleteSys()
 
-    assert held == pytest.approx(100.0 - 10.0 * DRAFT, rel=1e-3)
+    assert held == pytest.approx(100.0, rel=1e-9)
 
 
 class OpWeightedRoom(muscadet.ObjFlow):

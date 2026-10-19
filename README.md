@@ -1976,8 +1976,11 @@ by `q`, since `dM/dt = Q + q - R`.
 
 **`fill_rate` matters here.** A room takes what is blown into it, so its capacity is
 declared with `fill_rate=math.inf`, which R36 spells "whatever the producer delivers".
-At the default `fill_rate=0` the room would ask its sources only for what it releases,
-and the inflow would follow the extraction instead of the other way round.
+At the default `fill_rate=0` the room asks its sources only for what it releases, and
+the inflow follows the extraction instead of the other way round. What it releases of
+each constituent is its composed share, so that is what it asks of each supply: drawn at
+10 with 10 % of hydrogen, it asks 9 of air and 1 of hydrogen (since 5.18.0; earlier
+versions asked the machine's whole rate of every constituent and filled the room).
 
 What is refused, and why:
 

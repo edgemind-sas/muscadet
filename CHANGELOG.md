@@ -4,6 +4,20 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 5.18.0 (2026-10-19)
+
+- A volume drawn as a mixture asks its supplies for the composed share it
+  releases of each constituent, `R . m_f / sum_g m_g w_g`, instead of the
+  machine's whole rate on every one (R51). A room claiming nothing for itself
+  (`fill_rate=0`) drawn at 10 with 10 % of hydrogen now asks 9 of air and 1 of
+  hydrogen; it asked 10 of each and filled, which the second engine reading
+  the same declaration did not do. A room declared with `fill_rate=inf`, which
+  takes whatever its producers deliver, is unchanged.
+
+Behaviour change a model may notice: the supplies of a mixture-drawn volume
+at a finite `fill_rate` deliver less, and the volume no longer fills by what
+the machine over-asked.
+
 ## 5.17.0 (2026-10-18)
 
 A mixture machine can now be commanded, failed and shared, and a volume can be
