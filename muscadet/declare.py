@@ -107,6 +107,7 @@ import pydantic
 
 from .capacity import MeasurementOut
 from .common import copy_declaration
+from .flow import FlowDiscreteOutTempo
 from .obj_ctrl import (
     CTRL_OUT_BOOL,
     CTRL_OUT_VALUE,
@@ -1745,6 +1746,17 @@ def flow_component_spec(comp):
         for flow_name, flow in flow_dict.items():
             fields = _declaration_fields(flow, f"{where}, flow {flow_name} {side}")
 
+            # Generated timer state names are native plumbing, reconstructed
+            # from the flow name. Exporting them as custom names makes other
+            # engines reject an otherwise portable timed output.
+            if isinstance(flow, FlowDiscreteOutTempo):
+                for key, suffix in (
+                    ("state_enable_name", "enabled"),
+                    ("state_disable_name", "disabled"),
+                ):
+                    if fields.get(key) == f"{flow_name}_{suffix}":
+                        fields.pop(key)
+
             # The production condition is stored resolved, so it is rebuilt
             # rather than dumped, and the two matrices derived from it are
             # dropped: ``postprocess_flow_specs`` recomputes them, and a stale
@@ -2796,7 +2808,9 @@ def build_controller_component(system, spec):
 #: builds a closed volume that refuses what an open one vents, and one ignoring
 #: ``run_cond`` runs a machine the document stops. A reader that does not know
 #: either key refuses it rather than drop it.
-SYSTEM_SPEC_VERSION = "1.0.4"
+#: 1.0.5 omits generated timer state names. Both fields remain optional and
+#: explicit custom names are preserved; absent names are generated on rebuild.
+SYSTEM_SPEC_VERSION = "1.0.5"
 
 
 #: The model-level key by which a declaration says whether it wants the

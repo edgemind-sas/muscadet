@@ -4,6 +4,15 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 5.19.1 (2026-10-21)
+
+- System declarations omit generated timer state names, which are rebuilt
+  from the flow name. The 5.19.0 read-back exported these names as custom
+  declarations, causing RAICHU to reject otherwise portable timed outputs.
+  Explicit custom names remain in the declaration. Declaration format 1.0.5
+  records the omission of these optional, derived values; its vocabulary is
+  unchanged. Native timed behavior and initialization remain unchanged.
+
 ## 5.19.0 (2026-10-21)
 
 - Several timed outputs can coexist on one component. Generated states are
