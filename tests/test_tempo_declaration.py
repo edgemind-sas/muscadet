@@ -1,9 +1,24 @@
 """Portable declarations omit generated timer state names and keep custom names."""
 
+import sys
+
 import cod3s
 
 import muscadet
 from muscadet import declare
+
+
+def _delete(system):
+    """Release native state without replacing an active test failure."""
+    preserve_error = sys.exc_info()[0] is not None
+    try:
+        try:
+            system.deleteSys()
+        finally:
+            cod3s.terminate_session()
+    except Exception:
+        if not preserve_error:
+            raise
 
 
 def test_tempo_state_names_survive_round_trip_without_exporting_generated_names():
@@ -39,8 +54,7 @@ def test_tempo_state_names_survive_round_trip_without_exporting_generated_names(
         assert flows["mixed"]["state_enable_name"] == "mixed_ready"
         assert "state_disable_name" not in flows["mixed"]
     finally:
-        system.deleteSys()
-        cod3s.terminate_session()
+        _delete(system)
 
     rebuilt = declare.build_system(document)
     try:
@@ -59,5 +73,4 @@ def test_tempo_state_names_survive_round_trip_without_exporting_generated_names(
         assert all(f.var_fed.value() for f in rebuilt.comp["C"].flows_out.values())
         rebuilt.isimu_stop()
     finally:
-        rebuilt.deleteSys()
-        cod3s.terminate_session()
+        _delete(rebuilt)
