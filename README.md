@@ -693,6 +693,8 @@ must ensure those names are distinct from other states on the component.
 Before 5.19.0 the generated names were `enabled` and `disabled`, so declaring
 two timed outputs on one component failed during construction. References to
 these generated names must migrate to the flow-prefixed names.
+Portable system declarations omit these generated names since 5.19.1 and
+reconstruct them on rebuild; explicit custom names remain in the declaration.
 
 Python declarations start disabled unless `init_enable=True` is specified.
 Platform imports use an explicit initial production (`prod_init`) as the initial timed state, unless the legacy interface explicitly
