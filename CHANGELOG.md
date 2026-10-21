@@ -4,6 +4,19 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 5.19.0 (2026-10-21)
+
+- Several timed outputs can coexist on one component. Generated states are
+  named `{flow}_enabled` and `{flow}_disabled`, because PyCATSHOO state names
+  belong to the component, not to the automaton. Explicit `state_enable_name`
+  and `state_disable_name` values are preserved. Consumers that refer to the
+  former generated names `enabled` or `disabled` must use the flow-prefixed
+  names, or explicitly declare their previous names for a single timed output.
+- Platform imports initialize a timed output from its explicit `prod_init`
+  instead of losing an initial true production
+  until the activation delay expires. An explicit legacy `init_enable` still
+  takes precedence. Python declarations retain `init_enable=False` by default.
+
 ## 5.18.0 (2026-10-19)
 
 - A volume drawn as a mixture asks its supplies for the composed share it

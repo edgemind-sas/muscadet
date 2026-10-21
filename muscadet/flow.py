@@ -1363,6 +1363,19 @@ class FlowDiscreteOutTempo(FlowOut):
         None, description="Enable state backend"
     )
 
+    @pydantic.model_validator(mode="before")
+    @classmethod
+    def namespace_default_states(cls, values: typing.Any) -> typing.Any:
+        """Keep generated states unique within the native component namespace."""
+        if isinstance(values, dict) and "name" in values:
+            values = dict(values)
+            for field, suffix in (
+                ("state_enable_name", "enabled"),
+                ("state_disable_name", "disabled"),
+            ):
+                values.setdefault(field, f"{values['name']}_{suffix}")
+        return values
+
     def add_automata(self, comp, **kwargs):
 
         super().add_automata(comp, **kwargs)

@@ -683,6 +683,23 @@ A discrete loop through one negation has no fixpoint, so no initial state: the s
 
 Up to 5.13.0 the fixpoint was not closed inside the start phase. A component started before its supplier read the supplier's default, the truth arrived afterwards and was counted as a change, so the first row read 0 or 1 depending on which component was declared first. A mode declared in its failed state never applied its effect, and the scenario started healthy. The engine conformance registry records the point as `initial_state_occurrence`.
 
+## Timed output initialization and state names
+
+Each timed output owns independent activation and deactivation delays. Its
+generated states are `{flow}_enabled` and `{flow}_disabled`, unique within the
+component's native state namespace. Explicit `state_enable_name` and
+`state_disable_name` remain available when custom names are needed; callers
+must ensure those names are distinct from other states on the component.
+Before 5.19.0 the generated names were `enabled` and `disabled`, so declaring
+two timed outputs on one component failed during construction. References to
+these generated names must migrate to the flow-prefixed names.
+
+Python declarations start disabled unless `init_enable=True` is specified.
+Platform imports use an explicit initial production (`prod_init`) as the initial timed state, unless the legacy interface explicitly
+sets `init_enable`. An output initially true therefore starts true, without
+waiting for its activation delay. Later changes use the configured delays;
+an interrupted activation is cancelled and a new request starts a fresh delay.
+
 ## Flow class names: canonical and legacy
 
 Everything above declares *discrete* flows — boolean signals that are either fed or not. Since MUSCADET 2.0 the discrete flow classes carry an explicit `Discrete` in their name, so that they read as one family beside the continuous one introduced in the next chapter.

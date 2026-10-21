@@ -307,6 +307,34 @@ class TestEndToEndTempoOverride:
 
 
 class TestRuntimeTempoOverride:
+    @pytest.mark.parametrize(
+        "prod_init, legacy_init, expected",
+        [(True, None, True), (False, None, False), (True, False, False)],
+    )
+    def test_tempo_preserves_initial_production(
+        self, cleanup_system, prod_init, legacy_init, expected
+    ):
+        from muscadet.importers.cod3s_platform import system_from_export
+
+        interface = {} if legacy_init is None else {"init_enable": legacy_init}
+        system = system_from_export(
+            _payload(
+                [
+                    {"name": "flow", "role": "prod_init", "value": prod_init},
+                    {
+                        "name": "flow",
+                        "role": "tempo_activation",
+                        "value": {"cls": "delay", "time": 10},
+                    },
+                ],
+                out_iface=interface,
+            )
+        )
+        cleanup_system.append(system)
+        system.isimu_start()
+        assert system.comp["C1"].flows_out["flow"].var_fed.value() is expected
+        system.isimu_stop()
+
     def test_override_builds_flowouttempo(self, cleanup_system):
         from muscadet.importers.cod3s_platform import system_from_export
 

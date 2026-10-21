@@ -4976,6 +4976,10 @@ def _declare_component_flows(comp: Any, spec: ComponentSpec) -> None:
                 flow_kwargs["occ_disable_flow"] = flow.occ_disable
             if flow.init_enable is not None:
                 flow_kwargs["init_enable"] = flow.init_enable
+            elif flow.init_value is not None:
+                # A configured initial production is the timed state at t=0,
+                # not an activation request that must wait for the delay.
+                flow_kwargs["init_enable"] = flow.init_value
         # On-trigger params (FlowOutOnTrigger). Trigger times are plain
         # floats; muscadet wraps them in a delay law internally.
         elif flow_type == "on_trigger":
