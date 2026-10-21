@@ -1365,7 +1365,7 @@ class FlowDiscreteOutTempo(FlowOut):
 
     @pydantic.model_validator(mode="before")
     @classmethod
-    def namespace_default_states(cls, values):
+    def namespace_default_states(cls, values: typing.Any) -> typing.Any:
         """Keep generated states unique within the native component namespace."""
         if isinstance(values, dict) and "name" in values:
             values = dict(values)

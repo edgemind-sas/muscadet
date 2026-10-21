@@ -1,5 +1,8 @@
 """Independent timed outputs must coexist in the same native component."""
 
+import contextlib
+import sys
+
 import cod3s
 import pytest
 
@@ -27,15 +30,24 @@ def the_system():
     def cleanup():
         nonlocal deleted
         if not deleted:
-            system.deleteSys()
-            cod3s.terminate_session()
-            deleted = True
+            try:
+                system.deleteSys()
+            finally:
+                try:
+                    cod3s.terminate_session()
+                finally:
+                    deleted = True
 
     try:
         system.add_component(name="timed", cls="MultipleTimedOutputs")
         yield system, cleanup
     finally:
-        cleanup()
+        if sys.exc_info()[0] is None:
+            cleanup()
+        else:
+            # Preserve a construction error if native teardown also fails.
+            with contextlib.suppress(Exception):
+                cleanup()
 
 
 def test_outputs_have_independent_delays(the_system):

@@ -13,7 +13,7 @@ reconstructing them.
   former generated names `enabled` or `disabled` must use the flow-prefixed
   names, or explicitly declare their previous names for a single timed output.
 - Platform imports initialize a timed output from its explicit `prod_init`
-  (legacy `init` also applies), instead of losing an initial true production
+  instead of losing an initial true production
   until the activation delay expires. An explicit legacy `init_enable` still
   takes precedence. Python declarations retain `init_enable=False` by default.
 

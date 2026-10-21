@@ -695,8 +695,7 @@ two timed outputs on one component failed during construction. References to
 these generated names must migrate to the flow-prefixed names.
 
 Python declarations start disabled unless `init_enable=True` is specified.
-Platform imports use an explicit initial production (`prod_init`, or legacy
-`init`) as the initial timed state, unless the legacy interface explicitly
+Platform imports use an explicit initial production (`prod_init`) as the initial timed state, unless the legacy interface explicitly
 sets `init_enable`. An output initially true therefore starts true, without
 waiting for its activation delay. Later changes use the configured delays;
 an interrupted activation is cancelled and a new request starts a fresh delay.
