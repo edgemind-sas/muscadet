@@ -4,6 +4,21 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 5.20.0 (2026-10-25)
+
+- The COD3S Platform importer reads mixture ventilation. A class template may
+  carry a `mixtures` section, each entry a group of continuous inputs drawn
+  together at one volumetric rate (`name`, `flows`, `flow_rate`) with an
+  optional on/off command (`run_cond`, `run_cond_inner_mode`), and a
+  `capacities` entry may name its `makeup_flow`. Both reach `add_mixture_in`
+  and `add_capacity` as written, so a room imported from the platform behaves
+  as the same room declared in Python. The parse layer refuses, naming the
+  class, a group drawing something other than a continuous input, a negative
+  or unbounded rate, a mode without a command, and a make-up the volume does
+  not hold. The markers `_SUPPORTS_MIXTURES` and `_SUPPORTS_MAKEUP_FLOW` let
+  the platform probe the capability before emitting either. The system
+  declaration format is unchanged.
+
 ## 5.19.1 (2026-10-21)
 
 - System declarations omit generated timer state names, which are rebuilt

@@ -77,6 +77,16 @@ copy of the emission grammar before any engine object exists -- so the variable
 grammar applies to the tuned declaration. An override naming a threshold the
 class does not declare is REFUSED, never dropped.
 ``_SUPPORTS_CONTROLLER_THRESHOLD_OVERRIDE`` is the marker for this channel.
+
+Mixture ventilation (2026-10) : a class template may carry a ``mixtures``
+section beside ``interfaces``, each entry a group of continuous inputs drawn
+together at one volumetric rate and optionally commanded (``run_cond``), and a
+``capacities`` entry may name its ``makeup_flow``, the constituent that keeps
+the volume full (R51 to R53). Both reach ``add_mixture_in`` and
+``add_capacity`` as written; which volume a group draws is the connections'
+business, settled at the pre-run step. ``_SUPPORTS_MIXTURES`` and
+``_SUPPORTS_MAKEUP_FLOW`` are the markers the platform probes before emitting
+either.
 """
 
 from __future__ import annotations
@@ -381,6 +391,10 @@ class CapacitySpec:
     # converse on a volume, which is precisely the second grammar this section
     # exists not to teach. ``None`` only when no condition was declared.
     serve_cond_inner_mode: Optional[str] = None
+    # The held constituent that keeps the volume FULL (R53): what it runs short
+    # of enters as this constituent, what exceeds it leaves at the composition.
+    # ``None`` is a closed volume, every capacity declared before the field.
+    makeup_flow: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -402,6 +416,28 @@ class RuleSetSpec:
 
     name: str
     rules: Tuple[RuleSpec, ...] = ()
+
+
+@dataclass(frozen=True)
+class MixtureSpec:
+    """One mixture group declared on a KB class template (R51, R52).
+
+    Continuous inputs drawn together at ONE volumetric rate, at the composition
+    of the volume they come from. The connections decide which volume that is,
+    so nothing about it is resolved here: ``resolve_mixture_groups`` settles it
+    at the pre-run step, as for a group declared in Python.
+    """
+
+    name: str
+    flows: Tuple[str, ...]
+    # One VOLUME per unit of time for the whole group, finite, positive or zero.
+    flow_rate: float
+    # On/off command, in the vocabulary of a capacity's discharge command.
+    # EMPTY -- the default -- runs the group whenever its rate allows.
+    run_cond: Tuple[Tuple[RuleOperandSpec, ...], ...] = ()
+    # Resolved to 'and' when a command is declared, as ``serve_cond_inner_mode``
+    # is and for the same reason. ``None`` only when no command was declared.
+    run_cond_inner_mode: Optional[str] = None
 
 
 @dataclass(frozen=True)
@@ -623,6 +659,10 @@ class ComponentSpec:
     # override channel exists for a recipe: a coefficient that differs between
     # two instances is a different reaction, hence a different class.
     rule_sets: Tuple[RuleSetSpec, ...] = ()
+    # Mixture groups of the referenced class template, verbatim: no
+    # per-instance override channel exists for them, a failure mode clamping
+    # ``{group}_flow_rate`` being how one instance's machine slows down.
+    mixtures: Tuple[MixtureSpec, ...] = ()
     # ``(mode, continuous output)`` pairs whose derating variable this
     # component allocates after ``set_flows()``.
     deratings: Tuple[DeratingSpec, ...] = ()
@@ -859,6 +899,21 @@ _SUPPORTS_CONTROLLER_THRESHOLD_OVERRIDE = True
 # the two fields at all rather than let a study author meet that refusal.
 # Cf. #167 (COD3S Platform) and the H2 showcase battery.
 _SUPPORTS_CAPACITY_SERVE_COMMAND = True
+
+# Capability marker (jumeau of _SUPPORTS_CAPACITY_SERVE_COMMAND): this muscadet
+# reads ``makeup_flow`` on a ``capacities`` entry and passes it to
+# ``ObjFlow.add_capacity`` (R53), so a volume declared open stays full. An older
+# muscadet refuses the key by name, which is why the platform probes this
+# marker before emitting it. Cf. #325 (COD3S Platform).
+_SUPPORTS_MAKEUP_FLOW = True
+
+# Capability marker (jumeau of _SUPPORTS_MAKEUP_FLOW): this muscadet reads a
+# ``mixtures`` section on a KB class template, beside ``interfaces`` and never
+# inside it, and declares each entry through ``ObjFlow.add_mixture_in`` (R51,
+# R52), command included. Same degradation as above: an older muscadet ignores
+# the section, and a platform that emitted it to one would run a room that is
+# never drawn, which is why the marker gates the emission. Cf. #325.
+_SUPPORTS_MIXTURES = True
 
 # ---------------------------------------------------------------------------
 # Flow families (2026-08)
@@ -1564,6 +1619,7 @@ _CAPACITY_KEYS = frozenset(
         "serve_rate",
         "serve_cond",
         "serve_cond_inner_mode",
+        "makeup_flow",
     }
 )
 
@@ -1572,6 +1628,13 @@ _CAPACITY_FLOW_KEYS = frozenset({"name", "weight"})
 
 #: Keys a ``rule_sets`` entry may carry.
 _RULE_SET_KEYS = frozenset({"name", "rules"})
+
+#: Keys a ``mixtures`` entry may carry: muscadet's portable declaration of a
+#: group (``declare.py``), the resolved command matrices left out because the
+#: platform writes negation and comparison inline in the operands.
+_MIXTURE_KEYS = frozenset(
+    {"name", "flows", "flow_rate", "run_cond", "run_cond_inner_mode"}
+)
 
 #: Keys one rule may carry.
 _RULE_KEYS = frozenset({"name", "cond", "cons", "prod"})
@@ -2103,6 +2166,19 @@ def _parse_capacity(
     fill_rate = _parse_capacity_rate(entry, "fill_rate", where=where)
     serve_rate = _parse_capacity_rate(entry, "serve_rate", where=where)
 
+    makeup_flow = entry.get("makeup_flow")
+    if makeup_flow is not None:
+        if not isinstance(makeup_flow, str) or not makeup_flow:
+            raise Cod3sPlatformImportError(
+                f"{where}: 'makeup_flow' names one held flow, got {makeup_flow!r}"
+            )
+        if makeup_flow not in held_names:
+            raise Cod3sPlatformImportError(
+                f"{where}: 'makeup_flow' names {makeup_flow!r}, which this "
+                f"capacity does not hold (it holds {sorted(held_names)}). The "
+                "outside supplies one of the constituents already in the volume."
+            )
+
     serve_cond = _parse_condition_groups(
         entry.get("serve_cond"),
         where=f"{where}, serve_cond",
@@ -2147,6 +2223,7 @@ def _parse_capacity(
         serve_rate=serve_rate,
         serve_cond=serve_cond,
         serve_cond_inner_mode=serve_cond_inner_mode,
+        makeup_flow=makeup_flow,
     )
 
 
@@ -2207,6 +2284,153 @@ def _build_kb_capacities(
             capacities.append(capacity)
 
         out[class_name] = tuple(capacities)
+
+    return out
+
+
+def _parse_mixture(
+    entry: Dict[str, Any],
+    *,
+    class_name: str,
+    index: _FlowIndex,
+    capacity_names: set,
+) -> MixtureSpec:
+    """Translate one ``mixtures`` entry into a :class:`MixtureSpec`.
+
+    The class-level refusals are muscadet's own (``ObjFlow.check_mixture_flows``)
+    and are left to it, bar the one this layer can phrase better: a flow that is
+    not a continuous input of the class is named here with the class, before a
+    muscadet error naming a flow object could. What needs the connections (one
+    producer, one volume, every constituent drawn) is the pre-run step's.
+    """
+    name = entry.get("name")
+    if not name or not isinstance(name, str):
+        raise Cod3sPlatformImportError(
+            f"Class {class_name!r}: a mixture group carries no 'name': {entry!r}"
+        )
+
+    where = f"Class {class_name!r}, mixture group {name!r}"
+    _check_entry_keys(entry, _MIXTURE_KEYS, where=where)
+
+    raw_flows = entry.get("flows")
+    if isinstance(raw_flows, str):
+        raw_flows = [raw_flows]
+    if not isinstance(raw_flows, list) or not raw_flows:
+        raise Cod3sPlatformImportError(
+            f"{where}: 'flows' lists the continuous inputs drawn together, got "
+            f"{raw_flows!r}"
+        )
+    flows: List[str] = []
+    for flow_name in raw_flows:
+        if not isinstance(flow_name, str) or not flow_name:
+            raise Cod3sPlatformImportError(
+                f"{where}: every drawn flow is a flow name, got {flow_name!r}"
+            )
+        if flow_name in flows:
+            raise Cod3sPlatformImportError(
+                f"{where}: flow {flow_name!r} is drawn twice by the same group"
+            )
+        if flow_name not in index.inputs or flow_name not in index.continuous:
+            raise Cod3sPlatformImportError(
+                f"{where}: {flow_name!r} is not a continuous input of this class. "
+                "A mixture is drawn over continuous inputs."
+            )
+        flows.append(flow_name)
+
+    if entry.get("flow_rate") is None:
+        raise Cod3sPlatformImportError(
+            f"{where}: 'flow_rate', the volume the group moves per unit of "
+            "time, is required"
+        )
+    flow_rate = _coerce_number(entry["flow_rate"], where=f"{where}: flow_rate")
+    if flow_rate < 0:
+        raise Cod3sPlatformImportError(
+            f"{where}: flow_rate must be positive or zero, got {flow_rate}"
+        )
+
+    run_cond = _parse_condition_groups(
+        entry.get("run_cond"),
+        where=f"{where}, run_cond",
+        index=index,
+        capacity_names=capacity_names,
+        site=_COMMAND_SITE,
+    )
+
+    run_cond_inner_mode = None
+    declared_mode = entry.get("run_cond_inner_mode")
+    if declared_mode is not None and not run_cond:
+        raise Cod3sPlatformImportError(
+            f"{where}: 'run_cond_inner_mode' with no 'run_cond' to qualify. "
+            "The mode says how the groups of a condition combine, so alone it "
+            "decides nothing and would be dropped in silence."
+        )
+    if run_cond:
+        # Same resolution as ``serve_cond_inner_mode``, for the same reason.
+        run_cond_inner_mode = "and" if declared_mode is None else declared_mode
+        if run_cond_inner_mode not in _VALID_INNER_MODES:
+            raise Cod3sPlatformImportError(
+                f"{where}: run_cond_inner_mode must be one of "
+                f"{sorted(_VALID_INNER_MODES)}, got {declared_mode!r}"
+            )
+
+    return MixtureSpec(
+        name=name,
+        flows=tuple(flows),
+        flow_rate=flow_rate,
+        run_cond=run_cond,
+        run_cond_inner_mode=run_cond_inner_mode,
+    )
+
+
+def _build_kb_mixtures(
+    kb: Dict[str, Any],
+    kb_lookup: Dict[str, List[FlowSpec]],
+    capacities_lookup: Dict[str, Tuple[CapacitySpec, ...]],
+) -> Dict[str, Tuple[MixtureSpec, ...]]:
+    """Compute ``{class_name: (MixtureSpec, ...)}`` from the KB dict.
+
+    After the capacities, as muscadet's ``DECLARATION_SECTIONS`` orders
+    ``mixtures`` last: a command naming a capacity is refused as such, which is
+    only decidable once the capacities of the class are known.
+    """
+    templates = kb.get("component_templates") or {}
+    out: Dict[str, Tuple[MixtureSpec, ...]] = {}
+
+    for class_name, template in templates.items():
+        entries = _section_entries(template, "mixtures", class_name=class_name)
+        if not entries:
+            out[class_name] = ()
+            continue
+
+        if _gate_kind_of_template(template) is not None:
+            raise Cod3sPlatformImportError(
+                f"Class {class_name!r} is a logic gate and declares mixture "
+                "groups. A gate reads its sources directly; it draws no volume."
+            )
+
+        index = _FlowIndex(kb_lookup.get(class_name) or [])
+        capacity_names = {
+            capacity.name for capacity in capacities_lookup.get(class_name) or ()
+        }
+
+        mixtures: List[MixtureSpec] = []
+        seen: set = set()
+        for entry in entries:
+            mixture = _parse_mixture(
+                entry,
+                class_name=class_name,
+                index=index,
+                capacity_names=capacity_names,
+            )
+            if mixture.name in seen:
+                raise Cod3sPlatformImportError(
+                    f"Class {class_name!r}: mixture group {mixture.name!r} is "
+                    "declared twice; a group name is unique on a component"
+                )
+            seen.add(mixture.name)
+            mixtures.append(mixture)
+
+        out[class_name] = tuple(mixtures)
 
     return out
 
@@ -3711,6 +3935,7 @@ def _parse_components(
     capacities_lookup: Optional[Dict[str, Tuple[CapacitySpec, ...]]] = None,
     rule_sets_lookup: Optional[Dict[str, Tuple[RuleSetSpec, ...]]] = None,
     controller_specs: Optional[Dict[str, ControllerSpec]] = None,
+    mixtures_lookup: Optional[Dict[str, Tuple[MixtureSpec, ...]]] = None,
 ) -> List[ComponentSpec]:
     """Translate the model components dict into a list of ComponentSpec.
 
@@ -3738,6 +3963,7 @@ def _parse_components(
     gate_kinds = gate_kinds or {}
     capacities_lookup = capacities_lookup or {}
     rule_sets_lookup = rule_sets_lookup or {}
+    mixtures_lookup = mixtures_lookup or {}
     controller_specs = controller_specs or {}
     seen_names: set[str] = set()
     out: List[ComponentSpec] = []
@@ -3859,6 +4085,7 @@ def _parse_components(
                 },
                 capacities=capacities,
                 rule_sets=rule_sets_lookup.get(class_name) or (),
+                mixtures=mixtures_lookup.get(class_name) or (),
                 deratings=_parse_deratings(
                     comp.get("deratings"), comp_name=name, flows=flows
                 ),
@@ -4306,6 +4533,7 @@ def parse_platform_export(payload: Dict[str, Any]) -> ImporterContext:
     # reason -- a capacity names flows, and a rule refuses a capacity name.
     capacities_lookup = _build_kb_capacities(kb, kb_lookup)
     rule_sets_lookup = _build_kb_rule_sets(kb, kb_lookup, capacities_lookup)
+    mixtures_lookup = _build_kb_mixtures(kb, kb_lookup, capacities_lookup)
     components = _parse_components(
         elements.get("components") or {},
         kb_lookup,
@@ -4313,6 +4541,7 @@ def parse_platform_export(payload: Dict[str, Any]) -> ImporterContext:
         capacities_lookup=capacities_lookup,
         rule_sets_lookup=rule_sets_lookup,
         controller_specs=controller_specs,
+        mixtures_lookup=mixtures_lookup,
     )
     connections = _parse_connections(elements.get("connections") or {}, components)
 
@@ -4842,6 +5071,28 @@ def _capacity_kwargs(
             for group in capacity.serve_cond
         ]
         kwargs["serve_cond_inner_mode"] = capacity.serve_cond_inner_mode
+    if capacity.makeup_flow is not None:
+        kwargs["makeup_flow"] = capacity.makeup_flow
+    return kwargs
+
+
+def _mixture_kwargs(mixture: MixtureSpec) -> Dict[str, Any]:
+    """Declaration kwargs of one group, as ``ObjFlow.add_mixture_in`` takes them.
+
+    The command is emitted in the operand mapping form, through the function a
+    discharge command's operands go through, so the vocabulary stays one (R52).
+    """
+    kwargs: Dict[str, Any] = {
+        "name": mixture.name,
+        "flows": list(mixture.flows),
+        "flow_rate": mixture.flow_rate,
+    }
+    if mixture.run_cond:
+        kwargs["run_cond"] = [
+            [_rule_operand_kwargs(operand) for operand in group]
+            for group in mixture.run_cond
+        ]
+        kwargs["run_cond_inner_mode"] = mixture.run_cond_inner_mode
     return kwargs
 
 
@@ -4885,6 +5136,7 @@ def _declaration_entries(spec: ComponentSpec) -> Dict[str, List[Dict[str, Any]]]
             for capacity in spec.capacities
         ],
         "rules": [_rule_set_kwargs(rule_set) for rule_set in spec.rule_sets],
+        "mixtures": [_mixture_kwargs(mixture) for mixture in spec.mixtures],
     }
 
 
