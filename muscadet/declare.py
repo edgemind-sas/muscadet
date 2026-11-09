@@ -393,6 +393,18 @@ MODE_LAW_PARAM_FIELDS = {
     for law_cls in typing.get_args(typing.get_args(cod3s.pycatshoo.mode_law.ModeLaw)[0])
 }
 
+#: ``{"exp": ("rate",), ..., "uniform": ("low", "high")}``: EVERY parameter
+#: key of an occurrence law, in the order the engine reads them from one
+#: entry of the parameter vector. :data:`MODE_LAW_PARAM_FIELDS` is the first
+#: of them. Derived the same way, from ``param_fields``; a cod3s that predates
+#: multi-parameter laws only has ``param_field``, hence the fallback.
+MODE_LAW_PARAMS = {
+    law_cls.model_fields["cls"].default: tuple(
+        getattr(law_cls, "param_fields", (law_cls.param_field,))
+    )
+    for law_cls in typing.get_args(typing.get_args(cod3s.pycatshoo.mode_law.ModeLaw)[0])
+}
+
 
 class ModeVocabulary(pydantic.BaseModel):
     """How one FAMILY of mode classes spells its declaration.
@@ -1998,18 +2010,19 @@ def _mode_tempo(comp, direction):
     return getattr(law, "time", None)
 
 
-def _law_order_value(entry):
+def _law_order_value(entry, index=0):
     """The number ONE ORDER of a parameter vector contributes to the law.
 
     An entry of an order vector is either a scalar or the tuple of that
-    order's parameters (:attr:`ModeVocabulary.order_vectors`). The engine
-    parametrises the transition law with ``params[param_names[0]]`` -- the
-    FIRST of them -- so that is the one the law's own parameter field holds,
-    and any further entry is a variable the law does not read.
+    order's parameters (:attr:`ModeVocabulary.order_vectors`). A
+    single-parameter law reads the FIRST of them (``params[param_names[0]]``),
+    and any further entry is a variable the law does not read. A
+    multi-parameter law (the uniform, ``low`` then ``high``) reads the first
+    ``len(param_fields)`` entries, ``index`` selecting which.
     """
     if isinstance(entry, (list, tuple)):
-        return entry[0] if entry else None
-    return entry
+        return entry[index] if len(entry) > index else None
+    return entry if index == 0 else None
 
 
 def _mode_law_spec(law, params, where):
@@ -2046,7 +2059,9 @@ def _mode_law_spec(law, params, where):
         ) from err
 
     if params:
-        dump[law.param_field] = [_law_order_value(entry) for entry in params]
+        fields = getattr(law, "param_fields", (law.param_field,))
+        for index, field in enumerate(fields):
+            dump[field] = [_law_order_value(entry, index) for entry in params]
 
     return _checked_declaration(dump, where)
 
@@ -2377,15 +2392,27 @@ def _check_law_agreement(spec, law_key, param_key, where):
         # here too would mean maintaining that list in two places.
         return
 
-    param_field = MODE_LAW_PARAM_FIELDS[law["cls"]]
+    if params is None:
+        return
+
+    for index, param_field in enumerate(MODE_LAW_PARAMS[law["cls"]]):
+        _check_law_field_agreement(
+            spec, law, params, law_key, param_key, param_field, index, where
+        )
+
+
+def _check_law_field_agreement(
+    spec, law, params, law_key, param_key, param_field, index, where
+):
+    """:func:`_check_law_agreement` for ONE parameter field of the law."""
     declared = law.get(param_field)
 
-    if declared is None or params is None:
+    if declared is None:
         return
 
     law_values = list(declared) if isinstance(declared, list) else [declared]
     param_values = [
-        _law_order_value(entry)
+        _law_order_value(entry, index)
         for entry in (params if isinstance(params, list) else [params])
     ]
 

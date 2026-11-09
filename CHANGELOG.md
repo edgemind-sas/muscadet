@@ -4,6 +4,16 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 5.21.0 (2026-11-09)
+
+- Declarations carry the uniform occurrence law of cod3s 1.24.0
+  (`{"cls": "uniform", "low": ..., "high": ...}`), the first law with two
+  parameters per common-cause order. `MODE_LAW_PARAMS` lists every parameter
+  key of each law (`MODE_LAW_PARAM_FIELDS` keeps the first one). The read-back
+  writes both bounds from the parameter vector, and the agreement check
+  between the law and its vector compares them bound by bound. The cod3s pin
+  moves to 1.24.0. The declaration format is unchanged.
+
 ## 5.20.0 (2026-10-25)
 
 - The COD3S Platform importer reads mixture ventilation. A class template may
