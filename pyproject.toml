@@ -47,12 +47,14 @@ dependencies = [
     # directions; and, from 1.23.0, the held effects of overlapping
     # common-cause combinations applied once per target, with the
     # shared_target_clamps / _shared_target_clamp_effects hook through which
-    # ObjFailureMode feeds that clamp its availability gates).
+    # ObjFailureMode feeds that clamp its availability gates; and, from
+    # 1.24.0, the uniform occurrence law, the first with two parameters per
+    # common-cause order).
     #
     # This pin is also why a maintenance release can exist over nothing else:
     # a downstream consumer cannot raise its own cod3s ref above the one
     # muscadet embeds, uv refusing to resolve two URLs for the same package.
-    "cod3s @ git+https://github.com/edgemind-sas/cod3s.git@1.23.0",
+    "cod3s @ git+https://github.com/edgemind-sas/cod3s.git@1.24.0",
     "graphviz==0.20.1",
 ]
 
