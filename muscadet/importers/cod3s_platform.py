@@ -3412,10 +3412,16 @@ def _apply_instance_overrides(
                 -1,
             )
             if opposite_idx < 0:
-                logger.debug(
-                    "Ignoring stale instance override on %s/%s: flow not in current KB",
+                # Tolerated, since a KB that dropped a flow leaves the
+                # instance attribute behind, but said at a level the default
+                # logging shows: the model that runs is not the one the
+                # instance still displays.
+                logger.warning(
+                    "Ignoring stale instance override on %s/%s (role=%s): "
+                    "flow not in current KB",
                     comp_name,
                     name,
+                    role,
                 )
                 continue
             other = out[opposite_idx]
@@ -4059,9 +4065,14 @@ def _parse_components(
         # Instance overrides : attributes with role=logic (input) or
         # role=init (output) replace the KB defaults for THIS instance.
         overrides = _build_overrides_index(instance_attrs)
-        flows = _apply_instance_overrides(
-            list(kb_lookup[class_name]), overrides, comp_name=name
-        )
+        kb_flows = list(kb_lookup[class_name])
+        flows = _apply_instance_overrides(kb_flows, overrides, comp_name=name)
+        # The audit trail states what was APPLIED: a stale override, naming a
+        # flow the KB no longer carries, was ignored above and is left out.
+        kb_flow_names = {flow.name for flow in kb_flows}
+        overrides = {
+            key: value for key, value in overrides.items() if key[0] in kb_flow_names
+        }
         # Capacities are resolved PER COMPONENT and not once per class,
         # because their numbers are what an instance overrides: two tanks of
         # one class routinely hold different volumes.

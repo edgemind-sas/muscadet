@@ -10,8 +10,11 @@ engine reading the same declaration asked the composed share.
 A FED room claiming nothing for itself (``fill_rate=0``) is refused (5.18.0):
 asking only what it releases at its own composition, it would never admit a
 constituent it does not hold and never start when empty. A room nothing feeds
-keeps the default and simply empties.
+keeps the default and simply empties. A constituent a RULE of the room produces
+is fed as well, and the refusal leaves no binding behind.
 """
+
+import math
 
 import cod3s
 import pytest
@@ -120,6 +123,69 @@ def test_a_room_nothing_feeds_keeps_the_default_and_empties():
     finally:
         system.deleteSys()
     assert held == pytest.approx(AIR0 + H20 - RATE, rel=1e-5)
+
+
+LEAK = 2.0
+
+
+class RdLeakRoom(muscadet.ObjFlow):
+    """A room of air whose hydrogen arrives through a rule, from a leak."""
+
+    def add_flows(self, **kwargs):
+        super().add_flows(**kwargs)
+        self.add_flow_continuous_in(name="leak")
+        for flow in ("AIR", "H2"):
+            self.add_flow_continuous_out(name=flow)
+        self.add_capacity(
+            name="room",
+            flows=["AIR", "H2"],
+            side="out",
+            capacity=VOLUME,
+            content_init={"AIR": AIR0, "H2": 0.0},
+            fill_rate=kwargs.get("fill_rate", 0.0),
+        )
+        self.add_rules(
+            name="leak", rules=[{"cons": {"leak": 1.0}, "prod": {"H2": 1.0}}]
+        )
+
+
+def _build_leak(name, fill_rate):
+    system = muscadet.System(name=name)
+    system.add_component(name="S", cls="SourceContinuous", flow="leak", rate=LEAK)
+    system.add_component(name="ROOM", cls="RdLeakRoom", fill_rate=fill_rate)
+    system.add_component(name="FAN", cls="RdFan")
+    system.connect_flow(source="S", target="ROOM", flow_name="leak")
+    for flow in ("AIR", "H2"):
+        system.connect_flow(source="ROOM", target="FAN", flow_name=flow)
+    return system
+
+
+def test_a_room_fed_by_a_rule_claiming_nothing_is_refused():
+    # No connection delivers H2 under its own name: the rule does. Accepted,
+    # the leak never entered (measured: 0.0 delivered of 2.0, H2 held 0.0).
+    system = _build_leak("RoomRuleRefused", 0.0)
+    try:
+        with pytest.raises(MixtureGroupError, match="fed on H2, with fill_rate=0"):
+            system.isimu_start()
+        # A refused resolution leaves no volume believing it serves a group.
+        assert system.comp["ROOM"].capacities["room"].mixture_draws == []
+        assert system.comp["FAN"].mixtures["extraction"]._producer is None
+    finally:
+        system.deleteSys()
+
+
+def test_a_room_fed_by_a_rule_admits_the_leak_once_it_claims_it():
+    system = _build_leak("RoomRuleFed", math.inf)
+    try:
+        system.isimu_start()
+        system.isimu_step_to(1.0, max_events=100000)
+        entered = system.comp["S"].flows_out["leak"].var_fed.value()
+        held = system.comp["ROOM"].capacities["room"].get_quantity("H2")
+        system.isimu_stop()
+    finally:
+        system.deleteSys()
+    assert entered == pytest.approx(LEAK, rel=1e-5)
+    assert held > 0.0
 
 
 def test_delete():

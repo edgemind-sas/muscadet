@@ -469,6 +469,20 @@ def resolve_mixture_groups(system):
             for source in suppliers.get((key, flow_name), []):
                 group_consumers.setdefault((source, flow_name), set()).add(key)
 
+    try:
+        return _bind_mixture_groups(
+            declared, components, suppliers, customers, group_consumers
+        )
+    except MixtureGroupError:
+        # The checks below read the bindings as they are written, so a refusal
+        # lands half way through them. Dropped here, or a refused model would
+        # keep volumes that believe they serve a group.
+        clear_mixture_bindings(system)
+        raise
+
+
+def _bind_mixture_groups(declared, components, suppliers, customers, group_consumers):
+    """Write each group's binding, then run the checks that read them."""
     resolved = []
     # Keyed on names, not on the capacity objects: a pydantic model compares
     # by its fields, which is neither identity nor cheap.
@@ -501,7 +515,7 @@ def resolve_mixture_groups(system):
 
     for (producer, _), capacity in drawn.items():
         _check_proportional(producer, components[producer], capacity)
-        _check_claims_what_arrives(producer, capacity, suppliers)
+        _check_claims_what_arrives(producer, components[producer], capacity, suppliers)
 
     return resolved
 
@@ -630,7 +644,7 @@ def _check_proportional(producer, producer_comp, capacity):
             )
 
 
-def _check_claims_what_arrives(producer, capacity, suppliers):
+def _check_claims_what_arrives(producer, producer_comp, capacity, suppliers):
     """Refuse a fed volume drawn as a mixture that claims nothing for itself.
 
     A volume at ``fill_rate=0`` asks upstream for what it releases, and a
@@ -641,12 +655,25 @@ def _check_claims_what_arrives(producer, capacity, suppliers):
     is decided by what is upstream, so a fed mixture volume says what it takes
     with a ``fill_rate``; ``math.inf`` takes whatever the producers deliver.
     A volume nothing feeds only empties and keeps the default.
+
+    A constituent is fed two ways: by a connection delivering it under its own
+    name, or, on the output side, by a RULE of the component producing it. The
+    second locks in exactly as the first does, the rule being sized by what its
+    outputs are asked for: measured, a leak of 2 turned into hydrogen by a rule
+    never entered a room of air, and entered at 0.99 a room holding 10 %.
     """
     if capacity.fill_rate > 0:
         return
 
+    produced = set()
+    if capacity.side == "out":
+        for rule_set in (getattr(producer_comp, "rule_sets", None) or {}).values():
+            produced.update(rule_set.produced_flows)
+
     fed = [
-        name for name in capacity.flow_names if suppliers.get((producer, name))
+        name
+        for name in capacity.flow_names
+        if suppliers.get((producer, name)) or name in produced
     ]
 
     if fed:

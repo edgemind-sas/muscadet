@@ -1,7 +1,7 @@
 """Integration test — full COD3S Platform DIL V2 export end-to-end.
 
 Loads the real ``dil V2 + kb.json`` payload (26 components, 177
-connections, 15 KB classes) exported from the RATP MBSA platform,
+connections, 15 KB classes) exported from a COD3S Platform instance,
 runs it through the importer, and asserts the resulting
 ``muscadet.System`` matches the source counts and is consumable by
 ``cod3s-isimu`` (no exception on ``isimu_start``).
