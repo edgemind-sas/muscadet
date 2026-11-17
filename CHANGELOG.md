@@ -4,6 +4,25 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 5.21.1 (2026-11-17)
+
+- A volume drawn as a mixture and fed by a rule is refused at `fill_rate=0`,
+  as a volume fed by a connection already was. Only a connection delivering a
+  constituent under its own name counted as feeding it, so a room whose
+  hydrogen a rule produces from a leak was accepted and the leak never
+  entered: measured, 0.0 delivered of 2.0. Such a model now raises
+  `MixtureGroupError` at its first start; declare a `fill_rate` on the volume
+  (`math.inf` takes whatever arrives).
+- A refused mixture resolution leaves no binding behind. A `MixtureGroupError`
+  raised half way left `Capacity.mixture_draws` and the group's producer
+  written on a model that had been refused.
+- The COD3S Platform importer reports a stale instance override (naming a flow
+  the KB no longer carries) as a warning instead of a debug message, and
+  leaves it out of the `instance_overrides` audit trail, which now states what
+  was applied. The override is still ignored, not refused.
+- The DIL V2 fixtures and examples carry no client or account identifier.
+  `examples/isimu/dil_v2_attr.py` loads an export with per-instance overrides
+  and prints them; the fixture factories share one loader.
 ## 5.21.0 (2026-11-09)
 
 - Declarations carry the uniform occurrence law of cod3s 1.24.0

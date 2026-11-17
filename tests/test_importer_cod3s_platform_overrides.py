@@ -191,7 +191,7 @@ class TestApplyInstanceOverrides:
                 flows, {("out_x", "var_in_default"): True}, comp_name="c"
             )
 
-    def test_stale_override_silently_ignored(self):
+    def test_stale_override_ignored(self):
         # Override pointing to an unknown flow (e.g. KB removed it) :
         # log + ignore, don't crash.
         flows = self._flows()
@@ -327,6 +327,29 @@ class TestEndToEndOverrides:
         assert comp.metadata["attributes_initial"] == [
             {"name": "in_a", "role": "logic_in", "value": "2"},
         ]
+
+    def test_stale_override_warned_and_left_out_of_the_audit_trail(self, caplog):
+        import logging
+
+        attributes = [
+            {"name": "in_a", "role": "logic_in", "value": "2"},
+            {"name": "DELETED", "role": "logic_in", "value": "and"},
+        ]
+        with caplog.at_level(
+            logging.WARNING, logger="muscadet.importers.cod3s_platform"
+        ):
+            ctx = parse_platform_export(_payload(attributes))
+        comp = ctx.components[0]
+        # The trail states what was applied, not what was asked.
+        assert comp.metadata["instance_overrides"] == [
+            {"name": "in_a", "role": "logic_in", "value": "2"},
+        ]
+        # What was asked stays readable, verbatim.
+        assert comp.metadata["attributes_initial"] == attributes
+        assert any(
+            "stale instance override on C1/DELETED" in rec.getMessage()
+            for rec in caplog.records
+        )
 
 
 class TestParseInitValue:
