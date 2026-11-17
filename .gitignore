@@ -147,3 +147,6 @@ examples/isimu/power_plant_study/
 
 # Compiled typst slides (regenerable from the .typ source)
 docs/presentations/*.pdf
+
+# Internal reference documentation (theoretical background, not redistributed)
+docs/theory/
