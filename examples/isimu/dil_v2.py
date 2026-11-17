@@ -22,29 +22,24 @@ single-line snapshot. Inspect via the TUI instead.
 
 from __future__ import annotations
 
-import json
-from pathlib import Path
-
 import muscadet
-from muscadet.importers.cod3s_platform import system_from_export
 
-_FIXTURE = (
-    Path(__file__).resolve().parents[2]
-    / "tests"
-    / "fixtures"
-    / "dil_v2_export.json"
-)
+from .platform_fixture import build_from_fixture
 
 
 def build() -> muscadet.System:
-    with _FIXTURE.open() as f:
-        payload = json.load(f)
-    return system_from_export(payload)
+    return build_from_fixture("dil_v2_export.json")
 
 
 if __name__ == "__main__":
+    import cod3s
+
     system = build()
-    print(
-        f"DIL V2 system built: {len(system.comp)} components, "
-        f"name={system.name()!r}"
-    )
+    try:
+        print(
+            f"DIL V2 system built: {len(system.comp)} components, "
+            f"name={system.name()!r}"
+        )
+    finally:
+        system.deleteSys()
+        cod3s.terminate_session()
