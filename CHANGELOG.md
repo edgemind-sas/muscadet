@@ -20,10 +20,13 @@ reconstructing them.
   the KB no longer carries) as a warning instead of a debug message, and
   leaves it out of the `instance_overrides` audit trail, which now states what
   was applied. The override is still ignored, not refused.
-- The DIL V2 fixtures and examples carry no client or account identifier.
-  `examples/isimu/dil_v2_attr.py` loads an export with per-instance overrides
-  and prints them; the fixture factories share one loader.
-## 5.21.0 (2026-11-09)
+- The platform export fixtures and their examples carry no client, account or
+  business vocabulary: the model is renamed "Detection chain V2", its
+  components, classes and flows take neutral names, and descriptions are
+  blanked. Files follow (`tests/fixtures/detection_chain_*.json`,
+  `examples/isimu/detection_chain*.py`).
+  `examples/isimu/detection_chain_attr.py` loads an export with per-instance
+  overrides and prints them; the fixture factories share one loader.
 
 - Declarations carry the uniform occurrence law of cod3s 1.24.0
   (`{"cls": "uniform", "low": ..., "high": ...}`), the first law with two
