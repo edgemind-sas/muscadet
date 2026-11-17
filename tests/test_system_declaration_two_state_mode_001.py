@@ -51,7 +51,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 #: carry, and there is no reason to place it: a module that exposes ``build``
 #: in this package is an interactive example, and one this test does not run is
 #: one nobody finds out about. The first list written here held six and left
-#: out ``dil_v2``, which loads the real COD3S Platform DIL V2 export -- 26
+#: out ``detection_chain``, which loads the real COD3S Platform Detection chain V2 export -- 26
 #: components through the platform importer, and precisely the corpus shape the
 #: whole seam exists for.
 #:
@@ -76,7 +76,7 @@ INTERACTIVE_EXAMPLES = tuple(
 #: A floor rather than an equality, so adding an example stays silent (it is
 #: run anyway) and removing one of these is not.
 #:
-#: ``dil_v2`` is in it and is NOT one of the six the ticket named. That is the
+#: ``detection_chain`` is in it and is NOT one of the six the ticket named. That is the
 #: whole point of writing this list down twice: the first version of it held
 #: exactly the six, so the one example whose disappearance would matter most --
 #: the real COD3S Platform export, which is the shape the seam exists for --
@@ -92,7 +92,7 @@ ANCHORED_EXAMPLES = frozenset(
         "datacenter_lite",
         "inverter_chain",
         # And the one it did not.
-        "dil_v2",
+        "detection_chain",
     }
 )
 
@@ -379,11 +379,11 @@ def test_every_interactive_example_declares_itself(example):
 
 
 def test_the_real_platform_export_declares_itself():
-    """``dil_v2`` is the seam's own subject: a real COD3S Platform export, read
+    """``detection_chain`` is the seam's own subject: a real COD3S Platform export, read
     back by the importer and then declared. The first version of this module
     left it out of a hand-kept list, which is exactly the example whose absence
     would have mattered most."""
-    result = run_probe(_DECLARE_ONE_EXAMPLE, "dil_v2")
+    result = run_probe(_DECLARE_ONE_EXAMPLE, "detection_chain")
     assert result["kinds"] == {"flow": 26}, result
 
 

@@ -1,8 +1,8 @@
-"""Interactive simulation factory for the COD3S Platform DIL V2 export.
+"""Interactive simulation factory for the COD3S Platform Detection chain V2 export.
 
-Loads the real ``dil V2 + kb.json`` payload (26 components, 177
+Loads the real ``detection chain + kb.json`` payload (26 components, 177
 connections, 15 KB classes) committed under
-``tests/fixtures/dil_v2_export.json`` and runs it through
+``tests/fixtures/detection_chain_export.json`` and runs it through
 ``muscadet.importers.cod3s_platform.system_from_export`` to produce a
 populated ``muscadet.System`` ready for ``cod3s-isimu``.
 
@@ -13,7 +13,7 @@ consumable by the simulation stack — the same property that the slow
 
 Usage::
 
-    cod3s-isimu --factory examples.isimu.dil_v2:build
+    cod3s-isimu --factory examples.isimu.detection_chain:build
 
 Unlike the small pedagogical examples in this directory, no scripted
 ``run()`` is provided — the system is too large for a meaningful
@@ -28,7 +28,7 @@ from .platform_fixture import build_from_fixture
 
 
 def build() -> muscadet.System:
-    return build_from_fixture("dil_v2_export.json")
+    return build_from_fixture("detection_chain_export.json")
 
 
 if __name__ == "__main__":
@@ -37,7 +37,7 @@ if __name__ == "__main__":
     system = build()
     try:
         print(
-            f"DIL V2 system built: {len(system.comp)} components, "
+            f"Detection chain V2 system built: {len(system.comp)} components, "
             f"name={system.name()!r}"
         )
     finally:

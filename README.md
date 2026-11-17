@@ -2908,7 +2908,7 @@ Monte Carlo runs.
 import json
 from muscadet.importers import system_from_export
 
-with open("dil_v2_export.json") as f:
+with open("detection_chain_export.json") as f:
     payload = json.load(f)
 
 system = system_from_export(payload)

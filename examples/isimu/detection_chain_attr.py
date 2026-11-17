@@ -1,9 +1,9 @@
-"""Interactive simulation factory for the DIL V2 export with UI overrides.
+"""Interactive simulation factory for the Detection chain V2 export with UI overrides.
 
-Sibling of :mod:`examples.isimu.dil_v2`, but loads
-``tests/fixtures/dil_v2_attr.json``, an export where instance-level attribute
+Sibling of :mod:`examples.isimu.detection_chain`, but loads
+``tests/fixtures/detection_chain_attr.json``, an export where instance-level attribute
 overrides have been applied through the UI: ``PLC_1`` and ``PLC_2`` carry a
-``k=2`` logic on the ``RS485_UT_PLCY`` input port.
+``k=2`` logic on the ``RS485_PU_PLC`` input port.
 
 Use this factory to drive ``cod3s-isimu`` against a model that exercises the
 ``_apply_instance_overrides`` code path of the cod3s_platform importer
@@ -11,7 +11,7 @@ end-to-end (UI override -> JSON export -> muscadet System -> PyCATSHOO).
 
 Usage::
 
-    cod3s-isimu --factory examples.isimu.dil_v2_attr:build
+    cod3s-isimu --factory examples.isimu.detection_chain_attr:build
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ DEFAULT_VALUES = ("or", False)
 
 
 def build() -> muscadet.System:
-    return build_from_fixture("dil_v2_attr.json")
+    return build_from_fixture("detection_chain_attr.json")
 
 
 def non_default_overrides(system: muscadet.System, comp_name: str) -> list:
@@ -44,7 +44,7 @@ if __name__ == "__main__":
     system = build()
     try:
         print(
-            f"DIL V2 (attr) system built: {len(system.comp)} components, "
+            f"Detection chain V2 (attr) system built: {len(system.comp)} components, "
             f"name={system.name()!r}"
         )
         for cname in ("PLC_1", "PLC_2"):

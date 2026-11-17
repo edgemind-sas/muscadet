@@ -23,7 +23,7 @@ Usage::
     import json
     from muscadet.importers.cod3s_platform import system_from_export
 
-    with open("dil_v2_export.json") as f:
+    with open("detection_chain_export.json") as f:
         payload = json.load(f)
     system = system_from_export(payload)
     system.isimu_start()  # ready to drive interactive simulation
@@ -150,7 +150,7 @@ class Cod3sPlatformImportError(ValueError):
 _SUPPORTED_MODEL_EXPORT_MAJORS = frozenset({1, 3})
 
 # KB export major. The current platform tag is 3.x. Major 2 is also
-# accepted because checked-in fixtures (e.g. ``dil_v2_export.json``)
+# accepted because checked-in fixtures (e.g. ``detection_chain_export.json``)
 # carry ``kb_embedded.export_version = "2.0.0"`` even though their
 # structure was migrated to the 3.0.0 schema (``logic`` rename to
 # ``prod_cond`` / ``input_logic``) in commit 147edca. The structural
@@ -3387,8 +3387,8 @@ def _apply_instance_overrides(
     that the platform validators should have caught.
 
     Disambiguates the case where an interface name appears on both an
-    input AND an output port of the same component (e.g. DIL
-    ``Logique_Sorties.S_NDILH_PPz_Qx``) by deriving the target direction
+    input AND an output port of the same component (e.g. DETECT
+    ``Output_logic.S_AlarmA``) by deriving the target direction
     from the override's role rather than matching on ``name`` alone.
     """
     # FlowSpec is frozen — rebuild the list with replaced entries at
@@ -4355,7 +4355,7 @@ def _parse_connections(
     - ``interface_target`` is an input flow of the target component
     - if ``interface_source != interface_target``, log a warning
       (muscadet.System.connect_flow uses a single flow_name on both
-      ends ; the schema technically allows asymmetry but dil V2 always
+      ends ; the schema technically allows asymmetry but the detection chain always
       has equality)
     """
     by_id: Dict[str, ComponentSpec] = {c.id: c for c in components}

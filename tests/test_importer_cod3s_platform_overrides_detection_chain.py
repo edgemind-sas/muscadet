@@ -1,6 +1,6 @@
-"""Integration test — P1.6 instance overrides on the DIL V2 fixture.
+"""Integration test — P1.6 instance overrides on the Detection chain V2 fixture.
 
-Patches the dil_v2_export.json payload in memory to inject instance
+Patches the detection_chain_export.json payload in memory to inject instance
 overrides on PLC_1 (a 2-of-3 vote on one of its redundancy inputs)
 and asserts the resulting muscadet.System reflects the override end
 to end :
@@ -40,7 +40,7 @@ from muscadet.importers.cod3s_platform import (  # noqa: E402
     system_from_export,
 )
 
-_FIXTURE = Path(__file__).parent / "fixtures" / "dil_v2_export.json"
+_FIXTURE = Path(__file__).parent / "fixtures" / "detection_chain_export.json"
 
 # Stable IDs from the fixture (cf. find_PLC scan)
 PLC_1_ID = "e6c6b100-7a56-4a79-b844-989b39b23393"
@@ -69,7 +69,7 @@ def test_parse_layer_propagates_2_of_3_on_plc_1(base_payload):
         PLC_1_ID,
         [
             {
-                "name": "CS_E_KVPP_Qx_PLC",
+                "name": "CS_E_Locked_PLC",
                 "role": "logic_in",
                 "value": "2",
             }
@@ -77,7 +77,7 @@ def test_parse_layer_propagates_2_of_3_on_plc_1(base_payload):
     )
     ctx = parse_platform_export(payload)
     plc = next(c for c in ctx.components if c.name == "PLC_1")
-    target = next(f for f in plc.flows if f.name == "CS_E_KVPP_Qx_PLC")
+    target = next(f for f in plc.flows if f.name == "CS_E_Locked_PLC")
     # Override coerced from string '2' to native int 2 so muscadet's
     # k-of-n aggregation receives the right Python type.
     assert target.logic == 2
@@ -86,7 +86,7 @@ def test_parse_layer_propagates_2_of_3_on_plc_1(base_payload):
     assert other.logic == "or"
     # PLC_2 untouched (override is per-instance)
     plc2 = next(c for c in ctx.components if c.name == "PLC_2")
-    plc2_target = next(f for f in plc2.flows if f.name == "CS_E_KVPP_Qx_PLC")
+    plc2_target = next(f for f in plc2.flows if f.name == "CS_E_Locked_PLC")
     assert plc2_target.logic == "or"
 
 
@@ -96,28 +96,28 @@ def test_parse_layer_propagates_var_in_default_override_on_plc_1(base_payload):
     payload = _patch_attributes(
         base_payload,
         PLC_1_ID,
-        [{"name": "CS_E_KVPP_Qx_PLC", "role": "var_in_default", "value": True}],
+        [{"name": "CS_E_Locked_PLC", "role": "var_in_default", "value": True}],
     )
     ctx = parse_platform_export(payload)
     plc = next(c for c in ctx.components if c.name == "PLC_1")
-    target = next(f for f in plc.flows if f.name == "CS_E_KVPP_Qx_PLC")
+    target = next(f for f in plc.flows if f.name == "CS_E_Locked_PLC")
     assert target.var_in_default is True
     # Sibling input untouched → muscadet default (None = FlowIn default False)
     other = next(f for f in plc.flows if f.name == "F_ETH")
     assert other.var_in_default is None
     # Per-instance: PLC_2 untouched
     plc2 = next(c for c in ctx.components if c.name == "PLC_2")
-    plc2_target = next(f for f in plc2.flows if f.name == "CS_E_KVPP_Qx_PLC")
+    plc2_target = next(f for f in plc2.flows if f.name == "CS_E_Locked_PLC")
     assert plc2_target.var_in_default is None
 
 
 def test_parse_layer_propagates_init_override_on_alim(base_payload):
     """Parse layer carries init=True onto a Source-like output flow."""
-    # Find Alim_elec_01 by scanning the components dict
+    # Find PSU_01 by scanning the components dict
     alim_id = next(
         cid
         for cid, c in base_payload["model"]["elements"]["components"].items()
-        if c.get("name") == "Alim_elec_01"
+        if c.get("name") == "PSU_01"
     )
     # Pick its first output flow name
     kb = base_payload["kb_embedded"]
@@ -137,7 +137,7 @@ def test_parse_layer_propagates_init_override_on_alim(base_payload):
         [{"name": target_flow, "role": "prod_init", "value": True}],
     )
     ctx = parse_platform_export(payload)
-    alim = next(c for c in ctx.components if c.name == "Alim_elec_01")
+    alim = next(c for c in ctx.components if c.name == "PSU_01")
     out = next(f for f in alim.flows if f.name == target_flow)
     assert out.init_value is True
 
@@ -167,7 +167,7 @@ def test_runtime_plc1_input_logic_set_to_2_of_3(base_payload, cleanup_system):
         PLC_1_ID,
         [
             {
-                "name": "CS_E_KVPP_Qx_PLC",
+                "name": "CS_E_Locked_PLC",
                 "role": "logic_in",
                 "value": "2",
             }
@@ -176,7 +176,7 @@ def test_runtime_plc1_input_logic_set_to_2_of_3(base_payload, cleanup_system):
     system = system_from_export(payload)
     cleanup_system.append(system)
     plc1 = system.comp["PLC_1"]
-    target = plc1.flows_in["CS_E_KVPP_Qx_PLC"]
+    target = plc1.flows_in["CS_E_Locked_PLC"]
     # muscadet flow-in stores the aggregation logic as the ``logic`` attr
     # (str 'and'/'or' or int k). The converter must surface our int 2 here.
     assert target.logic == 2
@@ -186,7 +186,7 @@ def test_runtime_plc1_input_logic_set_to_2_of_3(base_payload, cleanup_system):
     assert other.logic == "or"
 
     # PLC_2 same input unaffected (per-instance override)
-    plc2_target = system.comp["PLC_2"].flows_in["CS_E_KVPP_Qx_PLC"]
+    plc2_target = system.comp["PLC_2"].flows_in["CS_E_Locked_PLC"]
     assert plc2_target.logic == "or"
 
 
@@ -202,7 +202,7 @@ def test_runtime_isimu_start_with_overrides_does_not_raise(
         PLC_1_ID,
         [
             {
-                "name": "CS_E_KVPP_Qx_PLC",
+                "name": "CS_E_Locked_PLC",
                 "role": "logic_in",
                 "value": "2",
             }
@@ -226,7 +226,7 @@ def test_runtime_metadata_instance_overrides_propagated(base_payload, cleanup_sy
         PLC_1_ID,
         [
             {
-                "name": "CS_E_KVPP_Qx_PLC",
+                "name": "CS_E_Locked_PLC",
                 "role": "logic_in",
                 "value": "2",
             }
@@ -238,7 +238,7 @@ def test_runtime_metadata_instance_overrides_propagated(base_payload, cleanup_sy
     # PLC_1 — override applied : audit trail must reflect it
     plc1_overrides = system.comp["PLC_1"].metadata.get("instance_overrides")
     assert plc1_overrides == [
-        {"name": "CS_E_KVPP_Qx_PLC", "role": "logic_in", "value": "2"},
+        {"name": "CS_E_Locked_PLC", "role": "logic_in", "value": "2"},
     ]
 
     # PLC_2 — no override : audit trail must be an empty list (not None)
@@ -286,7 +286,7 @@ def test_the_declaration_of_an_imported_system_is_a_document(
         PLC_1_ID,
         [
             {
-                "name": "CS_E_KVPP_Qx_PLC",
+                "name": "CS_E_Locked_PLC",
                 "role": "logic_in",
                 "value": "2",
             }
@@ -307,5 +307,5 @@ def test_the_declaration_of_an_imported_system_is_a_document(
     # The audit trail crossed with it, and still says what was overridden.
     plc1 = declaration["components"]["PLC_1"]
     assert plc1["metadata"]["instance_overrides"] == [
-        {"name": "CS_E_KVPP_Qx_PLC", "role": "logic_in", "value": "2"},
+        {"name": "CS_E_Locked_PLC", "role": "logic_in", "value": "2"},
     ]

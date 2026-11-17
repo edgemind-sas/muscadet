@@ -201,7 +201,7 @@ class TestUnreadKeys:
     def test_refused_through_the_whole_import(self):
         # A real platform export, whose conditions are not empty: an empty one
         # renamed would say nothing and rightly pass.
-        payload = json.loads((FIXTURES / "dil_v2_export.json").read_text())
+        payload = json.loads((FIXTURES / "detection_chain_export.json").read_text())
         mutated = copy.deepcopy(payload)
         kb = mutated.get("kb_embedded") or mutated["kb"]
         interface = next(
