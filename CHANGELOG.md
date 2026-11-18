@@ -4,6 +4,31 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 5.22.0 (2026-11-18)
+
+- A controller reads a service. `ObjCtrl` accepts a controller input of kind
+  `service`: a boolean observed on `{name}_in`, the box a discrete input flow
+  imports on, so it is fed by a discrete output (a service output a mode
+  activates included) or by another controller's boolean output, with no
+  adapter. It keeps the variable `{name}_fed_in`, updated by a sensitive
+  method and in the initial fixpoint, which a mode condition reads. Wired to
+  nothing, it reads false. It is held in `ObjCtrl.controls_service_in`, apart
+  from the measurement inputs: it takes no aggregation, no constituent and no
+  default, adds no edge to the signal graph, and no output grammar (`compare`,
+  `band`, `republish`) may read it, which is refused by name. New exports:
+  `CtrlServiceIn` and `CTRL_IN_SERVICE`.
+- The COD3S Platform importer reads a `controls_in` entry of kind `service`
+  (`name` and `kind` only) and wires it from a discrete output flow
+  (`{flow}_out`) or from a controller's boolean output (`{output}_out`). A
+  boolean output wired onto a level, rate or ratio input stays refused, as
+  does a value output or a continuous output wired onto a service input, and
+  a second source on one service input. The marker
+  `_SUPPORTS_CONTROLLER_SERVICE_INPUT` lets the platform probe the capability.
+- The system declaration carries the service input (`{"name": ...,
+  "kind": "service"}` in `controls_in`) and the `effects_priority` of a
+  `cod3s.ObjMode2S`, written only when set. Declaration format 1.1.0.
+- The cod3s pin moves to 1.25.0, which brings `ObjMode2S.effects_priority`.
+
 ## 5.21.1 (2026-11-17)
 
 - A volume drawn as a mixture and fed by a rule is refused at `fill_rate=0`,

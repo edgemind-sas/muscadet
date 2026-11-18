@@ -32,6 +32,12 @@ Two sections, and the order between them is the one
   graph the acyclicity check walks. An input declaring an ``aggregate`` takes
   SEVERAL sources and reduces them to one value (R40).
 
+  An input of ``kind="service"`` is the one exception, and it is not a
+  measurement: a :class:`CtrlServiceIn` observes a BOOLEAN -- a service output
+  of a component, or another controller's boolean output -- and keeps it in
+  ``{name}_fed_in``, the variable a mode condition reads. It is held in
+  ``controls_service_in``, apart from the measurement channels.
+
   **A ratio input is what a closed grammar costs, and where that cost is paid.**
   There is no division among the four operators below and there will not be
   one: a quotient carries no threshold anything could root-find, so admitting it
@@ -169,6 +175,7 @@ from .capacity import (
     MeasurementOut,
 )
 from .common import copy_declaration, fresh_instant_occ_law, get_pyc_type
+from .initial_state import RANK_INPUT, register_initial_evaluation
 from .rules import COMPARISON_OPERATORS, comparator
 
 #: The CLOSED list an observation input's aggregation is chosen from (R40):
@@ -903,6 +910,18 @@ CONTROL_IN_KEYS = (
     "aggregate",
 )
 
+#: The nature of a SERVICE input: a boolean observed on ``{name}_in``, the box a
+#: discrete input flow imports on, and folded into the variable
+#: ``{name}_fed_in`` a mode condition reads. Not a measurement kind: it reads
+#: no number, so it is not one of :data:`muscadet.MEASUREMENT_KINDS` and no
+#: output grammar reads it. See :class:`CtrlServiceIn`.
+CTRL_IN_SERVICE = "service"
+
+#: Declaration keys a SERVICE input reads, beside its name. Nothing else: it
+#: has one source at most, no constituent and no default -- wired to nothing,
+#: it reads false.
+CONTROL_IN_SERVICE_KEYS = ("kind",)
+
 #: Declaration keys a BOOLEAN output reads. ``emit`` is the output grammar
 #: (R42): the condition the signal carries, as a composition of
 #: :data:`CTRL_BOOL_OPERATORS`.
@@ -1166,6 +1185,119 @@ class CtrlSignalOut(cod3s.ObjCOD3S):
         return self.__repr__()
 
 
+class CtrlServiceIn(cod3s.ObjCOD3S):
+    """A controller's SERVICE input: a boolean it observes, never a number.
+
+    A controller carries no interface, so no discrete flow reaches it. A
+    service input is how it reads one anyway: whether a component serves it --
+    a service output, dormant until a mode activates it -- or whether another
+    controller's boolean output holds.
+
+    **One box, the one a discrete input flow imports on.** ``{name}_in``,
+    importing under the alias ``{name}``, which is exactly what a discrete
+    output exports its data on (``{flow}_out``, alias ``{flow}``) and what a
+    boolean controller output exports on (``{output}_out``, alias
+    ``{output}``). Both sources are therefore read with no adapter. The
+    availability channel a discrete input flow also imports is not imported:
+    a discrete output's ``{flow}_fed_out`` already holds only while the output
+    is available and active.
+
+    **A real variable, and not only the reference.** A mode condition reads a
+    variable, never a reference, so the input keeps ``{name}_fed_in`` -- the
+    name a discrete input flow's own fed state carries -- updated by a
+    sensitive method on the reference and evaluated in the initial fixpoint. A
+    boolean announces its change, which is why a sensitive method is right
+    here when it is wrong for a measurement input.
+
+    **What it is not.** It is not a measurement channel: it carries no
+    aggregation, no constituent and no default, takes at most ONE source, and
+    no output grammar reads it, a comparison or a band being made for numbers.
+    Wired to nothing, it reads false.
+    """
+
+    model_config = pydantic.ConfigDict(extra="forbid")
+
+    name: str = pydantic.Field(
+        ...,
+        description=(
+            "Interface name. It is the imported alias, so a service output or "
+            "a boolean controller output of the same name feeds it."
+        ),
+    )
+
+    var_in: typing.Any = pydantic.Field(
+        None,
+        exclude=True,
+        repr=False,
+        description="The imported reference, read by the sensitive method",
+    )
+
+    var_fed: typing.Any = pydantic.Field(
+        None,
+        exclude=True,
+        repr=False,
+        description="The boolean variable a mode condition reads",
+    )
+
+    def box_name(self) -> str:
+        """Name of the box this input imports on."""
+        return f"{self.name}_in"
+
+    def var_name(self) -> str:
+        """Name of the variable a mode condition reads."""
+        return f"{self.name}_fed_in"
+
+    def sensitive_method_name(self) -> str:
+        """Name of the method keeping :meth:`var_name` up to date."""
+        return f"set_{self.name}_fed_in"
+
+    def add_variables(self, comp: typing.Any) -> None:
+        """Create the imported reference and the variable it is folded into."""
+        py_type, pyc_type = get_pyc_type("bool")
+        self.var_in = comp.addReference(self.box_name())
+        self.var_fed = comp.addVariable(self.var_name(), pyc_type, py_type(False))
+        # A state, not a pulse: it holds what the source last said until the
+        # source says something else, which the sensitive method then writes.
+        self.var_fed.setReinitialized(False)
+
+    def add_mb(self, comp: typing.Any) -> None:
+        """Import the source's boolean, one box and one alias."""
+        comp.addMessageBox(self.box_name())
+        comp.addMessageBoxImport(self.box_name(), self.var_in, self.name)
+
+    def evaluate(self) -> None:
+        """Fold the source into the variable; false while nothing is wired."""
+        self.var_fed.setValue(bool(self.var_in.orValue(False)))
+
+    def add_sensitive_methods(self, comp: typing.Any) -> None:
+        """Follow the source, at instant 0 and at every change it announces.
+
+        A start method AND a member of the initial fixpoint, as for a discrete
+        input flow: run in creation order alone, it would read a source
+        created later at its default.
+        """
+        self.var_in.addSensitiveMethod(self.sensitive_method_name(), self.evaluate)
+
+        register_initial_evaluation(
+            comp,
+            self.evaluate,
+            [self.var_fed],
+            RANK_INPUT,
+            start_name=self.sensitive_method_name(),
+        )
+
+    def get_fed(self) -> bool:
+        """Whether the source currently serves this input."""
+        return bool(self.var_fed.value()) if self.var_fed is not None else False
+
+    def __repr__(self) -> str:
+        state = self.get_fed() if self.var_fed is not None else "N/A"
+        return f"{self.__class__.__name__} {self.name} = {state}"
+
+    def __str__(self) -> str:
+        return self.__repr__()
+
+
 class ObjCtrl(cod3s.PycComponent):
     """A controller: it observes quantities and publishes signals (R1, R39).
 
@@ -1318,6 +1450,13 @@ class ObjCtrl(cod3s.PycComponent):
         #: Observation inputs, keyed by interface name, in declaration order.
         self.controls_in: typing.Dict[str, MeasurementIn] = {}
 
+        #: Service inputs, keyed by interface name, in declaration order. Kept
+        #: apart from :attr:`controls_in` on purpose: everything that walks the
+        #: observation inputs -- the measurement links, the signal graph, the
+        #: aggregation crossings, the output grammar -- walks measurement
+        #: channels, and a service input is a boolean.
+        self.controls_service_in: typing.Dict[str, CtrlServiceIn] = {}
+
         #: Outputs, keyed by interface name, in declaration order. Holds a
         #: :class:`CtrlSignalOut` or a :class:`muscadet.MeasurementOut`
         #: according to the nature each was declared with.
@@ -1441,8 +1580,12 @@ class ObjCtrl(cod3s.PycComponent):
         collections require: an output grammar names an interface, and a name
         standing for two of them has no unambiguous answer.
         """
-        if name in self.controls_in or name in self.controls_out:
-            side = "input" if name in self.controls_in else "output"
+        if (
+            name in self.controls_in
+            or name in self.controls_service_in
+            or name in self.controls_out
+        ):
+            side = "output" if name in self.controls_out else "input"
             raise ValueError(
                 f"Object {self.name()}: interface {name!r} is already declared "
                 f"as an {side} of this controller. An interface name is unique "
@@ -1563,7 +1706,16 @@ class ObjCtrl(cod3s.PycComponent):
             list -- a callable included -- a name already taken, or a message
             box another interface already claims. An unknown ``kind`` is
             refused by :class:`muscadet.MeasurementIn`.
+
+        A ``kind`` of :data:`CTRL_IN_SERVICE` declares a service input
+        instead, through :meth:`add_service_in`, and returns a
+        :class:`CtrlServiceIn`.
         """
+        if params.get("kind") == CTRL_IN_SERVICE:
+            if aggregate is not None:
+                params = {**params, "aggregate": aggregate}
+            return self.add_service_in(name, **params)
+
         check_declaration_keys(
             f"Object {self.name()}: controller input {name!r}",
             params,
@@ -1592,6 +1744,53 @@ class ObjCtrl(cod3s.PycComponent):
         self.controls_in[name] = channel
 
         return channel
+
+    def add_service_in(self, name, **params):
+        """Declare one service input: a boolean observed from a service.
+
+        Wire it with the raw connection, from a discrete output or from a
+        boolean controller output of the same name::
+
+            system.connect(switch, "ot_access_out", ctrl, "ot_access_in")
+
+        A mode condition then reads ``ot_access_fed_in`` on the controller.
+
+        Parameters
+        ----------
+        name : str
+            Interface name, and the alias the source exports under.
+        **params : dict
+            :data:`CONTROL_IN_SERVICE_KEYS`, that is ``kind`` alone.
+
+        Returns
+        -------
+        CtrlServiceIn
+
+        Raises
+        ------
+        ValueError
+            On any other declaration key -- an aggregation or a constituent
+            among them, a service input reading one source at most -- a name
+            already taken, or a message box another interface already claims.
+        """
+        check_declaration_keys(
+            f"Object {self.name()}: controller service input {name!r}",
+            params,
+            CONTROL_IN_SERVICE_KEYS,
+        )
+
+        self.claim_name(name)
+
+        interface = CtrlServiceIn(name=name)
+        self.claim_box(name, interface.box_name())
+
+        interface.add_variables(self)
+        interface.add_mb(self)
+        interface.add_sensitive_methods(self)
+
+        self.controls_service_in[name] = interface
+
+        return interface
 
     def add_control_out(self, name, kind=CTRL_OUT_BOOL, emit=None, **params):
         """Declare one output, and what it carries (R3, R42).
@@ -1744,6 +1943,21 @@ class ObjCtrl(cod3s.PycComponent):
         """
         if node is None:
             return
+
+        services = [
+            read for read in node.inputs_read() if read in self.controls_service_in
+        ]
+
+        if services:
+            plural = "s" if len(services) > 1 else ""
+            raise ValueError(
+                f"Object {self.name()}: controller output {name!r} reads "
+                f"service input{plural} "
+                f"{', '.join(repr(read) for read in services)} as a number. A "
+                "service input is a boolean: a comparison, a band and a "
+                "republication read a measured quantity, and a mode condition "
+                f"reads the service through '{services[0]}_fed_in'"
+            )
 
         missing = [read for read in node.inputs_read() if read not in self.controls_in]
 

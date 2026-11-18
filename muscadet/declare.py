@@ -109,6 +109,7 @@ from .capacity import MeasurementOut
 from .common import copy_declaration
 from .flow import FlowDiscreteOutTempo
 from .obj_ctrl import (
+    CTRL_IN_SERVICE,
     CTRL_OUT_BOOL,
     CTRL_OUT_VALUE,
     CtrlRepublish,
@@ -583,6 +584,11 @@ MODE_VOCABULARY = ModeVocabulary(
         ("trans_name_prefix", "trans_name_prefix"),
         ("trans_name_prefix_fun", "trans_name_prefix_fun"),
         ("step", "step"),
+        # The rank by which the engine picks, among the active modes writing
+        # one variable of one component, the one whose value applies. A second
+        # engine reading the document must apply the same rank, so it is
+        # carried; absent, the mode writes as it always did.
+        ("effects_priority", "effects_priority"),
     ),
     defaults={
         "aut_name": None,
@@ -603,6 +609,7 @@ MODE_VOCABULARY = ModeVocabulary(
         "trans_name_prefix": "__cc_{target_comb_u}",
         "trans_name_prefix_fun": None,
         "step": None,
+        "effects_priority": None,
     },
     order_vectors=("occ_param", "not_occ_param"),
     law_fields=(("occ_law", "occ_param"), ("not_occ_law", "not_occ_param")),
@@ -2590,6 +2597,12 @@ def controller_component_spec(comp):
         aggregate = fields.pop("combine", None)
         controls_in.append({"name": name, **fields, "aggregate": aggregate})
 
+    # A service input carries nothing but its nature: no aggregation, no
+    # constituent, no default. It is written after the measurement inputs,
+    # which is where the rebuild puts it back, so the read is stable.
+    for iface_name in getattr(comp, "controls_service_in", {}):
+        controls_in.append({"name": iface_name, "kind": CTRL_IN_SERVICE})
+
     controls_out = []
     for iface_name, interface in comp.controls_out.items():
         node = comp.controls_emit.get(iface_name)
@@ -2837,7 +2850,15 @@ def build_controller_component(system, spec):
 #: either key refuses it rather than drop it.
 #: 1.0.5 omits generated timer state names. Both fields remain optional and
 #: explicit custom names are preserved; absent names are generated on rebuild.
-SYSTEM_SPEC_VERSION = "1.0.5"
+#:
+#: 1.1.0 adds a NEW KIND of controller input, ``service`` (a boolean observed
+#: on ``{name}_in`` and read by a mode condition as ``{name}_fed_in``), and
+#: ``effects_priority`` on an ``ObjMode2S`` declaration, written only when set.
+#: A new kind is a minor. A 1.0.5 document rebuilds here unchanged. A reader
+#: that does not know either refuses it rather than drop it: dropping the
+#: input breaks the condition that names it, and dropping the rank changes
+#: which mode's value a contested variable takes.
+SYSTEM_SPEC_VERSION = "1.1.0"
 
 
 #: The model-level key by which a declaration says whether it wants the

@@ -480,9 +480,16 @@ CONTROL_IN_RATE = "rate"
 #: comes from.
 CONTROL_IN_RATIO = "ratio"
 
+#: A SERVICE input reads a boolean: whether a component serves it -- a discrete
+#: output, dormant until a mode activates it -- or whether another controller's
+#: boolean output holds. It imports on ``{name}_in``, the box a discrete input
+#: flow imports on, and a mode condition reads it as ``{name}_fed_in``. Not a
+#: measurement: no output grammar reads it, and it takes one source at most.
+CONTROL_IN_SERVICE = "service"
+
 #: Every nature an observation input may be declared with.
 _VALID_CONTROL_IN_KINDS = frozenset(
-    {CONTROL_IN_LEVEL, CONTROL_IN_RATE, CONTROL_IN_RATIO}
+    {CONTROL_IN_LEVEL, CONTROL_IN_RATE, CONTROL_IN_RATIO, CONTROL_IN_SERVICE}
 )
 
 #: A boolean output: one signal exported on ``{name}_out``, which a discrete
@@ -518,6 +525,12 @@ _CONTROL_IN_KEYS = frozenset(
     }
 )
 
+#: Keys one SERVICE ``controls_in`` entry may carry -- the mirror of
+#: ``muscadet.obj_ctrl.CONTROL_IN_SERVICE_KEYS``. A service input has one
+#: source at most, no constituent and no default: wired to nothing, it reads
+#: false.
+_CONTROL_IN_SERVICE_KEYS = frozenset({"name", "kind"})
+
 #: Keys one BOOLEAN ``controls_out`` entry may carry.
 _CONTROL_OUT_BOOL_KEYS = frozenset({"name", "kind", "default", "emit"})
 
@@ -543,10 +556,10 @@ class ControlInSpec:
     """One observation input declared on a controller class template."""
 
     name: str
-    # ``level``, ``rate`` or ``ratio``. It decides the box the input imports on
-    # -- ``{name}_level_in`` for the first and the last, ``{name}_rate_in`` for
-    # the middle one -- and therefore what a publisher must export on the other
-    # end.
+    # ``level``, ``rate``, ``ratio`` or ``service``. It decides the box the
+    # input imports on -- ``{name}_level_in`` for a level and a ratio,
+    # ``{name}_rate_in`` for a rate, ``{name}_in`` for a service -- and
+    # therefore what a publisher must export on the other end.
     kind: str = CONTROL_IN_LEVEL
     # ``None`` is the single-publisher input, capped at one connection by
     # muscadet. Any policy lifts the cap and says how the readings reduce.
@@ -914,6 +927,15 @@ _SUPPORTS_MAKEUP_FLOW = True
 # the section, and a platform that emitted it to one would run a room that is
 # never drawn, which is why the marker gates the emission. Cf. #325.
 _SUPPORTS_MIXTURES = True
+
+# Capability marker (jumeau of _SUPPORTS_MIXTURES): this muscadet reads a
+# controller input of kind ``service`` -- a boolean observed on ``{name}_in``,
+# wired from a discrete output or from a controller's boolean output -- and
+# declares the variable ``{name}_fed_in`` a mode condition reads. An older
+# muscadet refuses the kind by name at parse time, so the degradation is a
+# refusal; the marker lets the platform refuse first, naming the feature,
+# rather than let a study author meet a refusal naming a muscadet vocabulary.
+_SUPPORTS_CONTROLLER_SERVICE_INPUT = True
 
 # ---------------------------------------------------------------------------
 # Flow families (2026-08)
@@ -2854,6 +2876,14 @@ def _parse_control_in(entry: Dict[str, Any], *, class_name: str) -> ControlInSpe
             f"{sorted(_VALID_CONTROL_IN_KINDS)}"
         )
 
+    if kind == CONTROL_IN_SERVICE:
+        _check_entry_keys(
+            entry,
+            _CONTROL_IN_SERVICE_KEYS,
+            where=f"Class {class_name!r}, controller service input {name!r}",
+        )
+        return ControlInSpec(name=name, kind=kind)
+
     aggregate = entry.get("aggregate")
     if aggregate is not None and aggregate not in _VALID_CONTROL_AGGREGATIONS:
         raise Cod3sPlatformImportError(
@@ -4133,6 +4163,8 @@ def _control_in_box(entry: ControlInSpec) -> str:
     """
     if entry.kind == CONTROL_IN_RATE:
         return f"{entry.name}_rate_in"
+    if entry.kind == CONTROL_IN_SERVICE:
+        return f"{entry.name}_in"
     return f"{entry.name}_level_in"
 
 
@@ -4169,15 +4201,24 @@ def _signal_target_box(
     tgt: ComponentSpec,
     tgt_iface: str,
 ) -> str:
-    """The box a BOOLEAN signal is imported on: a discrete input flow's own."""
+    """The box a BOOLEAN signal is imported on.
+
+    A discrete input flow's own, or the identical box of a controller's
+    SERVICE input. A controller's other inputs read numbers, so a boolean is
+    refused on them.
+    """
     if tgt.controller is not None:
-        raise Cod3sPlatformImportError(
-            f"Connection {conn_id!r}: {src.name}.{src_iface} is a boolean "
-            f"output and {tgt.name!r} is a controller, whose observation "
-            "inputs read numbers. A boolean signal is imported by a discrete "
-            "input flow; to feed another controller, declare the output with "
-            f"kind={CONTROL_OUT_VALUE!r}."
-        )
+        observed = _observation_input(conn_id, tgt=tgt, tgt_iface=tgt_iface)
+        if observed.kind != CONTROL_IN_SERVICE:
+            raise Cod3sPlatformImportError(
+                f"Connection {conn_id!r}: {src.name}.{src_iface} is a boolean "
+                f"output and {tgt.name!r} reads a {observed.kind} on it, a "
+                "number. A boolean signal is imported by a discrete input "
+                f"flow or by a controller input of kind={CONTROL_IN_SERVICE!r}; "
+                "to feed a number to another controller, declare the output "
+                f"with kind={CONTROL_OUT_VALUE!r}."
+            )
+        return _control_in_box(observed)
 
     inputs = {
         flow.name
@@ -4209,6 +4250,22 @@ def _observed_publisher_box(
     transport port on ``{f}_out`` and a read-only rate export on
     ``{f}_rate_out``, and only the observer's nature tells the two apart.
     """
+    if observed.kind == CONTROL_IN_SERVICE:
+        services = {
+            flow.name
+            for flow in src.flows
+            if flow.direction == "output" and flow.flow_family == DISCRETE_FAMILY
+        }
+        if src_iface not in services:
+            raise Cod3sPlatformImportError(
+                f"Connection {conn_id!r}: service input {observed.name!r} "
+                f"reads a service, and {src_iface!r} is not a discrete output "
+                f"flow of {src.name!r} (discrete outputs: {sorted(services)}). "
+                "A service is published on '{flow}_out' by a discrete output, "
+                "or by a controller's boolean output."
+            )
+        return f"{src_iface}_out"
+
     if observed.kind == CONTROL_IN_RATE:
         rates = {
             flow.name
@@ -4267,6 +4324,14 @@ def _parse_information_connection(
             )
         else:
             observed = _observation_input(conn_id, tgt=tgt, tgt_iface=tgt_iface)
+            if observed.kind == CONTROL_IN_SERVICE:
+                raise Cod3sPlatformImportError(
+                    f"Connection {conn_id!r}: {src.name}.{src_iface} publishes "
+                    f"a value on '{src_iface}_level_out', and {tgt.name}."
+                    f"{tgt_iface} reads a service, a boolean. Declare the "
+                    f"output kind={CONTROL_OUT_BOOL!r}, or the input "
+                    f"kind={CONTROL_IN_LEVEL!r}."
+                )
             if observed.kind != CONTROL_IN_LEVEL:
                 raise Cod3sPlatformImportError(
                     f"Connection {conn_id!r}: {src.name}.{src_iface} publishes "
@@ -4330,6 +4395,12 @@ def _check_observation_fan_in(
             continue
 
         key = (conn.target_component, conn.target_interface)
+        if key in seen and entry.kind == CONTROL_IN_SERVICE:
+            raise Cod3sPlatformImportError(
+                f"Controller {conn.target_component!r}: service input "
+                f"{conn.target_interface!r} is wired to several sources. A "
+                "service input reads ONE service; wire one source."
+            )
         if key in seen:
             raise Cod3sPlatformImportError(
                 f"Controller {conn.target_component!r}: observation input "
@@ -4835,6 +4906,8 @@ def _control_in_kwargs(entry: ControlInSpec) -> Dict[str, Any]:
     policies exists to refuse.
     """
     kwargs: Dict[str, Any] = {"name": entry.name, "kind": entry.kind}
+    if entry.kind == CONTROL_IN_SERVICE:
+        return kwargs
     if entry.aggregate is not None:
         kwargs["aggregate"] = entry.aggregate
     if entry.flows:
