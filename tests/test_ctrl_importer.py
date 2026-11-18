@@ -551,7 +551,7 @@ class TestTheContractIsRefusedByName:
         ] = "reading"
         _refused(payload, "must bear the same one")
 
-    def test_a_boolean_output_wired_onto_a_controller_is_refused(self):
+    def test_a_boolean_output_wired_onto_a_level_input_is_refused(self):
         payload = build_payload()
         payload["kb"]["component_templates"][OBSERVER_CLASS]["controls_in"][0][
             "name"
@@ -559,7 +559,28 @@ class TestTheContractIsRefusedByName:
         payload["model"]["elements"]["connections"]["c-value"].update(
             {"interface_source": "fill", "interface_target": "fill"}
         )
-        _refused(payload, "is a boolean output and 'OBS' is a controller")
+        _refused(payload, "is a boolean output and 'OBS' reads a level on it")
+
+    def test_a_value_output_wired_onto_a_service_input_is_refused(self):
+        payload = build_payload()
+        payload["kb"]["component_templates"][OBSERVER_CLASS]["controls_in"][0][
+            "kind"
+        ] = "service"
+        _refused(payload, "publishes a value.*reads a service")
+
+    def test_a_continuous_output_observed_by_a_service_input_is_refused(self):
+        payload = build_payload()
+        payload["kb"]["component_templates"][CONTROLLER_CLASS]["controls_in"][1][
+            "kind"
+        ] = "service"
+        _refused(payload, "is not a discrete output flow of 'SRC'")
+
+    def test_a_service_input_declaring_an_aggregation_is_refused(self):
+        payload = build_payload()
+        payload["kb"]["component_templates"][OBSERVER_CLASS]["controls_in"] = [
+            {"name": "echo", "kind": "service", "aggregate": "max"}
+        ]
+        _refused(payload, "service input 'echo'.*'aggregate'")
 
     def test_a_value_output_wired_onto_a_rate_input_is_refused(self):
         payload = build_payload()
@@ -581,6 +602,88 @@ class TestTheContractIsRefusedByName:
             {"interface_source": "q", "interface_target": "nope"}
         )
         _refused(payload, "not an observation input of controller 'CTRL'")
+
+
+# ===========================================================================
+# 3b. A service input: the boolean observation (pure, no system built here)
+# ===========================================================================
+
+
+def _service_payload():
+    """The montage, plus a service output and the service inputs reading it.
+
+    ``VALVE`` gains a discrete OUTPUT ``ot_access``, and the observer
+    controller gains two service inputs: ``ot_access``, wired from the valve,
+    and ``fill``, wired from the first controller's boolean output.
+    """
+    payload = build_payload()
+    templates = payload["kb"]["component_templates"]
+    templates[VALVE_CLASS]["interfaces"]["ot_access__output"] = {
+        "name": "ot_access",
+        "port_type": {"general": "output"},
+    }
+    templates[OBSERVER_CLASS]["controls_in"] += [
+        {"name": "ot_access", "kind": "service"},
+        {"name": "fill", "kind": "service"},
+    ]
+    payload["model"]["elements"]["connections"].update(
+        {
+            "c-svc": _connection("id-val", "ot_access", "id-obs", "ot_access"),
+            "c-svc-bool": _connection("id-ctl", "fill", "id-obs", "fill"),
+        }
+    )
+    return payload
+
+
+def _boxes(payload):
+    return {
+        (conn.source_component, conn.target_component, conn.target_interface): (
+            conn.source_box,
+            conn.target_box,
+        )
+        for conn in _parse(payload).connections
+    }
+
+
+class TestAServiceInput:
+    def test_its_kind_is_read_by_the_pure_layer(self):
+        observer = next(
+            comp for comp in _parse(_service_payload()).components if comp.name == "OBS"
+        )
+        entry = observer.controller.input_named("ot_access")
+        assert entry.kind == "service"
+        assert entry.aggregate is None
+
+    def test_a_discrete_service_output_lands_on_the_discrete_input_box(self):
+        boxes = _boxes(_service_payload())
+        assert boxes[("VALVE", "OBS", "ot_access")] == (
+            "ot_access_out",
+            "ot_access_in",
+        )
+
+    def test_a_boolean_output_wired_onto_a_service_input_is_accepted(self):
+        """The symmetric case of the refusal onto a level input."""
+        boxes = _boxes(_service_payload())
+        assert boxes[("CTRL", "OBS", "fill")] == ("fill_out", "fill_in")
+        # The discrete input flow the same output already fed is untouched.
+        assert boxes[("CTRL", "VALVE", "fill")] == ("fill_out", "fill_in")
+
+    def test_two_sources_on_one_service_input_are_refused(self):
+        payload = _service_payload()
+        payload["kb"]["component_templates"][SINK_CLASS]["interfaces"][
+            "ot_access__output"
+        ] = {"name": "ot_access", "port_type": {"general": "output"}}
+        payload["model"]["elements"]["connections"]["c-svc-2"] = _connection(
+            "id-snk", "ot_access", "id-obs", "ot_access"
+        )
+        _refused(payload, "service input 'ot_access' is wired to several")
+
+    def test_the_marker_is_declared_true(self):
+        from muscadet.importers import cod3s_platform
+
+        assert (
+            getattr(cod3s_platform, "_SUPPORTS_CONTROLLER_SERVICE_INPUT", False) is True
+        )
 
 
 # ===========================================================================
