@@ -4,7 +4,7 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
-## 5.22.0 (unreleased)
+## 5.22.0 (2026-11-18)
 
 - A controller reads a service. `ObjCtrl` accepts a controller input of kind
   `service`: a boolean observed on `{name}_in`, the box a discrete input flow
