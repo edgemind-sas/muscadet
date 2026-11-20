@@ -301,7 +301,9 @@ def evaluate_demand(comp):
     at the end of a chain fill instead of asking for nothing.
 
     An input no rule and no transfer covers is a pure consumer's input: it
-    claims the demand it was DECLARED with, ``var_demand_default``.
+    claims the demand it was DECLARED with, ``var_demand_default``, multiplied
+    by its time profile when it declares one (the factor is published on
+    ``{flow}_in_profile``).
 
     Returns
     -------
@@ -415,8 +417,19 @@ def evaluate_demand(comp):
 
     # A continuous input no rule and no transfer covers claims what it was
     # declared with: a pure consumer has no output to map a demand back from.
+    # A profile on it scales that declared demand. Read at the solver's own
+    # instant rather than through the production sweep's memo, which this band
+    # runs before and which belongs to that sweep. The pre-run step has refused
+    # a profile on every input covered above, so none is skipped here.
     for flow_name, flow in comp.flows_continuous_in.items():
-        demands.setdefault(flow_name, float(flow.var_demand_default))
+        if flow_name in demands:
+            continue
+        demand = float(flow.var_demand_default)
+        if flow.profile is not None:
+            factor = flow.get_profile_factor(comp.current_time())
+            flow.publish_profile_factor(factor)
+            demand *= factor
+        demands[flow_name] = demand
 
     return demands
 

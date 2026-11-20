@@ -28,6 +28,7 @@ Variable                             Owner        Meaning
 ``f_capability_in`` (reference)      in flow      capabilities published by the producers
 ``f_out_rate`` (``t_double``)        out flow     shared derating rate, 1 by default
 ``f_out_profile`` (``t_double``)     out flow     applied time-profile factor, if any
+``f_in_profile`` (``t_double``)      in flow      applied demand-profile factor, if any
 ===================================  ===========  ===================================
 
 The ``_in`` / ``_out`` suffix denotes the **direction of travel** of the quantity,
@@ -170,6 +171,14 @@ nothing to signal it. See :mod:`muscadet.profile` for the continuity rule -- why
 a discontinuous profile is refused rather than integrated wrong -- and for why a
 profile factor may not be negative.
 
+A continuous input may carry a profile too, on one condition: it is a PURE
+consumer's input, whose demand is the demand it was declared with. The profile
+then scales that declared demand, ``var_demand_default x profile(t)``, and the
+factor is published on ``{flow}_in_profile``. Any other input -- one a rule
+consumes, an output of the same name relays, a transfer pair names or a mixture
+group draws -- has its demand decided by that mechanism, and refuses a profile
+at the pre-run step (:meth:`muscadet.ObjFlow.check_input_profiles`).
+
 Scope
 -----
 This module owns the channels, the allocation policies and the two accessors
@@ -197,7 +206,12 @@ from .flow import (
     prod_cond_holds,
     prod_cond_readers,
 )
-from .profile import NOMINAL_FACTOR, PROFILE_VAR_FMT, build_profile
+from .profile import (
+    INPUT_PROFILE_VAR_FMT,
+    NOMINAL_FACTOR,
+    PROFILE_VAR_FMT,
+    build_profile,
+)
 
 #: "Nothing bounds this quantity". Read on a demand: an output no consumer is
 #: connected to is not throttled by anybody, and a component that derives no
@@ -667,6 +681,30 @@ class FlowContinuousIn(FlowContinuous):
         ),
     )
 
+    profile: typing.Any = pydantic.Field(
+        None,
+        exclude=True,
+        repr=False,
+        description=(
+            "A :class:`muscadet.Profile` the DECLARED demand is multiplied by: "
+            "a load curve, a daily cycle. Only a pure consumer's input takes "
+            "one -- an input whose demand a rule, a same-name output, a "
+            "transfer pair or a mixture group decides is refused at the "
+            "pre-run step, since the profile would scale nothing there."
+        ),
+    )
+
+    var_profile: typing.Any = pydantic.Field(
+        None,
+        exclude=True,
+        repr=False,
+        description=(
+            "``{flow}_in_profile``, created only on an input that declares a "
+            "profile. A read-only PUBLICATION of the factor the demand sweep "
+            "applied; writing it has no effect."
+        ),
+    )
+
     demand_required: float = pydantic.Field(
         UNBOUNDED,
         exclude=True,
@@ -682,7 +720,36 @@ class FlowContinuousIn(FlowContinuous):
         ),
     )
 
+    @pydantic.model_validator(mode="after")
+    def check_profile(self):
+        """Normalise the declared profile, refusing one that is not usable.
+
+        Whether this input may carry one at all depends on the rules, which are
+        declared after the flows: that is checked at the pre-run step.
+        """
+        self.profile = build_profile(self.profile, self.name)
+
+        return self
+
+    def initial_demand_value(self):
+        """The demand published before the first demand sweep has run.
+
+        The declared demand, scaled by the profile AT INSTANT 0 when one is
+        declared -- the input counterpart of
+        :meth:`FlowContinuousOut.initial_fed_value`, and for the same reason:
+        the engine samples instant 0 before evaluating any equation.
+        """
+        if self.profile is None:
+            return float(self.var_demand_default)
+
+        return float(self.var_demand_default) * self.profile.factor(0.0, self.name)
+
     def add_variables(self, comp, **kwargs):
+
+        # The profile as THIS flow carries it, keyed "<component>/<flow>" for
+        # its noise exactly as an output's is.
+        if self.profile is not None:
+            self.profile = self.profile.attached_to(comp.basename(), self.name)
 
         super().add_variables(comp, port="in", **kwargs)
 
@@ -693,8 +760,17 @@ class FlowContinuousIn(FlowContinuous):
         self.var_demand = comp.addVariable(
             f"{self.name}_demand_out",
             pyc.TVarType.t_double,
-            float(self.var_demand_default),
+            self.initial_demand_value(),
         )
+
+        # Only when a profile is declared, so an unprofiled input keeps exactly
+        # the variables it had.
+        if self.profile is not None:
+            self.var_profile = comp.addVariable(
+                self.profile_var_name(),
+                pyc.TVarType.t_double,
+                float(self.profile.factor(0.0, self.name)),
+            )
 
         # Capability channel: what the producers say they could deliver if
         # asked without bound (R-20). A reference, like the data channel and
@@ -731,6 +807,25 @@ class FlowContinuousIn(FlowContinuous):
         exists for.
         """
         return float(self.get_delivered())
+
+    def profile_var_name(self):
+        """Name of the published profile variable: ``X`` gives ``X_in_profile``."""
+        return INPUT_PROFILE_VAR_FMT.format(flow=self.name)
+
+    def get_profile_factor(self, time):
+        """The factor the declared demand is multiplied by at ``time``.
+
+        :data:`~muscadet.profile.NOMINAL_FACTOR` when no profile is declared.
+        """
+        if self.profile is None:
+            return NOMINAL_FACTOR
+
+        return self.profile.factor(time, self.name)
+
+    def publish_profile_factor(self, factor):
+        """Mirror the applied factor onto ``{flow}_in_profile``, if it exists."""
+        if self.var_profile is not None:
+            self.var_profile.setDValue(float(factor))
 
     def get_var_demand_value(self):
         """Return the demand this consumer currently publishes upstream."""

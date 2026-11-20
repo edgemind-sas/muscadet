@@ -575,7 +575,19 @@ class System(cod3s.PycSystem):
         muscadet.mixture.MixtureGroupError
             When a declared mixture group's flows do not all arrive from one
             capacity of one producer (R51).
+        muscadet.profile.ProfileEligibilityError
+            When a continuous input that is not a pure consumer's carries a
+            time profile.
         """
+        # A profile on an input whose demand a rule, a same-name output, a
+        # transfer pair or a mixture group decides scales nothing: refused
+        # first, before anything is resolved or registered, so the refusal is
+        # the same at every entry point.
+        for comp in self.comp.values():
+            check = getattr(comp, "check_input_profiles", None)
+            if check is not None:
+                check()
+
         # BEFORE any equation is registered, and that ordering is load bearing:
         # PyCATSHOO refuses to register an equation its manager already holds and
         # offers no removal, so a step that raises after registering could never

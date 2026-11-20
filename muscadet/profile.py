@@ -112,6 +112,22 @@ NOMINAL_FACTOR = 1.0
 #: has no effect, since the next evaluation overwrites it from the profile.
 PROFILE_VAR_FMT = "{flow}_out_profile"
 
+#: The same publication on a continuous INPUT whose declared demand a profile
+#: scales. Named apart from the output's, because a component may carry an
+#: input and an output of one name and profile both.
+INPUT_PROFILE_VAR_FMT = "{flow}_in_profile"
+
+
+class ProfileEligibilityError(ValueError):
+    """A profile declared on a continuous input whose demand it cannot scale.
+
+    Only a PURE consumer's input takes a profile: one whose demand is the
+    demand it was declared with. An input a rule consumes, an output of the
+    same name relays, a transfer pair names or a mixture group draws has its
+    demand decided by that mechanism, and a profile on it would scale nothing.
+    """
+
+
 #: What a modeller is told when a profile is not a declared-continuous one. It
 #: names the mechanism that would be needed rather than only the rule broken.
 _CONTINUITY_MESSAGE = (

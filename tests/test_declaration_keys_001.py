@@ -80,6 +80,8 @@ DK_FULL_FLOW_DECLARATIONS = {
         var_in_default=0.0,
         var_demand_default=3.0,
         demand_required=math.inf,
+        profile=muscadet.SinusoidalProfile(period=24.0, offset=1.0),
+        var_profile=None,
     ),
     "FlowContinuousOut": dict(
         name="q",
