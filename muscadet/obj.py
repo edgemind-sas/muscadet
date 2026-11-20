@@ -183,7 +183,7 @@ from .flow_continuous import (
 )
 from .initial_state import RANK_EFFECT, register_initial_evaluation
 from .mixture import MixtureIn
-from .profile import build_profile
+from .profile import ProfileEligibilityError, build_profile
 from .rules import (
     Rule,
     RuleMode,
@@ -1106,6 +1106,10 @@ class ObjFlow(cod3s.PycComponent):
             -- the DECLARED demand of a pure consumer, which has no output to
             map a demand back from (R34). Also what is published before the
             first demand sweep has run. Defaults to ``0.0``.
+        profile : muscadet.Profile or dict, optional
+            A time profile the declared demand is multiplied by, published on
+            ``{name}_in_profile``. Only a pure consumer's input takes one: see
+            :meth:`check_input_profiles`, run at the pre-run step.
         component_authorized : list of dict, optional
             Connection authorization patterns, as on a discrete flow.
         **params : dict
@@ -1122,6 +1126,75 @@ class ObjFlow(cod3s.PycComponent):
             self.flows_in[flow_name] = FlowContinuousIn(**params)
         else:
             raise ValueError(f"Input flow {flow_name} already exists")
+
+    def input_profile_refusal(self, flow_name):
+        """Why the continuous input ``flow_name`` cannot carry a profile, or None.
+
+        A profile scales the demand an input was DECLARED with, so it only
+        applies to a pure consumer's input: one whose demand no other mechanism
+        of this component decides. Mirrors the branches of
+        :func:`muscadet.evaluation.evaluate_demand` that come before the
+        declared demand.
+
+        Returns
+        -------
+        str or None
+            The reason, phrased to follow "but"; None when the input is a pure
+            consumer's.
+        """
+        for set_key, rule_set in (self.rule_sets or {}).items():
+            if flow_name in rule_set.consumed_flows:
+                return (
+                    f"rule set {set_key!r} consumes it: its demand follows from "
+                    f"what that rule is asked to produce"
+                )
+
+        for pair in (self.transfers or {}).values():
+            if flow_name in pair.flows:
+                return (
+                    f"transfer pair {pair.name!r} names it: its demand follows "
+                    f"from what that transfer moves"
+                )
+
+        for group in (self.mixtures or {}).values():
+            if flow_name in group.flows:
+                return (
+                    f"mixture group {group.name!r} draws it: its demand is the "
+                    f"group's volumetric rate"
+                )
+
+        if flow_name in self.get_transferable_flows():
+            return (
+                "the output of the same name relays it: its demand is what "
+                "that output's consumers ask for"
+            )
+
+        return None
+
+    def check_input_profiles(self):
+        """Refuse a profile on a continuous input that is not a pure consumer's.
+
+        Run at the pre-run step, before anything is registered: the rules,
+        transfers and mixture groups that decide an input's demand are declared
+        after its flows, so declaration time cannot tell.
+
+        Raises
+        ------
+        muscadet.profile.ProfileEligibilityError
+            Naming the input and the mechanism that decides its demand.
+        """
+        for flow_name, flow in self.flows_continuous_in.items():
+            if getattr(flow, "profile", None) is None:
+                continue
+            reason = self.input_profile_refusal(flow_name)
+            if reason is not None:
+                raise ProfileEligibilityError(
+                    f"Component {self.name()!r}: input flow {flow_name!r} "
+                    f"carries a time profile, but {reason}. A profile scales "
+                    f"the declared demand of a pure consumer only; profile the "
+                    f"mechanism that decides this demand instead, or remove "
+                    f"the profile"
+                )
 
     def add_flow_continuous_out(self, **params):
         """
@@ -2560,10 +2633,10 @@ class ObjFlow(cod3s.PycComponent):
                 self.system().pdmp_add_explicit_variable(flow.var_demand)
 
             if getattr(flow, "var_profile", None) is not None:
-                # Same reason again: the production sweep publishes the profile
-                # factor it applied. Only an output that DECLARES a profile
-                # carries the variable, so an unprofiled model registers
-                # nothing new.
+                # Same reason again: the production sweep (on an output) or the
+                # demand sweep (on an input) publishes the profile factor it
+                # applied. Only a flow that DECLARES a profile carries the
+                # variable, so an unprofiled model registers nothing new.
                 self.system().pdmp_add_explicit_variable(flow.var_profile)
 
             # Add default failure automata for output flows if enabled

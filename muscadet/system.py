@@ -33,6 +33,7 @@ from .ordering import (
     component_is_continuous,
     register_equation_order,
 )
+from .profile import register_noise_seed
 
 #: Name of the single PDMP manager a muscadet system owns. Every continuous
 #: declaration registers on *this* manager, which is what makes PyCATSHOO
@@ -574,7 +575,19 @@ class System(cod3s.PycSystem):
         muscadet.mixture.MixtureGroupError
             When a declared mixture group's flows do not all arrive from one
             capacity of one producer (R51).
+        muscadet.profile.ProfileEligibilityError
+            When a continuous input that is not a pure consumer's carries a
+            time profile.
         """
+        # A profile on an input whose demand a rule, a same-name output, a
+        # transfer pair or a mixture group decides scales nothing: refused
+        # first, before anything is resolved or registered, so the refusal is
+        # the same at every entry point.
+        for comp in self.comp.values():
+            check = getattr(comp, "check_input_profiles", None)
+            if check is not None:
+                check()
+
         # BEFORE any equation is registered, and that ordering is load bearing:
         # PyCATSHOO refuses to register an equation its manager already holds and
         # offers no removal, so a step that raises after registering could never
@@ -590,6 +603,12 @@ class System(cod3s.PycSystem):
         # has already been left alone by ``register_equation_order`` and is
         # left alone here too -- see the gate at the head of the method below.
         self.register_controller_crossings()
+
+        # The replica seed of the noisy profiles, drawn once per sequence; and
+        # nothing at all on a model without noise, which keeps its draws. Its
+        # place among the start methods changes no initial value: the noise is
+        # 0 at instant 0 on every replica.
+        register_noise_seed(self)
 
         # Last, so the settle is the last start method of the last component
         # and closes the initial fixpoint after every other one has run (#12).

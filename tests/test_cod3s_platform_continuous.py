@@ -316,22 +316,24 @@ class TestParseContinuousInterface:
                 }
             )
 
-    def test_modulated_demand_profile_rejected_on_an_input(self):
-        # The engine carries no profile channel on a continuous input: a
-        # modulated demand would be silently flattened to its nominal.
-        with pytest.raises(Cod3sPlatformImportError, match="sinusoidal"):
-            _parse_interface(
-                {
-                    "name": "water",
-                    "port_type": {"general": "input"},
-                    "flow_family": "continuous",
-                    "demand_profile": {
-                        "cls": "sinusoidal",
-                        "value": 2.0,
-                        "period": 12.0,
-                    },
-                }
-            )
+    def test_modulated_demand_profile_accepted_on_an_input(self):
+        # A continuous input carries a profile channel: the importer passes the
+        # modulation through, and the engine decides at pre-run whether the
+        # input is a pure consumer (see TestModulatedDemandAtPreRun).
+        fs = _parse_interface(
+            {
+                "name": "water",
+                "port_type": {"general": "input"},
+                "flow_family": "continuous",
+                "demand_profile": {
+                    "cls": "sinusoidal",
+                    "value": 2.0,
+                    "period": 12.0,
+                },
+            }
+        )
+        assert fs.nominal_rate == 2.0
+        assert fs.profile_spec == {"cls": "SinusoidalProfile", "period": 12.0}
 
     def test_allocation_policy_other_than_proportional_rejected(self):
         # v1 exposes proportional sharing only.
@@ -688,6 +690,53 @@ class TestProfileDecomposition:
         ), (
             "the modulated shape never reached build_profile: " f"{build_profile_spy!r}"
         )
+
+
+_SINE_DEMAND = {"cls": "sinusoidal", "value": 2.0, "period": 12.0, "offset": 1.0}
+
+
+class TestModulatedDemandAtPreRun:
+    def test_accepted_on_a_pure_consumer(self, cleanup_system):
+        from muscadet.profile import SinusoidalProfile
+
+        system = system_from_export(
+            _one(
+                {**_cont_in("water"), "demand_profile": _SINE_DEMAND},
+                sys_name="Mcont_in_sin",
+            )
+        )
+        cleanup_system.append(system)
+        flow = system.comp["C1"].flows_in["water"]
+        assert flow.var_demand_default == 2.0
+        assert isinstance(flow.profile, SinusoidalProfile)
+        # Nothing but its declaration sets this demand: pre-run accepts it.
+        system.simulate({"nb_runs": 1, "schedule": [0.0, 3.0]})
+
+    def test_refused_on_an_input_a_recipe_consumes(self, cleanup_system):
+        system = system_from_export(
+            _template_payload(
+                {
+                    "i": {**_cont_in("water"), "demand_profile": _SINE_DEMAND},
+                    "o": _cont_out("steam"),
+                },
+                sys_name="Mcont_in_recipe",
+                rule_sets=[
+                    {
+                        "name": "boil",
+                        "rules": [
+                            {
+                                "name": "boiling",
+                                "cons": {"water": 1.0},
+                                "prod": {"steam": 1.0},
+                            }
+                        ],
+                    }
+                ],
+            )
+        )
+        cleanup_system.append(system)
+        with pytest.raises(Exception, match="boil"):
+            system.simulate({"nb_runs": 1, "schedule": [0.0, 3.0]})
 
 
 # ---------------------------------------------------------------------------

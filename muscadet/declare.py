@@ -926,7 +926,9 @@ def _declared_object_spec(obj, registry, where):
 
     The keys written are the constructor's own parameter names, read off the
     signature, so a shape added to a registry serialises without touching this
-    module.
+    module. A parameter the object says it leaves out (``declaration_omits``:
+    the noise parameters of a profile carrying no noise) is not written, so a
+    declaration that does not use an optional modifier stays the one it was.
     """
     clsname = type(obj).__name__
 
@@ -940,6 +942,9 @@ def _declared_object_spec(obj, registry, where):
     spec = {"cls": clsname}
     for param in inspect.signature(type(obj).__init__).parameters:
         if param == "self" or not hasattr(obj, param):
+            continue
+        omits = getattr(obj, "declaration_omits", None)
+        if omits is not None and omits(param):
             continue
         value = getattr(obj, param)
         if not _is_serialisable(value):
@@ -2858,7 +2863,19 @@ def build_controller_component(system, spec):
 #: that does not know either refuses it rather than drop it: dropping the
 #: input breaks the condition that names it, and dropping the rank changes
 #: which mode's value a contested variable takes.
-SYSTEM_SPEC_VERSION = "1.1.0"
+#:
+#: 1.2.0 adds two profile shapes, ``TrapezoidProfile`` (``low``, ``high``,
+#: ``period``, ``high_duration``, ``ramp_duration``, ``phase_shift``) and
+#: ``PiecewiseLinearProfile`` (``points`` as ``[instant, factor]`` pairs,
+#: ``period``, ``phase_shift``); the clamp ``value_min`` / ``value_max`` on
+#: every modulated shape; the noise parameters ``noise_amplitude``,
+#: ``noise_time_scale`` and ``noise_key``, written only when the profile is
+#: noisy; and a ``profile`` on a continuous INPUT flow. New shapes and a new
+#: place a profile may sit are a minor. A 1.1.0 document rebuilds here
+#: unchanged. A reader that does not know them refuses them rather than drop
+#: them: a dropped shape or noise simulates another curve, and a dropped input
+#: profile a flat demand.
+SYSTEM_SPEC_VERSION = "1.2.0"
 
 
 #: The model-level key by which a declaration says whether it wants the

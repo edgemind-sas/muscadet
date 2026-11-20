@@ -1452,6 +1452,52 @@ my_plant.add_component(
 
 Its `amplitude` and `offset` are in **flow units**, so `rate` defaults to `1` there and the curve *is* the production. Everything a `SourceContinuous` does applies unchanged: a `control` port, an allocation policy, a failure mode derating it.
 
+`muscadet.TrapezoidProfile` is a periodic square whose edges are linear ramps: `low` and `high` are the two factors, `high_duration` the plateau, `ramp_duration` each ramp, `period` the cycle and `phase_shift` the instant the rising ramp starts. A zero ramp would be a jump and is refused, as is a wave whose two ramps and plateau do not fit in the period.
+
+```python
+profile=muscadet.TrapezoidProfile(
+    low=0.2, high=1.5, period=24.0, high_duration=11.0, ramp_duration=0.5,
+    phase_shift=6.0,
+)
+```
+
+`muscadet.PiecewiseLinearProfile` is a drawn curve: `points` lists `[instant, factor]` pairs over one `period`, the first at instant 0, instants strictly increasing and below the period. The factor is interpolated between neighbouring points, and the last point joins the first one of the next period, so the curve repeats without a jump.
+
+```python
+profile=muscadet.PiecewiseLinearProfile(
+    points=[[0.0, 0.5], [8.0, 1.2], [16.0, 0.8]], period=24.0
+)
+```
+
+All three take the clamps `value_min` (default 0, never negative) and `value_max` (default infinity).
+
+#### Noise drawn per sequence
+
+Every shipped shape takes a **smoothed noise** added to the curve before the clamp: `noise_amplitude` is its standard deviation and `noise_time_scale` the spacing of its nodes. Each node is a Gaussian draw, and the curve between two nodes is a smoothstep, so the noise is continuous and derivable. The first node is zero, so the factor at instant 0 is the noise-free curve on every sequence.
+
+```python
+profile=muscadet.SinusoidalProfile(
+    amplitude=0.3, period=12.0, offset=1.0,
+    noise_amplitude=0.1, noise_time_scale=2.0,
+)
+```
+
+The draws come from a counter-based generator keyed by a seed drawn once per Monte-Carlo sequence, a flow key and the node index: within a sequence the noise is a pure function of time, two sequences draw different noises, and two runs at one seed draw the same ones. The flow key (`noise_key`) is computed from `"<component>/<flow>"` when the profile is attached to a flow, so two components of one class get independent noises; the declaration carries it, and another engine receives the same key. A model carrying no noise draws exactly what it drew before, and its declaration carries no noise parameter.
+
+#### A profile on a pure consumer's demand
+
+A continuous **input** takes a profile too, when it belongs to a pure consumer: an input whose demand is the one it was declared with. The profile then scales that declared demand, `var_demand_default × profile(t)`, and the factor applied is published on `{flow}_in_profile` (an output publishes `{flow}_out_profile`, so an input and an output of one name keep apart).
+
+```python
+self.add_flow_continuous_in(
+    name="heat",
+    var_demand_default=2.0,
+    profile=muscadet.SinusoidalProfile(amplitude=0.4, period=24.0, offset=1.0),
+)
+```
+
+An input whose demand something else decides (a rule consuming it, an output of the same name relaying it, a transfer pair or a mixture group) refuses a profile at the pre-run step, with a message naming that mechanism.
+
 ### Driving a discrete output from a continuous value
 
 A boolean output may be conditioned on a continuous quantity: `var_prod_cond` accepts the very same `{name, op, value}` comparison operand a rule guard uses, and normalises a boolean operand naming a continuous flow the same way (see the guard operand section above for what that changes). That is the whole declaration of a threshold alarm — no component code reads the level, and no equation is written by hand:
@@ -2951,6 +2997,28 @@ Out of scope (deferred to later phases) :
 - Business attribute initial states (preserved in metadata as
   `attributes_initial` but not yet wired as `var_in_default`)
 - Indicators / observation points
+
+### Time profiles
+
+A continuous port declares its quantity as a profile `{"cls": <shape>,
+"value": <nominal rate>, ...}`: `production_profile` on an output,
+`demand_profile` on an input. `value` is always the nominal rate; the shape is
+the factor scaling it. `constant` builds no profile object, `sinusoidal` a
+`SinusoidalProfile`, `square` a `TrapezoidProfile` and `drawn` a
+`PiecewiseLinearProfile`, every modulated shape taking `value_min`,
+`value_max`, `noise_amplitude` and `noise_time_scale`. A parameter of another
+shape is refused by name. `noise_key` is never read from the export: muscadet
+derives it from the component and the flow.
+
+A modulated `demand_profile` is accepted on any continuous input; the engine
+refuses it at pre-run on an input that is not a pure consumer.
+
+A component may carry its own profile: an entry of its `attributes` with role
+`production_profile` or `demand_profile` and a whole profile as `value`. It
+replaces the profile of that flow on that component alone, shape, rate and
+modifiers together; the other components of the class keep the class profile.
+Any other per-instance override of a continuous flow is refused. The marker
+`_SUPPORTS_INSTANCE_FLOW_PROFILE_OVERRIDE` lets the platform probe the channel.
 
 ### Interface keys
 
