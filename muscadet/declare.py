@@ -926,7 +926,9 @@ def _declared_object_spec(obj, registry, where):
 
     The keys written are the constructor's own parameter names, read off the
     signature, so a shape added to a registry serialises without touching this
-    module.
+    module. A parameter the object says it leaves out (``declaration_omits``:
+    the noise parameters of a profile carrying no noise) is not written, so a
+    declaration that does not use an optional modifier stays the one it was.
     """
     clsname = type(obj).__name__
 
@@ -940,6 +942,9 @@ def _declared_object_spec(obj, registry, where):
     spec = {"cls": clsname}
     for param in inspect.signature(type(obj).__init__).parameters:
         if param == "self" or not hasattr(obj, param):
+            continue
+        omits = getattr(obj, "declaration_omits", None)
+        if omits is not None and omits(param):
             continue
         value = getattr(obj, param)
         if not _is_serialisable(value):

@@ -59,9 +59,45 @@ flow model means either nothing at all or a reverse flow, and muscadet models
 neither: :func:`muscadet.evaluation.deliver_output` clamps a delivered quantity
 at zero, so a negative factor would silently vanish on a plain output -- and
 would silently DRAIN an output capacity, which integrates what it is handed.
+
+Smoothed noise
+--------------
+Every modulated shape (sinusoid, trapezoid, piecewise-linear) takes an optional
+noise modifier, so the factor is::
+
+    factor(t) = clamp(base(t) + noise(t), value_min, value_max)
+
+``noise`` is a sequence of NODES every ``noise_time_scale``: node ``k`` sits at
+``t_k = k * noise_time_scale`` and carries ``noise_amplitude * z_k``, with
+``z_k`` a standard normal. Between two nodes the value follows a smoothstep,
+``z_k + (z_{k+1} - z_k) * s(u)`` with ``s(u) = 3u^2 - 2u^3``: continuous and
+differentiable, so the solver's error control sees it like any smooth curve.
+``z_0`` is fixed at 0, so the factor at instant 0 is the noise-free one on
+every replica: the value published at the start of a sequence does not depend
+on the order start methods run in, and does not jump at the first step.
+
+``z_k`` comes from a COUNTER-BASED generator (:func:`noise_node`): a pure
+function of the replica seed, the flow key and ``k``, written out below so that
+another engine and an editor preview can reproduce it to the bit. Nothing is
+drawn during integration; an evaluation is O(1) whatever ``t``.
+
+The **replica seed** is drawn once per Monte Carlo sequence, from the system's
+own generator, by ONE start method registered at the pre-run step
+(:func:`register_noise_seed`) only when at least one profile of the system
+carries noise. A model without noise therefore consumes exactly the draws it
+did before. Before any sequence -- at declaration -- the seed is
+:data:`NOISE_SEED_BEFORE_ANY_SEQUENCE`, which, with ``z_0 = 0``, changes no
+initial value.
+
+The **flow key** (``noise_key``) makes two flows' noises independent. When a
+noisy profile is attached to a component's flow without one, it is computed as
+:func:`flow_noise_key` of ``"<component>/<flow>"`` and stored on the profile,
+so the declaration carries it and another engine receives the same key. Two
+components of the same class thus get independent noises.
 """
 
 import bisect
+import inspect
 import math
 import typing
 
@@ -171,6 +207,21 @@ class Profile:
 
         return value
 
+    #: A profile built over a callable carries no noise modifier.
+    has_noise = False
+
+    def attached_to(self, component_name, flow_name):
+        """This profile as carried by ``flow_name`` of ``component_name``.
+
+        The override point for a profile whose behaviour depends on the flow
+        carrying it (the noise of the shipped shapes); unchanged here.
+        """
+        return self
+
+    def declaration_omits(self, param):
+        """True for a constructor parameter a declaration leaves out. None here."""
+        return False
+
     @staticmethod
     def _on(flow_name):
         return "" if flow_name is None else f" on output flow {flow_name}"
@@ -230,7 +281,330 @@ def _clamp(value, value_min, value_max):
     return min(max(value_min, value), value_max)
 
 
-class SinusoidalProfile(Profile):
+# ----------------------------------------------------------------------
+# Smoothed noise: a counter-based generator and its interpolation
+# ----------------------------------------------------------------------
+
+_MASK64 = 0xFFFFFFFFFFFFFFFF
+
+#: FNV-1a 64-bit parameters, for :func:`flow_noise_key`.
+_FNV_OFFSET_BASIS = 0xCBF29CE484222325
+_FNV_PRIME = 0x100000001B3
+
+#: The replica seed a noisy profile holds before any sequence has started, at
+#: declaration time. With ``z_0 = 0`` it influences no value at instant 0; it
+#: only makes an evaluation outside a run deterministic.
+NOISE_SEED_BEFORE_ANY_SEQUENCE = 0
+
+#: The flow key a noisy profile evaluated before being attached to any flow
+#: uses. Attaching it to a component's flow replaces it with
+#: :func:`flow_noise_key` unless a key was declared.
+UNATTACHED_NOISE_KEY = 0
+
+#: Name of the start method that draws the replica seed of every noisy profile.
+NOISE_SEED_METHOD_NAME = "seed_profile_noise"
+
+#: The constructor parameters of the noise modifier, written to a declaration
+#: only when the profile carries noise.
+NOISE_PARAMETERS = ("noise_amplitude", "noise_time_scale", "noise_key")
+
+
+def fnv1a_64(text):
+    """FNV-1a 64-bit hash of the UTF-8 bytes of ``text``.
+
+    Offset basis ``0xcbf29ce484222325``, prime ``0x100000001b3``: each byte is
+    XORed in, then the value is multiplied by the prime, modulo 2**64. Written
+    out rather than Python's ``hash()``, which is salted per process.
+
+    Returns
+    -------
+    int
+        In ``[0, 2**64)``.
+    """
+    value = _FNV_OFFSET_BASIS
+    for byte in text.encode("utf-8"):
+        value ^= byte
+        value = (value * _FNV_PRIME) & _MASK64
+    return value
+
+
+def flow_noise_key(component_name, flow_name):
+    """The 64-bit flow key of ``flow_name`` on ``component_name``.
+
+    :func:`fnv1a_64` of ``"<component>/<flow>"``. The same on every engine
+    and in every process, so a declaration and a rerun agree on it.
+    """
+    return fnv1a_64(f"{component_name}/{flow_name}")
+
+
+def _splitmix64(value):
+    """One SplitMix64 output for the state ``value`` (a 64-bit mixing step)."""
+    value = (value + 0x9E3779B97F4A7C15) & _MASK64
+    value = ((value ^ (value >> 30)) * 0xBF58476D1CE4E5B9) & _MASK64
+    value = ((value ^ (value >> 27)) * 0x94D049BB133111EB) & _MASK64
+    return value ^ (value >> 31)
+
+
+def replica_seed(draw):
+    """The integer replica seed of a uniform draw in ``[0, 1)``.
+
+    ``floor(draw * 2**53)``: the 53 bits of a double's mantissa, so two
+    different draws give two different seeds.
+    """
+    return int(float(draw) * 9007199254740992.0) & _MASK64
+
+
+def noise_node(seed, key, index):
+    """The standard normal ``z_index`` of the noise of one flow in one replica.
+
+    ``z_0`` is 0 by definition. Otherwise, all arithmetic modulo 2**64 and
+    ``splitmix64`` the usual SplitMix64 output function::
+
+        h  = splitmix64(splitmix64(splitmix64(seed) ^ key) ^ index)
+        u1 = ((h >> 11) + 1) / 2**53                  # in (0, 1]
+        u2 = (splitmix64(h) >> 11) / 2**53            # in [0, 1)
+        z  = sqrt(-2 ln u1) * cos(2 pi u2)            # Box-Muller
+
+    A pure function of its three arguments: there is no generator state, so a
+    node is the same whatever was evaluated before it.
+    """
+    if index == 0:
+        return 0.0
+
+    mixed = _splitmix64(_splitmix64(_splitmix64(seed) ^ key) ^ (index & _MASK64))
+    u1 = ((mixed >> 11) + 1) * 1.1102230246251565e-16
+    u2 = (_splitmix64(mixed) >> 11) * 1.1102230246251565e-16
+
+    return math.sqrt(-2.0 * math.log(u1)) * math.cos(2.0 * math.pi * u2)
+
+
+def _smoothstep(u):
+    """``3u^2 - 2u^3``: 0 and 1 at the ends, with zero slope at both."""
+    return u * u * (3.0 - 2.0 * u)
+
+
+def register_noise_seed(system):
+    """Register the start method drawing the replica seed of the noisy profiles.
+
+    Called once, from the pre-run step. Collects the profiles that carry noise
+    on every flow of every component; when there is none, registers NOTHING,
+    so a model without noise consumes the same draws as before the noise
+    existed. Otherwise registers ONE start method, on the first component
+    carrying a noisy profile, which draws a single ``system.RNG().drand()`` per
+    sequence and hands it to every noisy profile; each derives its own stream
+    from it through its flow key.
+
+    Returns
+    -------
+    list
+        The noisy profiles seeded per sequence. Empty when nothing is
+        registered, and on a second call.
+    """
+    if getattr(system, "_noise_seed_registered", False):
+        return []
+
+    host = None
+    profiles = []
+    for comp in system.comp.values():
+        for flows in (getattr(comp, "flows_out", {}), getattr(comp, "flows_in", {})):
+            for flow in flows.values():
+                profile = getattr(flow, "profile", None)
+                if profile is not None and getattr(profile, "has_noise", False):
+                    profiles.append(profile)
+                    if host is None:
+                        host = comp
+
+    if not profiles:
+        return []
+
+    def seed_profiles():
+        draw = system.RNG().drand()
+        for profile in profiles:
+            profile.seed_noise(draw)
+
+    host.addStartMethod(NOISE_SEED_METHOD_NAME, seed_profiles)
+
+    # PyCATSHOO stores a sequence in which no transition drew a date as THE
+    # deterministic sequence and replays it instead of simulating the next one
+    # (on by default). A draw made in a start method does not count, so a
+    # noisy model with no stochastic transition would give every replica the
+    # noise of the first. Off only here: a model without noise keeps it.
+    system.setStoreDeterministicSeq(False)
+    # Kept alive on the system for the lifetime of the engine registration.
+    system._noise_seed_method = seed_profiles
+    system._noise_seed_registered = True
+
+    return profiles
+
+
+class _ModulatedProfile(Profile):
+    """A shipped shape: a base curve, a clamp, and an optional noise modifier.
+
+    ``factor(t) = clamp(base(t) + noise(t), value_min, value_max)``. Subclasses
+    implement :meth:`_base`, unclamped, and call :meth:`_init_modulation` from
+    their constructor. See the module docstring for the noise.
+    """
+
+    def _init_modulation(
+        self, shape, value_min, value_max, noise_amplitude, noise_time_scale, noise_key
+    ):
+        value_min, value_max = _validated_clamp(shape, value_min, value_max)
+        noise_amplitude, noise_time_scale, noise_key = _validated_noise(
+            shape, noise_amplitude, noise_time_scale, noise_key
+        )
+
+        self.value_min = value_min
+        self.value_max = value_max
+        self.noise_amplitude = noise_amplitude
+        self.noise_time_scale = noise_time_scale
+        self.noise_key = noise_key
+        self.noise_seed = NOISE_SEED_BEFORE_ANY_SEQUENCE
+        self._noise_node_pair = None
+
+    @property
+    def has_noise(self):
+        """True when this profile carries a noise modifier."""
+        return self.noise_amplitude > 0.0
+
+    def _base(self, time):
+        raise NotImplementedError
+
+    def _modulated(self, time):
+        value = self._base(time)
+
+        if self.noise_amplitude > 0.0:
+            value += self.noise(time)
+
+        return _clamp(value, self.value_min, self.value_max)
+
+    def seed_noise(self, draw):
+        """Take the replica seed of a new sequence, from a uniform ``draw``."""
+        self.noise_seed = replica_seed(draw)
+
+    def noise(self, time):
+        """The noise added to the base curve at ``time``, before the clamp.
+
+        0 on a profile without noise. Otherwise ``noise_amplitude`` times the
+        smoothstep interpolation between the two nodes around ``time``, for
+        the current replica seed. O(1): two nodes, cached while ``time`` stays
+        between the same two.
+        """
+        if not self.noise_amplitude > 0.0:
+            return 0.0
+
+        position = time / self.noise_time_scale
+        index = math.floor(position)
+        key = UNATTACHED_NOISE_KEY if self.noise_key is None else self.noise_key
+
+        pair = self._noise_node_pair
+        if pair is None or pair[0] != (self.noise_seed, key, index):
+            pair = (
+                (self.noise_seed, key, index),
+                noise_node(self.noise_seed, key, index),
+                noise_node(self.noise_seed, key, index + 1),
+            )
+            self._noise_node_pair = pair
+
+        _, start, end = pair
+        z = start + (end - start) * _smoothstep(position - index)
+
+        return self.noise_amplitude * z
+
+    def attached_to(self, component_name, flow_name):
+        """This profile as carried by ``flow_name`` of ``component_name``.
+
+        A noisy profile without a declared ``noise_key`` gets the flow's key
+        (:func:`flow_noise_key`). It is a NEW profile rather than this one
+        modified, because the same object may be handed to several flows --
+        two components of one class -- and each must keep its own key.
+        Anything else is returned unchanged.
+        """
+        if not self.has_noise or self.noise_key is not None:
+            return self
+
+        params = {
+            name: getattr(self, name)
+            for name in inspect.signature(type(self).__init__).parameters
+            if name != "self" and hasattr(self, name)
+        }
+        params["noise_key"] = flow_noise_key(component_name, flow_name)
+
+        return type(self)(**params)
+
+    def declaration_omits(self, param):
+        """True for a constructor parameter a declaration leaves out.
+
+        The noise parameters are written only when the profile carries noise,
+        so the declaration of a noise-free profile is the one it always was.
+        """
+        return param in NOISE_PARAMETERS and not self.has_noise
+
+    def _noise_repr(self):
+        if not self.has_noise:
+            return ""
+        return (
+            f", noise_amplitude={self.noise_amplitude:g}, "
+            f"noise_time_scale={self.noise_time_scale:g}, "
+            f"noise_key={self.noise_key!r}"
+        )
+
+
+def _validated_noise(shape, noise_amplitude, noise_time_scale, noise_key):
+    """Check and normalise the noise parameters of a shape.
+
+    Returns
+    -------
+    tuple
+        ``(noise_amplitude, noise_time_scale, noise_key)``: a float, a float or
+        ``None``, an int or ``None``.
+
+    Raises
+    ------
+    ValueError
+        If the amplitude is negative or not finite, if only one of the
+        amplitude and the time scale is given, if the time scale is not
+        strictly positive, or if the key is not an integer in ``[0, 2**64)``.
+    """
+    noise_amplitude = float(noise_amplitude)
+    if not (noise_amplitude >= 0.0 and math.isfinite(noise_amplitude)):
+        raise ValueError(
+            f"{shape}: noise_amplitude must be a finite non-negative number, "
+            f"got {noise_amplitude:g}"
+        )
+
+    if noise_amplitude > 0.0:
+        if noise_time_scale is None:
+            raise ValueError(
+                f"{shape}: noise_amplitude={noise_amplitude:g} needs a "
+                "noise_time_scale, the spacing of the noise nodes"
+            )
+        noise_time_scale = float(noise_time_scale)
+        if not (noise_time_scale > 0.0 and math.isfinite(noise_time_scale)):
+            raise ValueError(
+                f"{shape}: noise_time_scale must be strictly positive and "
+                f"finite, got {noise_time_scale:g}; it is the spacing of the "
+                "noise nodes"
+            )
+    elif noise_time_scale is not None:
+        raise ValueError(
+            f"{shape}: noise_time_scale={noise_time_scale!r} is declared without "
+            "noise; give a positive noise_amplitude, or leave both out"
+        )
+
+    if noise_key is not None:
+        if isinstance(noise_key, bool) or not isinstance(noise_key, int):
+            raise ValueError(
+                f"{shape}: noise_key must be an integer, got {noise_key!r}"
+            )
+        if not 0 <= noise_key <= _MASK64:
+            raise ValueError(
+                f"{shape}: noise_key must fit in 64 unsigned bits, got {noise_key}"
+            )
+
+    return noise_amplitude, noise_time_scale, noise_key
+
+
+class SinusoidalProfile(_ModulatedProfile):
     """A sinusoid of simulation time, clamped between two bounds.
 
     ``amplitude * sin(2*pi * (t - phase_shift) / period) + offset``, clamped
@@ -256,12 +630,22 @@ class SinusoidalProfile(Profile):
         as a reverse flow.
     value_max : float, optional
         Upper clamp. Defaults to ``math.inf``.
+    noise_amplitude : float, optional
+        Standard deviation of the smoothed noise added to the curve before the
+        clamp. Defaults to 0, no noise. See the module docstring.
+    noise_time_scale : float, optional
+        Spacing of the noise nodes, strictly positive. Required when
+        ``noise_amplitude`` is positive, refused otherwise.
+    noise_key : int, optional
+        64-bit flow key of the noise. Computed from the component and flow
+        names when the profile is attached to a flow, if left out.
 
     Raises
     ------
     ValueError
-        If ``period`` is not strictly positive, if ``value_min`` is negative, or
-        if the clamps are declared the wrong way round.
+        If ``period`` is not strictly positive, if ``value_min`` is negative, if
+        the clamps are declared the wrong way round, or if the noise parameters
+        are invalid.
     """
 
     def __init__(
@@ -273,6 +657,9 @@ class SinusoidalProfile(Profile):
         value_min=0.0,
         value_max=math.inf,
         name=None,
+        noise_amplitude=0.0,
+        noise_time_scale=None,
+        noise_key=None,
     ):
         period = float(period)
         if not period > 0.0:
@@ -281,31 +668,32 @@ class SinusoidalProfile(Profile):
                 f"{period:g}; it is the duration of one cycle"
             )
 
-        value_min, value_max = _validated_clamp(
-            "SinusoidalProfile", value_min, value_max
+        self._init_modulation(
+            "SinusoidalProfile",
+            value_min,
+            value_max,
+            noise_amplitude,
+            noise_time_scale,
+            noise_key,
         )
 
         self.amplitude = float(amplitude)
         self.period = period
         self.phase_shift = float(phase_shift)
         self.offset = float(offset)
-        self.value_min = value_min
-        self.value_max = value_max
 
-        super().__init__(fun=self._sinusoid, continuous=True, name=name)
+        super().__init__(fun=self._modulated, continuous=True, name=name)
 
-    def _sinusoid(self, time):
+    def _base(self, time):
         angle = (time - self.phase_shift) * (2 * math.pi / self.period)
-        value = self.amplitude * math.sin(angle) + self.offset
-
-        return _clamp(value, self.value_min, self.value_max)
+        return self.amplitude * math.sin(angle) + self.offset
 
     def __repr__(self):
         return (
             f"SinusoidalProfile(amplitude={self.amplitude:g}, "
             f"period={self.period:g}, phase_shift={self.phase_shift:g}, "
             f"offset={self.offset:g}, value_min={self.value_min:g}, "
-            f"value_max={self.value_max:g})"
+            f"value_max={self.value_max:g}{self._noise_repr()})"
         )
 
 
@@ -320,7 +708,7 @@ def _validated_period(shape, period):
     return period
 
 
-class TrapezoidProfile(Profile):
+class TrapezoidProfile(_ModulatedProfile):
     """A periodic square wave whose edges are linear ramps.
 
     Within one period, with ``u = (t - phase_shift) mod period``: a linear ramp
@@ -352,14 +740,23 @@ class TrapezoidProfile(Profile):
         Lower clamp. Defaults to 0, and may not be negative.
     value_max : float, optional
         Upper clamp. Defaults to ``math.inf``.
+    noise_amplitude : float, optional
+        Standard deviation of the smoothed noise added to the curve before the
+        clamp. Defaults to 0, no noise. See the module docstring.
+    noise_time_scale : float, optional
+        Spacing of the noise nodes, strictly positive. Required when
+        ``noise_amplitude`` is positive, refused otherwise.
+    noise_key : int, optional
+        64-bit flow key of the noise. Computed from the component and flow
+        names when the profile is attached to a flow, if left out.
 
     Raises
     ------
     ValueError
         If a ramp is not strictly positive, if the period is not strictly
         positive, if the plateau is negative, if the plateau and both ramps do
-        not fit in one period, if a level is negative, or if the clamp is
-        invalid.
+        not fit in one period, if a level is negative, or if the clamp or the
+        noise parameters are invalid.
     """
 
     def __init__(
@@ -372,6 +769,9 @@ class TrapezoidProfile(Profile):
         phase_shift=0.0,
         value_min=0.0,
         value_max=math.inf,
+        noise_amplitude=0.0,
+        noise_time_scale=None,
+        noise_key=None,
     ):
         shape = "TrapezoidProfile"
         period = _validated_period(shape, period)
@@ -408,7 +808,9 @@ class TrapezoidProfile(Profile):
                     "reverse flow"
                 )
 
-        value_min, value_max = _validated_clamp(shape, value_min, value_max)
+        self._init_modulation(
+            shape, value_min, value_max, noise_amplitude, noise_time_scale, noise_key
+        )
 
         self.low = low
         self.high = high
@@ -416,15 +818,13 @@ class TrapezoidProfile(Profile):
         self.high_duration = high_duration
         self.ramp_duration = ramp_duration
         self.phase_shift = float(phase_shift)
-        self.value_min = value_min
-        self.value_max = value_max
 
         self._fall_start = ramp_duration + high_duration
         self._fall_end = self._fall_start + ramp_duration
 
-        super().__init__(fun=self._trapezoid, continuous=True, name=shape)
+        super().__init__(fun=self._modulated, continuous=True, name=shape)
 
-    def _trapezoid(self, time):
+    def _base(self, time):
         u = (time - self.phase_shift) % self.period
 
         if u < self.ramp_duration:
@@ -438,7 +838,7 @@ class TrapezoidProfile(Profile):
         else:
             value = self.low
 
-        return _clamp(value, self.value_min, self.value_max)
+        return value
 
     def __repr__(self):
         return (
@@ -446,11 +846,11 @@ class TrapezoidProfile(Profile):
             f"period={self.period:g}, high_duration={self.high_duration:g}, "
             f"ramp_duration={self.ramp_duration:g}, "
             f"phase_shift={self.phase_shift:g}, value_min={self.value_min:g}, "
-            f"value_max={self.value_max:g})"
+            f"value_max={self.value_max:g}{self._noise_repr()})"
         )
 
 
-class PiecewiseLinearProfile(Profile):
+class PiecewiseLinearProfile(_ModulatedProfile):
     """A drawn periodic curve: points joined by segments.
 
     ``points`` lists ``[instant, factor]`` pairs within one period. With
@@ -475,12 +875,21 @@ class PiecewiseLinearProfile(Profile):
         Lower clamp. Defaults to 0, and may not be negative.
     value_max : float, optional
         Upper clamp. Defaults to ``math.inf``.
+    noise_amplitude : float, optional
+        Standard deviation of the smoothed noise added to the curve before the
+        clamp. Defaults to 0, no noise. See the module docstring.
+    noise_time_scale : float, optional
+        Spacing of the noise nodes, strictly positive. Required when
+        ``noise_amplitude`` is positive, refused otherwise.
+    noise_key : int, optional
+        64-bit flow key of the noise. Computed from the component and flow
+        names when the profile is attached to a flow, if left out.
 
     Raises
     ------
     ValueError
         If the points break any rule above, if the period is not strictly
-        positive, or if the clamp is invalid.
+        positive, or if the clamp or the noise parameters are invalid.
     """
 
     def __init__(
@@ -490,22 +899,25 @@ class PiecewiseLinearProfile(Profile):
         phase_shift=0.0,
         value_min=0.0,
         value_max=math.inf,
+        noise_amplitude=0.0,
+        noise_time_scale=None,
+        noise_key=None,
     ):
         shape = "PiecewiseLinearProfile"
         period = _validated_period(shape, period)
         points = self._validated_points(shape, points, period)
-        value_min, value_max = _validated_clamp(shape, value_min, value_max)
+        self._init_modulation(
+            shape, value_min, value_max, noise_amplitude, noise_time_scale, noise_key
+        )
 
         self.points = points
         self.period = period
         self.phase_shift = float(phase_shift)
-        self.value_min = value_min
-        self.value_max = value_max
 
         self._instants = tuple(instant for instant, _ in points)
         self._factors = tuple(factor for _, factor in points)
 
-        super().__init__(fun=self._piecewise, continuous=True, name=shape)
+        super().__init__(fun=self._modulated, continuous=True, name=shape)
 
     @staticmethod
     def _validated_points(shape, points, period):
@@ -557,7 +969,7 @@ class PiecewiseLinearProfile(Profile):
 
         return normalised
 
-    def _piecewise(self, time):
+    def _base(self, time):
         u = (time - self.phase_shift) % self.period
         instants = self._instants
         factors = self._factors
@@ -570,15 +982,14 @@ class PiecewiseLinearProfile(Profile):
         else:
             end, value_end = self.period, factors[0]
 
-        value = value_start + (value_end - value_start) * ((u - start) / (end - start))
-
-        return _clamp(value, self.value_min, self.value_max)
+        return value_start + (value_end - value_start) * ((u - start) / (end - start))
 
     def __repr__(self):
         return (
             f"PiecewiseLinearProfile(points={self.points!r}, "
             f"period={self.period:g}, phase_shift={self.phase_shift:g}, "
-            f"value_min={self.value_min:g}, value_max={self.value_max:g})"
+            f"value_min={self.value_min:g}, value_max={self.value_max:g}"
+            f"{self._noise_repr()})"
         )
 
 

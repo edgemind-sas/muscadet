@@ -33,6 +33,7 @@ from .ordering import (
     component_is_continuous,
     register_equation_order,
 )
+from .profile import register_noise_seed
 
 #: Name of the single PDMP manager a muscadet system owns. Every continuous
 #: declaration registers on *this* manager, which is what makes PyCATSHOO
@@ -590,6 +591,12 @@ class System(cod3s.PycSystem):
         # has already been left alone by ``register_equation_order`` and is
         # left alone here too -- see the gate at the head of the method below.
         self.register_controller_crossings()
+
+        # The replica seed of the noisy profiles, drawn once per sequence; and
+        # nothing at all on a model without noise, which keeps its draws. Its
+        # place among the start methods changes no initial value: the noise is
+        # 0 at instant 0 on every replica.
+        register_noise_seed(self)
 
         # Last, so the settle is the last start method of the last component
         # and closes the initial fixpoint after every other one has run (#12).

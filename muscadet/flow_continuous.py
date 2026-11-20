@@ -1214,6 +1214,12 @@ class FlowContinuousOut(FlowContinuous):
 
     def add_variables(self, comp, **kwargs):
 
+        # The profile as THIS flow carries it: a noisy shape without a declared
+        # key takes the key of "<component>/<flow>", so two components of one
+        # class get independent noises and the declaration carries the key.
+        if self.profile is not None:
+            self.profile = self.profile.attached_to(comp.basename(), self.name)
+
         super().add_variables(comp, port="out", **kwargs)
 
         # Demand channel: the demands published by the downstream consumers.
