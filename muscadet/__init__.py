@@ -125,7 +125,13 @@ from .ordering import (
     RateComparisonLoopError,
     RateObservationLoopError,
 )
-from .profile import Profile, SinusoidalProfile, build_profile
+from .profile import (
+    PiecewiseLinearProfile,
+    Profile,
+    SinusoidalProfile,
+    TrapezoidProfile,
+    build_profile,
+)
 from .rules import Rule, RuleOperand, RuleSet
 from .system import ModelChangedAfterPrerunError, System
 from .transfer import (

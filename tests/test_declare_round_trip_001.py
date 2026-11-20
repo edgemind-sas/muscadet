@@ -123,6 +123,89 @@ def test_a_profiled_output_survives_a_round_trip():
         cod3s.terminate_session()
 
 
+@pytest.mark.parametrize(
+    "profile",
+    [
+        {
+            "cls": "TrapezoidProfile",
+            "low": 2.0,
+            "high": 8.0,
+            "period": 24.0,
+            "high_duration": 10.0,
+            "ramp_duration": 5.0 / 60.0,
+            "phase_shift": 8.0,
+            "value_min": 3.0,
+            "value_max": 7.0,
+        },
+        {
+            "cls": "PiecewiseLinearProfile",
+            "points": [[0.0, 0.5], [6.0, 1.5], [12.0, 1.0]],
+            "period": 24.0,
+            "phase_shift": 2.0,
+            "value_max": 1.2,
+        },
+    ],
+    ids=["trapezoid", "piecewise_linear"],
+)
+def test_a_new_profile_shape_survives_a_round_trip(profile):
+    """Each shape writes back every constructor parameter, and nothing else."""
+    system = muscadet.System(name="DclRtProfileShape")
+    try:
+        comp = muscadet.build_component(
+            system,
+            {
+                "name": "C",
+                "flows": [
+                    {
+                        "cls": "FlowContinuousOut",
+                        "name": "q",
+                        "var_fed_default": 5.0,
+                        "profile": profile,
+                    }
+                ],
+            },
+        )
+        spec = muscadet.component_spec(comp)
+        (flow,) = [f for f in spec["flows"] if f["name"] == "q"]
+        written = flow["profile"]
+
+        # Every declared key comes back with its value, defaults filled in.
+        for key, value in profile.items():
+            assert written[key] == value
+        expected_keys = {
+            "TrapezoidProfile": {
+                "cls",
+                "low",
+                "high",
+                "period",
+                "high_duration",
+                "ramp_duration",
+                "phase_shift",
+                "value_min",
+                "value_max",
+            },
+            "PiecewiseLinearProfile": {
+                "cls",
+                "points",
+                "period",
+                "phase_shift",
+                "value_min",
+                "value_max",
+            },
+        }[profile["cls"]]
+        assert set(written) == expected_keys
+
+        rebuilt = muscadet.build_component(system, dict(spec, name="C2"))
+        original = comp.flows_out["q"].profile
+        copy = rebuilt.flows_out["q"].profile
+        assert type(copy) is type(original)
+        times = [i * 0.37 for i in range(200)]
+        assert [original.factor(t) for t in times] == [copy.factor(t) for t in times]
+    finally:
+        system.deleteSys()
+        cod3s.terminate_session()
+
+
 # ---------------------------------------------------------------------------
 # An occurrence law declared as an object
 # ---------------------------------------------------------------------------

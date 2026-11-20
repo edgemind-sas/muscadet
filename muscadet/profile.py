@@ -61,6 +61,7 @@ at zero, so a negative factor would silently vanish on a plain output -- and
 would silently DRAIN an output capacity, which integrates what it is handed.
 """
 
+import bisect
 import math
 import typing
 
@@ -178,6 +179,57 @@ class Profile:
         return f"{type(self).__name__}(continuous=True)"
 
 
+def _validated_clamp(shape, value_min, value_max):
+    """Check and normalise the ``[value_min, value_max]`` clamp of a shape.
+
+    Shared by every modulated shape so that the bounds are refused the same way
+    everywhere.
+
+    Parameters
+    ----------
+    shape : str
+        The class name, used in the error messages.
+    value_min, value_max : float
+        The lower and upper clamp.
+
+    Returns
+    -------
+    tuple of float
+        ``(value_min, value_max)`` as floats.
+
+    Raises
+    ------
+    ValueError
+        If ``value_min`` is negative, or if the bounds are the wrong way round.
+    """
+    value_min = float(value_min)
+    value_max = float(value_max)
+
+    if value_min < 0.0:
+        raise ValueError(
+            f"{shape}: value_min may not be negative, got "
+            f"{value_min:g}. A profile SCALES production, so a negative "
+            "factor would mean a negative quantity: muscadet models no "
+            "reverse flow, and such a value is clamped away on a plain "
+            "output while it drains a buffered one. Use value_min=0 to cut "
+            "the negative half-cycle, or add an offset to lift the whole "
+            "curve above zero"
+        )
+
+    if value_max < value_min:
+        raise ValueError(
+            f"{shape}: clamps declared the wrong way round, "
+            f"value_min={value_min:g} exceeds value_max={value_max:g}"
+        )
+
+    return value_min, value_max
+
+
+def _clamp(value, value_min, value_max):
+    """``value`` clamped into ``[value_min, value_max]``."""
+    return min(max(value_min, value), value_max)
+
+
 class SinusoidalProfile(Profile):
     """A sinusoid of simulation time, clamped between two bounds.
 
@@ -229,25 +281,9 @@ class SinusoidalProfile(Profile):
                 f"{period:g}; it is the duration of one cycle"
             )
 
-        value_min = float(value_min)
-        value_max = float(value_max)
-
-        if value_min < 0.0:
-            raise ValueError(
-                f"SinusoidalProfile: value_min may not be negative, got "
-                f"{value_min:g}. A profile SCALES production, so a negative "
-                "factor would mean a negative quantity: muscadet models no "
-                "reverse flow, and such a value is clamped away on a plain "
-                "output while it drains a buffered one. Use value_min=0 to cut "
-                "the negative half-cycle, or add an offset to lift the whole "
-                "curve above zero"
-            )
-
-        if value_max < value_min:
-            raise ValueError(
-                f"SinusoidalProfile: clamps declared the wrong way round, "
-                f"value_min={value_min:g} exceeds value_max={value_max:g}"
-            )
+        value_min, value_max = _validated_clamp(
+            "SinusoidalProfile", value_min, value_max
+        )
 
         self.amplitude = float(amplitude)
         self.period = period
@@ -262,7 +298,7 @@ class SinusoidalProfile(Profile):
         angle = (time - self.phase_shift) * (2 * math.pi / self.period)
         value = self.amplitude * math.sin(angle) + self.offset
 
-        return min(max(self.value_min, value), self.value_max)
+        return _clamp(value, self.value_min, self.value_max)
 
     def __repr__(self):
         return (
@@ -273,11 +309,286 @@ class SinusoidalProfile(Profile):
         )
 
 
+def _validated_period(shape, period):
+    """``period`` as a float, refused unless strictly positive."""
+    period = float(period)
+    if not period > 0.0:
+        raise ValueError(
+            f"{shape}: period must be strictly positive, got {period:g}; it is "
+            "the duration of one cycle"
+        )
+    return period
+
+
+class TrapezoidProfile(Profile):
+    """A periodic square wave whose edges are linear ramps.
+
+    Within one period, with ``u = (t - phase_shift) mod period``: a linear ramp
+    from ``low`` to ``high`` on ``[0, ramp_duration)``, ``high`` on
+    ``[ramp_duration, ramp_duration + high_duration)``, a linear ramp back to
+    ``low`` over the next ``ramp_duration``, and ``low`` for the rest of the
+    period. The result is clamped into ``[value_min, value_max]``.
+
+    The ramps are what keeps the wave continuous: a zero ramp would be a jump,
+    which the solver would integrate across without stopping at it, so it is
+    refused. Short ramps are fine; the solver's error control shortens its step
+    around them.
+
+    Parameters
+    ----------
+    low : float
+        Factor outside the plateau. May not be negative.
+    high : float
+        Factor on the plateau. May not be negative.
+    period : float
+        Duration of one cycle, strictly positive.
+    high_duration : float
+        Duration of the plateau, between the two ramps. May be 0.
+    ramp_duration : float
+        Duration of each ramp, strictly positive.
+    phase_shift : float, optional
+        Time at which the rising ramp starts. Defaults to 0.
+    value_min : float, optional
+        Lower clamp. Defaults to 0, and may not be negative.
+    value_max : float, optional
+        Upper clamp. Defaults to ``math.inf``.
+
+    Raises
+    ------
+    ValueError
+        If a ramp is not strictly positive, if the period is not strictly
+        positive, if the plateau is negative, if the plateau and both ramps do
+        not fit in one period, if a level is negative, or if the clamp is
+        invalid.
+    """
+
+    def __init__(
+        self,
+        low,
+        high,
+        period,
+        high_duration,
+        ramp_duration,
+        phase_shift=0.0,
+        value_min=0.0,
+        value_max=math.inf,
+    ):
+        shape = "TrapezoidProfile"
+        period = _validated_period(shape, period)
+        low = float(low)
+        high = float(high)
+        high_duration = float(high_duration)
+        ramp_duration = float(ramp_duration)
+
+        if not ramp_duration > 0.0:
+            raise ValueError(
+                f"{shape}: ramp_duration must be strictly positive, got "
+                f"{ramp_duration:g}. A zero ramp is a jump, a discontinuity the "
+                "solver would integrate across without stopping at it; give the "
+                "edge a duration, however short"
+            )
+
+        if high_duration < 0.0:
+            raise ValueError(
+                f"{shape}: high_duration may not be negative, got {high_duration:g}"
+            )
+
+        if 2.0 * ramp_duration + high_duration > period:
+            raise ValueError(
+                f"{shape}: the plateau ({high_duration:g}) and its two ramps "
+                f"({ramp_duration:g} each) last longer than the period "
+                f"({period:g})"
+            )
+
+        for label, level in (("low", low), ("high", high)):
+            if level < 0.0:
+                raise ValueError(
+                    f"{shape}: {label} may not be negative, got {level:g}; a "
+                    "profile factor scales production and muscadet models no "
+                    "reverse flow"
+                )
+
+        value_min, value_max = _validated_clamp(shape, value_min, value_max)
+
+        self.low = low
+        self.high = high
+        self.period = period
+        self.high_duration = high_duration
+        self.ramp_duration = ramp_duration
+        self.phase_shift = float(phase_shift)
+        self.value_min = value_min
+        self.value_max = value_max
+
+        self._fall_start = ramp_duration + high_duration
+        self._fall_end = self._fall_start + ramp_duration
+
+        super().__init__(fun=self._trapezoid, continuous=True, name=shape)
+
+    def _trapezoid(self, time):
+        u = (time - self.phase_shift) % self.period
+
+        if u < self.ramp_duration:
+            value = self.low + (self.high - self.low) * (u / self.ramp_duration)
+        elif u < self._fall_start:
+            value = self.high
+        elif u < self._fall_end:
+            value = self.high + (self.low - self.high) * (
+                (u - self._fall_start) / self.ramp_duration
+            )
+        else:
+            value = self.low
+
+        return _clamp(value, self.value_min, self.value_max)
+
+    def __repr__(self):
+        return (
+            f"TrapezoidProfile(low={self.low:g}, high={self.high:g}, "
+            f"period={self.period:g}, high_duration={self.high_duration:g}, "
+            f"ramp_duration={self.ramp_duration:g}, "
+            f"phase_shift={self.phase_shift:g}, value_min={self.value_min:g}, "
+            f"value_max={self.value_max:g})"
+        )
+
+
+class PiecewiseLinearProfile(Profile):
+    """A drawn periodic curve: points joined by segments.
+
+    ``points`` lists ``[instant, factor]`` pairs within one period. With
+    ``u = (t - phase_shift) mod period``, the factor is interpolated linearly
+    between the two points around ``u``; the last point is joined to the FIRST
+    one, one period later, so the curve repeats without a jump. The result is
+    clamped into ``[value_min, value_max]``.
+
+    Evaluation is a binary search over the instants, with no allocation.
+
+    Parameters
+    ----------
+    points : list of [float, float]
+        At least two ``[instant, factor]`` pairs. The first instant is exactly
+        0, instants are strictly increasing and below ``period``, and factors
+        are not negative. Stored as a list of two-float lists.
+    period : float
+        Duration of one cycle, strictly positive.
+    phase_shift : float, optional
+        Time at which the first point is reached. Defaults to 0.
+    value_min : float, optional
+        Lower clamp. Defaults to 0, and may not be negative.
+    value_max : float, optional
+        Upper clamp. Defaults to ``math.inf``.
+
+    Raises
+    ------
+    ValueError
+        If the points break any rule above, if the period is not strictly
+        positive, or if the clamp is invalid.
+    """
+
+    def __init__(
+        self,
+        points,
+        period,
+        phase_shift=0.0,
+        value_min=0.0,
+        value_max=math.inf,
+    ):
+        shape = "PiecewiseLinearProfile"
+        period = _validated_period(shape, period)
+        points = self._validated_points(shape, points, period)
+        value_min, value_max = _validated_clamp(shape, value_min, value_max)
+
+        self.points = points
+        self.period = period
+        self.phase_shift = float(phase_shift)
+        self.value_min = value_min
+        self.value_max = value_max
+
+        self._instants = tuple(instant for instant, _ in points)
+        self._factors = tuple(factor for _, factor in points)
+
+        super().__init__(fun=self._piecewise, continuous=True, name=shape)
+
+    @staticmethod
+    def _validated_points(shape, points, period):
+        try:
+            pairs = [list(pair) for pair in points]
+        except TypeError:
+            raise ValueError(
+                f"{shape}: points must be a list of [instant, factor] pairs, "
+                f"got {points!r}"
+            ) from None
+
+        if len(pairs) < 2:
+            raise ValueError(
+                f"{shape}: at least two points are needed, got {len(pairs)}"
+            )
+
+        normalised = []
+        for index, pair in enumerate(pairs):
+            if len(pair) != 2:
+                raise ValueError(
+                    f"{shape}: point {index} is {pair!r}, not an "
+                    "[instant, factor] pair"
+                )
+            instant, factor = float(pair[0]), float(pair[1])
+
+            if factor < 0.0:
+                raise ValueError(
+                    f"{shape}: point {index} has factor {factor:g}, and a "
+                    "profile factor may not be negative"
+                )
+            if not instant < period:
+                raise ValueError(
+                    f"{shape}: point {index} is at instant {instant:g}, which "
+                    f"is not below the period ({period:g}); the curve returns "
+                    "to its first point at the period by itself"
+                )
+            if normalised and not instant > normalised[-1][0]:
+                raise ValueError(
+                    f"{shape}: instants must be strictly increasing, point "
+                    f"{index} at {instant:g} follows {normalised[-1][0]:g}"
+                )
+            normalised.append([instant, factor])
+
+        if normalised[0][0] != 0.0:
+            raise ValueError(
+                f"{shape}: the first point must be at instant 0, got "
+                f"{normalised[0][0]:g}"
+            )
+
+        return normalised
+
+    def _piecewise(self, time):
+        u = (time - self.phase_shift) % self.period
+        instants = self._instants
+        factors = self._factors
+
+        index = bisect.bisect_right(instants, u) - 1
+        start, value_start = instants[index], factors[index]
+
+        if index + 1 < len(instants):
+            end, value_end = instants[index + 1], factors[index + 1]
+        else:
+            end, value_end = self.period, factors[0]
+
+        value = value_start + (value_end - value_start) * ((u - start) / (end - start))
+
+        return _clamp(value, self.value_min, self.value_max)
+
+    def __repr__(self):
+        return (
+            f"PiecewiseLinearProfile(points={self.points!r}, "
+            f"period={self.period:g}, phase_shift={self.phase_shift:g}, "
+            f"value_min={self.value_min:g}, value_max={self.value_max:g})"
+        )
+
+
 #: The profile shapes a declaration may name by string, for the ``{"cls": ...}``
 #: form the flow and component declarations already use elsewhere.
 PROFILE_CLASSES: typing.Dict[str, type] = {
     "Profile": Profile,
     "SinusoidalProfile": SinusoidalProfile,
+    "TrapezoidProfile": TrapezoidProfile,
+    "PiecewiseLinearProfile": PiecewiseLinearProfile,
 }
 
 
