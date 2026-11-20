@@ -281,12 +281,13 @@ class FlowSpec:
     # Target: ``FlowContinuousOut.var_fed_default`` on an output,
     # ``FlowContinuousIn.var_demand_default`` on an input.
     nominal_rate: Optional[float] = None
-    # CONTINUOUS output only — the MODULATION half of the profile
+    # CONTINUOUS family only — the MODULATION half of the profile
     # decomposition, in muscadet's own ``{"cls": "SinusoidalProfile", ...}``
     # mapping form, or ``None`` for a constant shape. muscadet's profile is a
-    # multiplicative FACTOR on ``var_fed_default`` and its shape library holds
-    # no constant shape, so a constant profile lives entirely in
-    # ``nominal_rate`` and never reaches ``muscadet.build_profile``.
+    # multiplicative FACTOR on ``var_fed_default`` (output) or
+    # ``var_demand_default`` (input) and its shape library holds no constant
+    # shape, so a constant profile lives entirely in ``nominal_rate`` and never
+    # reaches ``muscadet.build_profile``.
     profile_spec: Optional[dict] = None
     # CONTINUOUS output only — how an insufficient supply is split among the
     # consumers. v1 exposes proportional sharing only (muscadet's own default);
@@ -937,6 +938,15 @@ _SUPPORTS_MIXTURES = True
 # rather than let a study author meet a refusal naming a muscadet vocabulary.
 _SUPPORTS_CONTROLLER_SERVICE_INPUT = True
 
+# Capability marker (jumeau of _SUPPORTS_CONTROLLER_SERVICE_INPUT): this
+# muscadet reads a per-component profile of a continuous flow -- an entry of the
+# model component's ``attributes`` with role ``production_profile`` or
+# ``demand_profile`` and a whole profile as value -- and applies it to that
+# component alone. An older muscadet logs the role as unknown and simulates the
+# class profile, in silence; the platform refuses to emit the entry until it
+# reads this marker.
+_SUPPORTS_INSTANCE_FLOW_PROFILE_OVERRIDE = True
+
 # ---------------------------------------------------------------------------
 # Flow families (2026-08)
 # ---------------------------------------------------------------------------
@@ -1120,17 +1130,35 @@ _PROFILE_CONSTANT_SHAPE = "constant"
 _PROFILE_SHAPE_CLASSES: Dict[str, Optional[str]] = {
     _PROFILE_CONSTANT_SHAPE: None,
     "sinusoidal": "SinusoidalProfile",
+    # A periodic square whose fronts are linear ramps.
+    "square": "TrapezoidProfile",
+    # Points ``[instant, factor]`` over one period, joined by segments.
+    "drawn": "PiecewiseLinearProfile",
 }
+
+# Modifiers every MODULATED shape accepts: the clamp of the factor and the
+# smoothed noise drawn per sequence. ``noise_key`` is deliberately absent: the
+# platform never sends it, muscadet derives it from the component and the flow,
+# and a key written on a class would give every instance the same noise.
+_PROFILE_MODIFIER_PARAMS = frozenset(
+    {"value_min", "value_max", "noise_amplitude", "noise_time_scale"}
+)
 
 # Modulation parameters each shape accepts, beside ``cls`` and ``value``. An
 # allowlist rather than a passthrough: an unknown parameter reaching muscadet
 # would raise a TypeError from a constructor signature, which names neither the
-# port nor the platform shape.
+# port nor the platform shape. The twin of the platform's
+# ``PROFILE_SHAPE_PARAMS``; ``template_name``, which the platform strips before
+# export, is not in it and is refused like any other unknown key.
 _PROFILE_SHAPE_PARAMS: Dict[str, frozenset] = {
     _PROFILE_CONSTANT_SHAPE: frozenset(),
-    "sinusoidal": frozenset(
-        {"amplitude", "period", "phase_shift", "offset", "value_min", "value_max"}
-    ),
+    "sinusoidal": frozenset({"amplitude", "period", "phase_shift", "offset"})
+    | _PROFILE_MODIFIER_PARAMS,
+    "square": frozenset(
+        {"low", "high", "period", "high_duration", "ramp_duration", "phase_shift"}
+    )
+    | _PROFILE_MODIFIER_PARAMS,
+    "drawn": frozenset({"points", "period", "phase_shift"}) | _PROFILE_MODIFIER_PARAMS,
 }
 
 
@@ -1304,21 +1332,26 @@ def _parse_profile(
     *,
     flow_name: str,
     key: str,
-    allow_modulated: bool,
+    where: Optional[str] = None,
 ) -> Tuple[Optional[float], Optional[dict]]:
     """Decompose a platform profile into ``(nominal rate, profile mapping)``.
 
     Returns ``(None, None)`` when nothing is declared -- the port is then served
     by a recipe or by a capacity, and the muscadet defaults must stand.
 
-    ``allow_modulated`` is False on an input: muscadet carries a profile channel
-    on a continuous OUTPUT only, so a modulated demand would be flattened to its
-    nominal rate with nothing to signal the loss.
+    A modulated shape is accepted on an input as on an output. Whether that
+    input may carry one -- it must be a pure consumer, whose demand is the one
+    it declares -- depends on the rules of its component and is decided by the
+    engine at pre-run (:meth:`muscadet.ObjFlow.check_input_profiles`).
+
+    ``where`` names the declaration in the refusals; it defaults to the class
+    interface, and a per-component profile names its component instead.
     """
     if raw is None:
         return None, None
 
-    where = f"Interface {flow_name!r}: {key}"
+    if where is None:
+        where = f"Interface {flow_name!r}: {key}"
 
     if not isinstance(raw, dict):
         raise Cod3sPlatformImportError(
@@ -1376,14 +1409,6 @@ def _parse_profile(
         # Constant shape: the whole declaration IS the nominal rate. No profile
         # object, so nothing reaches build_profile.
         return rate, None
-
-    if not allow_modulated:
-        raise Cod3sPlatformImportError(
-            f"{where}: shape {shape!r} is a modulated profile, and muscadet "
-            "carries a time profile on a continuous OUTPUT only -- there is no "
-            "profile channel on a continuous input. Declare a "
-            f"{_PROFILE_CONSTANT_SHAPE!r} shape here."
-        )
 
     return rate, {"cls": cls_name, **params}
 
@@ -1458,11 +1483,10 @@ def _parse_continuous_interface(
     )
 
     if port_type == "input":
-        rate, _ = _parse_profile(
+        rate, profile_spec = _parse_profile(
             interface.get("demand_profile"),
             flow_name=name,
             key="demand_profile",
-            allow_modulated=False,
         )
         return FlowSpec(
             name=name,
@@ -1475,13 +1499,13 @@ def _parse_continuous_interface(
                 key="var_in_default",
             ),
             nominal_rate=rate,
+            profile_spec=profile_spec,
         )
 
     rate, profile_spec = _parse_profile(
         interface.get("production_profile"),
         flow_name=name,
         key="production_profile",
-        allow_modulated=True,
     )
 
     prod_cond = interface.get("prod_cond") or []
@@ -3101,7 +3125,20 @@ _ROLE_TO_DIRECTION: Dict[str, str] = {
     "tempo_activation": "output",
     "tempo_deactivation": "output",
 }
-_OVERRIDE_ROLES: frozenset = frozenset(_ROLE_TO_DIRECTION)
+# Per-instance PROFILE of a continuous flow, mapped to the direction it
+# applies to. The value is a whole platform profile ``{"cls", "value", ...}``,
+# and it REPLACES the profile of that flow on that component -- shape, nominal
+# rate and modifiers alike -- while the other components of the class keep the
+# class profile. Kept apart from :data:`_ROLE_TO_DIRECTION`, whose roles are all
+# discrete: these two apply to a continuous flow ONLY, and every discrete role
+# stays refused on one.
+_PROFILE_ROLE_TO_DIRECTION: Dict[str, str] = {
+    "production_profile": "output",
+    "demand_profile": "input",
+}
+_OVERRIDE_ROLES: frozenset = frozenset(_ROLE_TO_DIRECTION) | frozenset(
+    _PROFILE_ROLE_TO_DIRECTION
+)
 
 # --- Per-instance CAPACITY overrides (2026-08) -----------------------------
 #
@@ -3411,6 +3448,8 @@ def _apply_instance_overrides(
 
     * role=logic → replace the input flow's ``logic``
     * role=init → set the output flow's ``init_value``
+    * role=production_profile / demand_profile → replace the whole profile
+      (nominal rate and modulation) of a CONTINUOUS output / input
 
     Rejects role/direction mismatches (logic on output, init on input)
     with a clear error — these would indicate a corrupted snapshot
@@ -3425,7 +3464,9 @@ def _apply_instance_overrides(
     # matching indices, preserving the original order.
     out: List[FlowSpec] = list(flows)
     for (name, role), value in overrides.items():
-        target_direction = _ROLE_TO_DIRECTION[role]
+        target_direction = _ROLE_TO_DIRECTION.get(
+            role
+        ) or _PROFILE_ROLE_TO_DIRECTION.get(role)
         idx = next(
             (
                 i
@@ -3461,19 +3502,38 @@ def _apply_instance_overrides(
                 f"{other.direction} (snapshot corruption)"
             )
         flow = out[idx]
+        if role in _PROFILE_ROLE_TO_DIRECTION:
+            if flow.flow_family != CONTINUOUS_FAMILY:
+                raise Cod3sPlatformImportError(
+                    f"Component {comp_name!r}: instance override role={role} "
+                    f"is a continuous-family override and flow {name!r} is "
+                    f"{flow.flow_family}. A profile scales a rate, which a "
+                    "discrete flow does not carry."
+                )
+            rate, profile_spec = _parse_profile(
+                value,
+                flow_name=name,
+                key=role,
+                where=(
+                    f"Component {comp_name!r}, flow {name!r}: instance override "
+                    f"role={role}"
+                ),
+            )
+            out[idx] = replace(flow, nominal_rate=rate, profile_spec=profile_spec)
+            continue
         if flow.flow_family == CONTINUOUS_FAMILY:
             # Every role in _ROLE_TO_DIRECTION is a DISCRETE one: they carry
             # booleans, an aggregation logic or a tempo law, and none of them
             # has a continuous counterpart to be applied to. Applied anyway,
             # role=var_in_default would coerce its bool to a plausible rate of
             # 1.0 and the others would be dropped by the continuous kwargs
-            # builders without a word. Refused instead, by name -- the platform
-            # gains its continuous override roles in the unit that emits them.
+            # builders without a word. Refused instead, by name.
             raise Cod3sPlatformImportError(
                 f"Component {comp_name!r}: instance override role={role} is a "
                 f"discrete-family override and flow {name!r} is continuous. "
-                "No continuous instance override is carried yet; declare the "
-                "value on the KB interface."
+                "A continuous flow takes a per-instance profile only "
+                f"({', '.join(sorted(_PROFILE_ROLE_TO_DIRECTION))}); declare "
+                "any other value on the KB interface."
             )
         if role == "logic_in":
             new_logic = _parse_input_logic_value(
@@ -5001,6 +5061,10 @@ def _continuous_in_kwargs(flow: FlowSpec) -> Dict[str, Any]:
         kwargs["var_in_default"] = float(flow.var_in_default)
     if flow.nominal_rate is not None:
         kwargs["var_demand_default"] = flow.nominal_rate
+    # A modulated demand, scaling the declared one. Only a pure consumer's
+    # input takes it; the engine refuses it on any other at pre-run.
+    if flow.profile_spec is not None:
+        kwargs["profile"] = dict(flow.profile_spec)
 
     return kwargs
 

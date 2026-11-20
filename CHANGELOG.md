@@ -4,6 +4,53 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 5.23.0 (unreleased)
+
+- Two more profile shapes. `TrapezoidProfile` is a periodic square whose
+  edges are linear ramps (`low`, `high`, `period`, `high_duration`,
+  `ramp_duration`, `phase_shift`); a zero ramp, a jump, is refused, as is a
+  wave that does not fit in its period. `PiecewiseLinearProfile` is a drawn
+  curve: `[instant, factor]` points over one `period`, joined by segments,
+  the last point joining the first one of the next period, evaluated by binary
+  search. The clamp `value_min` / `value_max` is shared by every modulated
+  shape; `SinusoidalProfile` keeps exactly the factors it gave.
+- Smoothed noise on every modulated shape (`noise_amplitude`,
+  `noise_time_scale`): Gaussian nodes every `noise_time_scale`, joined by a
+  smoothstep, the first node at zero so the factor at instant 0 is the
+  noise-free curve. The draws come from a counter-based generator keyed by a
+  seed drawn once per Monte-Carlo sequence, a flow key and the node index. The
+  flow key `noise_key` is the FNV-1a 64 hash of `"<component>/<flow>"`, so two
+  components of one class draw independent noises. The seed draw is
+  registered only when the system holds a noisy profile, so a model without
+  noise draws exactly what it drew before; a noisy system stops replaying
+  stored deterministic sequences, which would give every replica the first
+  one's noise. Measured under MPI: two 2-rank runs at the same seed are
+  identical, and equal to the single-process run, on Open MPI 5.0.8.
+- A profile on a pure consumer's continuous input. It scales the declared
+  demand, `var_demand_default x profile(t)`, from the first sample on, and the
+  applied factor is published on `{flow}_in_profile`. An input whose demand a
+  rule, a same-name output, a transfer pair or a mixture group decides
+  refuses a profile at the pre-run step, naming that mechanism.
+- The COD3S Platform importer reads the shapes `square` (to
+  `TrapezoidProfile`) and `drawn` (to `PiecewiseLinearProfile`) and the
+  modifiers `value_min`, `value_max`, `noise_amplitude`, `noise_time_scale`
+  on every modulated shape; a parameter of another shape is refused by name,
+  and `noise_key` is never read from the export. A modulated `demand_profile`
+  is no longer refused on an input: it reaches the input flow, and the engine
+  decides at pre-run.
+- Per-component profiles from the COD3S Platform: an entry of a model
+  component's `attributes` with role `production_profile` or `demand_profile`
+  replaces the whole profile of that continuous flow on that component, the
+  other components of the class keeping the class profile. The same role on
+  a discrete flow, and any other per-instance override on a continuous flow,
+  stay refused. The marker `_SUPPORTS_INSTANCE_FLOW_PROFILE_OVERRIDE` lets the
+  platform probe the channel.
+- The system declaration carries the new shapes, the noise parameters (only
+  when the profile is noisy) and the `profile` of a continuous input.
+  Declaration format 1.2.0. `tests/fixtures/profile_declarations_reference.json`
+  is the reference declaration covering every case, shared with a second
+  engine reading the format.
+
 ## 5.22.0 (2026-11-18)
 
 - A controller reads a service. `ObjCtrl` accepts a controller input of kind
