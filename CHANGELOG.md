@@ -32,6 +32,11 @@ reconstructing them.
   quantity raises `ValueError`. `regularize_demands` takes the claims alone.
   Fixed shares and ordered priorities do not move; a priority tie is split at
   the raw pro rata.
+- The split proposed before the first sweep still weighs a demand reading
+  zero as the whole quantity, not as an unbounded claim: such a consumer has
+  not said what it wants yet, and must not take everything from one whose
+  declared demand is final. An infinite supply serves finite claims in full,
+  a null claim included.
 - `tests/test_split_raw_pro_rata_001.py` pins the split and
   `tests/test_demand_shared_supplier_001.py` the claim, replacing
   `test_claim_truncated_at_supply_001.py` and

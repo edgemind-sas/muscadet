@@ -49,8 +49,9 @@ demand)`` throws away. So it is published, on a channel of its own
 DOWNSTREAM like production and therefore ahead of the demand sweep. A demand is
 then bounded by::
 
-    demand_i = coefficient_i x min( downstream scale,
-                                    min over j != i of ( capability_j / coefficient_j ) )
+    demand_i = coefficient_i x min(
+        downstream scale,
+        min over j != i of ( capability_j / coefficient_j ) )
 
 The minimum runs over the OTHER inputs, never the one being sized. A claim is
 the need behind it, and a supply shared by several consumers is split in

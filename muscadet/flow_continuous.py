@@ -350,7 +350,11 @@ def split_proportional(available, demands):
     if total <= 0.0:
         return {key: 0.0 for key in demands}
 
-    return {key: available * demand / total for key, demand in demands.items()}
+    # A null demand is served nothing whatever the quantity: ``inf * 0`` is NaN.
+    return {
+        key: available * demand / total if demand > 0.0 else 0.0
+        for key, demand in demands.items()
+    }
 
 
 def split_shares(available, demands, shares):
@@ -479,17 +483,23 @@ def allocate(available, demands, split=None, trace=None):
         remaining = max(available - sum(capped.values()), 0.0)
 
         proposal = split(remaining, active) if active else {}
+        # What the capping pass below cannot repair: a NaN, and an infinite
+        # quantity proposed to a claim that is itself unbounded. An infinite
+        # quantity proposed to a finite claim is capped at that claim, which is
+        # how an infinite supply serves finite consumers in full.
         wrong = {
             key: quantity
             for key, quantity in proposal.items()
-            if not math.isfinite(quantity)
+            if quantity != quantity
+            or (math.isinf(quantity) and math.isinf(demands[key]))
         }
         if wrong:
             raise ValueError(
                 f"The split of {remaining} over the claims {active} proposes a "
                 f"non-finite quantity: {wrong}. A claim reaches a split as "
-                "declared, and may be unbounded (math.inf): a custom "
-                "allocation_fun has to handle that case."
+                "declared and may be unbounded (math.inf), which a custom "
+                "allocation_fun has to handle; an infinite quantity cannot be "
+                "split among unbounded claims."
             )
         if trace is not None:
             trace.append(dict(proposal))
@@ -1705,9 +1715,14 @@ class FlowContinuousOut(FlowContinuous):
         shapes what a component DELIVERS once it has produced, and this splits
         what has not been produced yet.
         """
-        split = allocate(
-            available, self.provisional_demands(), self.get_allocation_split()
-        )
+        # An underived demand may turn out to be anything up to the whole
+        # quantity, and that is the weight it is given. Left unbounded it would
+        # take everything from a consumer whose declared demand is final.
+        demands = {
+            name: (float(available) if math.isinf(demand) else demand)
+            for name, demand in self.provisional_demands().items()
+        }
+        split = allocate(available, demands, self.get_allocation_split())
 
         return split.get(comp_name)
 

@@ -99,6 +99,23 @@ def test_an_ample_supply_serves_every_claim_in_full():
     assert split == {"a": pytest.approx(2.0), "b": pytest.approx(3.0)}
 
 
+def test_an_infinite_supply_serves_finite_claims_in_full():
+    """Each proposal is infinite and capped at its claim; a null one gets 0."""
+    split = allocate(math.inf, {"a": 2.0, "b": 3.0, "c": 0.0})
+
+    assert split == {"a": 2.0, "b": 3.0, "c": 0.0}
+
+
+def test_an_infinite_supply_cannot_be_split_among_unbounded_claims():
+    with pytest.raises(ValueError, match="non-finite"):
+        allocate(math.inf, {"a": math.inf, "b": 2.0})
+
+
+def test_a_nan_claim_is_read_as_unbounded_and_a_negative_one_as_null():
+    assert allocate(5.0, {"a": math.nan, "b": 2.0}) == {"a": 5.0, "b": 0.0}
+    assert allocate(5.0, {"a": -1.0, "b": 2.0}) == {"a": 0.0, "b": 2.0}
+
+
 def test_fixed_shares_do_not_read_the_claims():
     def shares(available, active):
         return split_shares(available, active, {"a": 0.5, "b": 0.5})
@@ -194,6 +211,13 @@ def the_run():
     for key, shape in SCENARIOS:
         add_scenario(system, f"{key}_{shape}", RPR_ASKS[key], shape)
 
+    # A declared consumer beside one whose demand reads zero, for the split
+    # proposed before any sweep has run.
+    system.add_component(name="PROV_SRC", cls="RprSource")
+    for name, demand in (("PROV_DECLARED", RPR_NEED), ("PROV_SILENT", 0.0)):
+        system.add_component(name=name, cls="RprSink", demand=demand)
+        system.connect_flow(source="PROV_SRC", target=name, flow_name="w")
+
     first = f"{SCENARIOS[0][0]}_{SCENARIOS[0][1]}_SRC"
     system.comp[first].add_atm2states(
         name="rpr_clock",
@@ -206,6 +230,11 @@ def the_run():
     obs = {}
     try:
         system.isimu_start()
+        source = system.comp["PROV_SRC"].flows_out["w"]
+        obs["provisional"] = {
+            name: source.provisional_share(name, RPR_SUPPLY)
+            for name in ("PROV_DECLARED", "PROV_SILENT")
+        }
         order = system.equation_order
         for _ in range(RPR_ROUNDS):
             for name in order.capability_order:
@@ -245,6 +274,19 @@ def test_the_modest_consumer_is_served_its_raw_share(the_run, key, shape):
 @pytest.mark.parametrize("key", [key for key in RPR_ASKS if key != "UNBOUNDED"])
 def test_the_published_demand_is_the_one_declared(the_run, key):
     assert the_run["published"][key] == pytest.approx(RPR_ASKS[key])
+
+
+def test_a_silent_consumer_does_not_take_the_provisional_split(the_run):
+    """A demand reading zero before the first sweep weighs the whole quantity.
+
+    It may turn out to be anything up to that. Read as unbounded it would leave
+    the consumer whose demand is declared, and final, with nothing.
+    """
+    shares = the_run["provisional"]
+    declared = RPR_SUPPLY * RPR_NEED / (RPR_NEED + RPR_SUPPLY)
+
+    assert shares["PROV_DECLARED"] == pytest.approx(declared, rel=RPR_REL)
+    assert shares["PROV_SILENT"] == pytest.approx(RPR_SUPPLY - declared, rel=RPR_REL)
 
 
 def test_delete(the_run):

@@ -264,8 +264,9 @@ def evaluate_demand(comp):
     its own, ahead of this one, and :func:`~muscadet.capability.get_supply_scale`
     is what is read here::
 
-        demand_i = coefficient_i x min( downstream scale,
-                                        min over j != i of ( capability_j / coefficient_j ) )
+        demand_i = coefficient_i x min(
+            downstream scale,
+            min over j != i of ( capability_j / coefficient_j ) )
 
     The minimum runs over the OTHER inputs. An input is not bounded by its own
     supplier: its claim is the need behind it, so an electrolyser venting
