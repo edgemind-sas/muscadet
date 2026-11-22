@@ -71,8 +71,8 @@ what it has. That split is the **allocation policy** of the output flow:
 ===============  ============================================================
 Policy           What it does
 ===============  ============================================================
-``proportional`` splits in proportion to the demands, each truncated at the
-                 quantity available (the default)
+``proportional`` splits in proportion to the demands as declared (the
+                 default)
 ``shares``       splits at declared fixed shares, keyed by consumer name
 ``priority``     serves consumers in priority order until the supply is gone
 ===============  ============================================================
@@ -86,8 +86,9 @@ can no longer accept (:meth:`muscadet.capacity.Capacity.demand_claim`), which is
 how a tank stocks up (R36) and how a full one throttles its producer (R7). Such a
 claim may be :data:`UNBOUNDED` -- "whatever you can deliver" -- which needs no
 bound of its own: a delivery is the lesser of production and demand, so the
-producer's capability is what bounds it, and :func:`regularize_demands` turns it
-into a finite share before any split is proposed.
+producer's capability is what bounds it. It reaches a split as it is, and the
+proportional split serves it as the limit of an ever larger claim: the
+unbounded claimants take everything (:func:`split_proportional`).
 
 Whatever the policy, :func:`allocate` wraps it in the **surplus redistribution**
 loop of F2: a consumer capped at its demand releases what it did not take, and
@@ -310,14 +311,27 @@ def rate_observation_box(flow: str, port: str) -> str:
 
 
 def split_proportional(available, demands):
-    """Split ``available`` in proportion to ``demands``.
+    """Split ``available`` in proportion to ``demands``, as declared.
+
+    Each consumer weighs the demand it declares, so a shortage is shared at one
+    service ratio: 12 for demands of 6 and 18 serves 3 and 9, half of each.
+    That is what consumers in parallel on a saturating source receive, the
+    shortage reaching them through a common quantity (a sagging voltage, a
+    falling pressure).
+
+    An **unbounded** demand is the limit of an ever larger one, and the split
+    is continuous there: beside a demand growing without bound a finite one is
+    served less and less, and beside an unbounded one it is served nothing. The
+    unbounded claimants share the whole quantity equally. Nothing is divided
+    by an infinite total.
 
     Parameters
     ----------
     available : float
         The quantity to split.
     demands : mapping
-        ``{consumer: demand}``, every demand finite and non-negative.
+        ``{consumer: demand}``, every demand non-negative, possibly
+        :data:`UNBOUNDED`.
 
     Returns
     -------
@@ -325,12 +339,22 @@ def split_proportional(available, demands):
         ``{consumer: quantity}``, in the order of ``demands``. Every consumer
         demanding zero yields zeros rather than a division by a null total.
     """
+    unbounded = [key for key, demand in demands.items() if math.isinf(demand)]
+
+    if unbounded:
+        share = available / len(unbounded)
+        return {key: share if math.isinf(demands[key]) else 0.0 for key in demands}
+
     total = sum(demands.values())
 
     if total <= 0.0:
         return {key: 0.0 for key in demands}
 
-    return {key: available * demand / total for key, demand in demands.items()}
+    # A null demand is served nothing whatever the quantity: ``inf * 0`` is NaN.
+    return {
+        key: available * demand / total if demand > 0.0 else 0.0
+        for key, demand in demands.items()
+    }
 
 
 def split_shares(available, demands, shares):
@@ -384,37 +408,25 @@ def split_priority(available, demands, priorities):
     return allocation
 
 
-def regularize_demands(available, demands):
-    """Make ``demands`` usable by a split: finite, non-negative, ordered, and
-    no larger than what is available.
+def regularize_demands(demands):
+    """Make ``demands`` usable by a split: non-negative, ordered, never NaN.
 
-    Every claim is **truncated at the quantity available**, which is the most
-    any consumer could ever receive. An unbounded demand is the case that made
-    the rule necessary: without it a split would divide by an infinite total
-    and hand out NaN, and an unbounded demand is exactly what an output nobody
-    is connected to publishes upstream.
+    A claim is otherwise left **as declared**, an unbounded one included: it is
+    what the consumer needs, and the proportional policy weighs it as such
+    (:func:`split_proportional`). A NaN claim is read as an unbounded one.
 
-    Up to 5.10.0 only that case was truncated, and a finite claim entered the
-    split as declared. A proportional split then served the largest claim
-    rather than the largest need, and it was discontinuous at infinity: one
-    source of 5 shared by a consumer asking 2 and a consumer asking ``D`` served
-    the first 0.83, 0.01 and 1e-5 for ``D`` = 10, 1000 and 1e6, then 1.43 for an
-    unbounded ``D``. Truncated, it serves 1.43 whenever ``D`` reaches the
-    supply. Only the proportional policy reads the claims as weights, so it is
-    the only one whose result moves: shares and priorities never hand a
-    consumer more than the supply anyway.
-
-    The demand a consumer publishes is left as declared: it is what the
-    consumer needs, and a shortfall is read against it. The truncation is a
-    property of the split, applied where the quantity available is known.
+    From 5.11.0 to 5.23.0 every claim was truncated here at the quantity
+    available. The proportional split then served a claim of 6 and a claim of
+    18 on a supply of 12 at 4 and 8, two thirds of the first need and under
+    half of the second, where consumers sharing one source are all served the
+    same fraction of what they need.
     """
-    available = float(available)
     regular = {}
     for key, demand in demands.items():
         value = float(demand)
-        if math.isinf(value) or value != value:  # inf or NaN
-            value = available
-        regular[key] = max(min(value, available), 0.0)
+        if value != value:  # NaN
+            value = UNBOUNDED
+        regular[key] = max(value, 0.0)
     return regular
 
 
@@ -432,12 +444,14 @@ def allocate(available, demands, split=None, trace=None):
     available : float
         The quantity the producer has to give.
     demands : mapping
-        ``{consumer: demand}``. Regularised first: every claim is truncated at
-        ``available`` (:func:`regularize_demands`).
+        ``{consumer: demand}``, each as declared and possibly
+        :data:`UNBOUNDED` (:func:`regularize_demands`).
     split : callable, optional
         ``split(available, demands) -> {consumer: quantity}``. Defaults to
         :func:`split_proportional`. This is the shape of the R17 extension
-        point: a custom rule proposes a split and inherits the convergence.
+        point: a custom rule proposes a split and inherits the convergence. It
+        receives the claims as declared, so one of them may be
+        :data:`UNBOUNDED`.
     trace : list, optional
         When given, each pass appends its proposal to it -- the inspection
         surface for "one redistribution pass was not enough".
@@ -448,10 +462,17 @@ def allocate(available, demands, split=None, trace=None):
         ``{consumer: quantity}``, in the order of ``demands``. The distributed
         total is the available quantity, or the total demanded when that is
         less.
+
+    Raises
+    ------
+    ValueError
+        When the split proposes a quantity that is not finite: a custom rule
+        dividing by the total of the claims does, as soon as one of them is
+        unbounded, and the NaN would otherwise reach every level downstream.
     """
     split = split_proportional if split is None else split
     available = max(float(available), 0.0)
-    demands = regularize_demands(available, demands)
+    demands = regularize_demands(demands)
 
     capped = {}
     allocation = {}
@@ -462,6 +483,24 @@ def allocate(available, demands, split=None, trace=None):
         remaining = max(available - sum(capped.values()), 0.0)
 
         proposal = split(remaining, active) if active else {}
+        # What the capping pass below cannot repair: a NaN, and an infinite
+        # quantity proposed to a claim that is itself unbounded. An infinite
+        # quantity proposed to a finite claim is capped at that claim, which is
+        # how an infinite supply serves finite consumers in full.
+        wrong = {
+            key: quantity
+            for key, quantity in proposal.items()
+            if quantity != quantity
+            or (math.isinf(quantity) and math.isinf(demands[key]))
+        }
+        if wrong:
+            raise ValueError(
+                f"The split of {remaining} over the claims {active} proposes a "
+                f"non-finite quantity: {wrong}. A claim reaches a split as "
+                "declared and may be unbounded (math.inf), which a custom "
+                "allocation_fun has to handle; an infinite quantity cannot be "
+                "split among unbounded claims."
+            )
         if trace is not None:
             trace.append(dict(proposal))
 
@@ -1676,9 +1715,14 @@ class FlowContinuousOut(FlowContinuous):
         shapes what a component DELIVERS once it has produced, and this splits
         what has not been produced yet.
         """
-        split = allocate(
-            available, self.provisional_demands(), self.get_allocation_split()
-        )
+        # An underived demand may turn out to be anything up to the whole
+        # quantity, and that is the weight it is given. Left unbounded it would
+        # take everything from a consumer whose declared demand is final.
+        demands = {
+            name: (float(available) if math.isinf(demand) else demand)
+            for name, demand in self.provisional_demands().items()
+        }
+        split = allocate(available, demands, self.get_allocation_split())
 
         return split.get(comp_name)
 

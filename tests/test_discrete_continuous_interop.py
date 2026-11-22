@@ -82,13 +82,10 @@ ALLOC_SUPPLY = 10.0
 ALLOC_GATE_DEMAND = 20.0
 #: What the other consumer asks for.
 ALLOC_RIVAL_DEMAND = 10.0
-#: What the gated consumer actually CLAIMS: its mapped demand, bounded by what
-#: its own supplier can deliver (R-20, since 5.10.0). 20 asked of a supply of 10
-#: is a claim of 10, so the split is 1:1 ...
-ALLOC_GATE_CLAIM = min(ALLOC_GATE_DEMAND, ALLOC_SUPPLY)
-#: ... and the gated consumer is allocated this much of it.
+#: 20 against 10 splits the supply 2:1, so the gated consumer is allocated
+#: this much of it.
 ALLOC_GATE_SHARE = (
-    ALLOC_SUPPLY * ALLOC_GATE_CLAIM / (ALLOC_GATE_CLAIM + ALLOC_RIVAL_DEMAND)
+    ALLOC_SUPPLY * ALLOC_GATE_DEMAND / (ALLOC_GATE_DEMAND + ALLOC_RIVAL_DEMAND)
 )
 #: The bound both the guard and the discrete threshold compare against. Between
 #: the share actually allocated and the total the producer publishes, which is
@@ -808,7 +805,7 @@ def test_a_comparison_operand_reads_this_consumers_allocated_share(the_run):
     """R21 and R22 both read what THIS component gets, not the producer's total.
 
     The producer publishes 10 to its two consumers and this one is allocated
-    5 of it, below the bound of 8 that its guard and its alarm compare
+    6.667 of it, below the bound of 8 that its guard and its alarm compare
     against. Reading the published total instead would put both above the
     bound: the guard would select the rule consuming twice as much as the
     component can be served, and the alarm would fire on a quantity that never

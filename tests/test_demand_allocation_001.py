@@ -6,7 +6,7 @@ carries is the lesser of the two (KD4). This module pins down the upstream half:
 * a continuous input publishes a demand, aggregated over the connections feeding
   it (R5), and a component maps the demand aggregated on an output back onto its
   inputs through the active rule's DECLARED coefficients (R34), each claim then
-  bounded by what the rule's suppliers can deliver, its own included (R-20);
+  bounded by what the rule's OTHER inputs can sustain (R-20);
 * an insufficient supply is split by the output's declared policy -- proportional
   to demand, at fixed shares, or by ordered priorities -- or by a Python rule the
   component supplies itself (R16, R17, KD9);
@@ -52,10 +52,9 @@ CROSSING_TOL = 0.05
 #: did before R-20 bounded the demand -- by accident then, by declaration now.
 CAPACITY_FILL_RATE = 3.0
 
-#: AE16's split: 10 between claims of 8 and 12, the second truncated at the 10
-#: available before the proportional split reads it.
-AE16_C1_SHARE = 10.0 * 8.0 / (8.0 + 10.0)
-AE16_C2_SHARE = 10.0 * 10.0 / (8.0 + 10.0)
+#: AE16's split: 10 between claims of 8 and 12, each weighing what it declares.
+AE16_C1_SHARE = 10.0 * 8.0 / (8.0 + 12.0)
+AE16_C2_SHARE = 10.0 * 12.0 / (8.0 + 12.0)
 
 #: The cluster read at instant 0, before any production sweep has run: one
 #: producer of 10, two consumers asking for 2 and 3.
@@ -654,14 +653,11 @@ def the_run():
 
 
 def test_a_short_supply_is_split_in_proportion_to_the_demands(the_run):
-    """AE16: 10 to give, demands of 8 and 12, so 4.44 and 5.56.
+    """AE16: 10 to give, demands of 8 and 12, so 4 and 6.
 
     The default policy needs no declaration at all, and the distributed total is
-    the whole available quantity. Each claim is truncated at the 10 available
-    first (5.11.0): nobody can receive more than there is, so the claim of 12
-    weighs as 10, and the split is 8 against 10. Up to 5.10.0 it was 8 against
-    12, so 4 and 6 -- and a claim of a million left the first consumer next to
-    nothing, while an unbounded one, already truncated, left it 4.44.
+    the whole available quantity. Each claim weighs what it declares, so both
+    consumers are served half of what they asked for.
     """
     received = the_run["received"]
 
@@ -876,10 +872,10 @@ def test_a_priority_tie_falls_back_to_proportional_between_them():
     def tied(available, active):
         return split_priority(available, active, {"A": 1, "B": 1})
 
-    # A's claim of 6 is truncated at the 4 available, so the tie splits 4 : 2
+    # The tie splits the 4 available at the declared 6 : 2
     assert allocate(4.0, demands, tied) == {
-        "A": pytest.approx(4.0 * 4.0 / 6.0),
-        "B": pytest.approx(4.0 * 2.0 / 6.0),
+        "A": pytest.approx(3.0),
+        "B": pytest.approx(1.0),
     }
 
     # Ordered, the same demands and the same supply serve A first
@@ -892,18 +888,15 @@ def test_a_priority_tie_falls_back_to_proportional_between_them():
     }
 
 
-def test_an_unbounded_demand_is_regularised_to_what_is_available():
-    """An output nobody is connected to publishes an unbounded demand upstream.
+def test_an_unbounded_demand_takes_everything_without_a_nan():
+    """A split never divides by an infinite total.
 
-    A split may never divide by an infinite total, so an unbounded demand is
-    regularised to the whole available quantity -- the most any consumer could
-    receive.
+    An unbounded demand is the limit of an ever larger one: it is served the
+    whole available quantity and a finite demand beside it nothing.
     """
     allocation = allocate(10.0, {"A": UNBOUNDED, "B": 10.0}, split_proportional)
 
-    assert allocation["A"] == pytest.approx(5.0)
-    assert allocation["B"] == pytest.approx(5.0)
-    assert sum(allocation.values()) == pytest.approx(10.0)
+    assert allocation == {"A": 10.0, "B": 0.0}
 
     assert flow_continuous.UNBOUNDED == math.inf
 
@@ -984,7 +977,7 @@ def test_an_output_demand_maps_onto_the_inputs_in_the_declared_ratio(the_run):
     assert mapping["received"] == pytest.approx(6.0)
 
 
-def test_the_mapping_bounds_each_claim_by_its_supplier_when_an_input_is_scarce(the_run):
+def test_the_mapping_bounds_a_claim_by_the_other_input_when_one_is_scarce(the_run):
     """The recorded limitation of R34 -- and the half of it that is now closed.
 
     ``a`` can only be supplied at 3, so the rule runs at scale 1 and uses 2 of
@@ -1000,15 +993,14 @@ def test_the_mapping_bounds_each_claim_by_its_supplier_when_an_input_is_scarce(t
       6 and it distorted the split of any supply a second component competed
       for.
 
-    ``a`` itself is claimed at the 3 its supplier can deliver. Up to 5.9.0 it
-    was claimed at its nominal 9: the bound excluded the input being sized, so
-    a claim could exceed what its own supplier would ever deliver, and in a
-    proportional split that excess was taken from a rival.
+    ``a`` itself is claimed at its nominal 9, past the 3 its supplier can
+    deliver: nothing else bounds it, and the claim on the limiting reagent is
+    the need behind it, which is what a shared supply is split on.
     """
     mapping = the_run["mapping"]["SC"]
 
-    # ``a`` is bounded by its own supplier: 3 supplied / 3 per unit = 1
-    assert mapping["demand_a"] == pytest.approx(3.0)
+    # ``a`` is bounded by nothing else, so it claims its nominal 9
+    assert mapping["demand_a"] == pytest.approx(9.0)
 
     # ``b`` is bounded by what ``a`` can sustain: 3 supplied / 3 per unit = 1
     assert mapping["demand_b"] == pytest.approx(2.0)

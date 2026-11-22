@@ -667,13 +667,12 @@ def test_the_unbounded_demand_travels_where_nothing_bounds_it(the_run):
 
     The terminal tank claims without bound and that claim crosses the
     electrolyser's rule, exactly as R-11 says. What each input then publishes is
-    that claim bounded by what the rule's suppliers can sustain (R-20), the
-    input's own supplier included since 5.10.0:
+    that claim bounded by what the rule's OTHER input can sustain (R-20), and
+    the two inputs answer differently precisely because their suppliers do:
 
     * ``H2O`` is bounded by the battery's capability, and a stocked capacity is
-      unbounded, so the claim crosses it untouched -- R-11's ``inf``, still
-      travelling -- and stops at the water source, which delivers 2. Up to
-      5.9.0 the published claim was that ``inf``;
+      unbounded, so the claim crosses untouched. This is R-11's ``inf``, still
+      travelling;
     * ``Elec`` is bounded by the water: 2 of ``H2O`` per unit time against a
       coefficient of 4 is a scale of 0.5, and 1 of ``Elec`` per unit of scale
       makes 0.5. Against ``968d9b3`` this was ``inf`` too, and the electrolyser
@@ -683,7 +682,7 @@ def test_the_unbounded_demand_travels_where_nothing_bounds_it(the_run):
     exists for: on this path demand, delivery and consumption are one quantity.
     """
     for entry in settled(the_run["plant"]):
-        assert entry["H2O_demand"] == pytest.approx(ODC_H2O_RATE, rel=1e-6)
+        assert math.isinf(entry["H2O_demand"])
         assert entry["Elec_demand"] == pytest.approx(
             ODC_SCALE * ODC_CONS["Elec"], rel=1e-6
         )

@@ -1136,7 +1136,7 @@ self.add_flow_continuous_out(
 
 Whatever the policy, a consumer proposed more than it demanded is capped at its demand and the policy is applied again to what is left, until no consumer exceeds its demand.
 
-**Every claim is truncated at the quantity available before the split reads it**, since 5.11.0: nobody can receive more than there is, so a claim of 12 on a supply of 10 weighs as 10. Under the proportional policy this is what keeps the split continuous: a supply of 5 shared by a consumer asking 2 and one asking `D` served the first 0.83, 0.01 and 1e-5 for `D` = 10, 1000 and 1e6, then 1.43 for an unbounded `D`, which was already truncated. It now serves 1.43 whenever `D` reaches the supply. It also gives one need one share however it is modelled: a pure consumer declaring 12 and a rule whose downstream asks 12 (a claim bounded by its own supplier since 5.10.0) now weigh the same. Shares and priorities never hand a consumer more than the supply, so their results do not move. The demand a consumer publishes stays as declared, since a shortfall is read against it; an `allocation_fun` receives the truncated claims.
+**The proportional policy weighs each consumer by the demand it declares**: a supply of 12 shared by demands of 6 and 18 serves 3 and 9, half of each. Consumers in parallel on a saturating source are all served the same fraction of what they need, the shortage reaching them through a common quantity (a sagging voltage, a falling pressure). The split is continuous up to an unbounded demand: a supply of 5 shared by a consumer asking 2 and one asking `D` serves the first 0.83, 0.01 and 1e-5 for `D` = 10, 1000 and 1e6, and nothing for an unbounded `D`. An open outlet takes everything; several of them share it equally. One need gets one share however it is modelled: a pure consumer declaring 18 and a rule whose downstream asks 18 weigh the same. A volume meant to share its source with others therefore declares a finite `fill_rate`, not `math.inf`. Shares and priorities never read a claim as a weight. An `allocation_fun` receives the claims as declared, an unbounded one included, and a split proposing a non-finite quantity is refused. From 5.11.0 to 5.23.0 each claim was truncated at the quantity available before the split read it, which served 4 and 8 in the first example.
 
 A declaration that cannot be applied — an unknown policy name, shares that do not sum to 1, `"shares"` without an `allocation_shares` map — is refused at declaration time rather than showing up as a slightly wrong split inside a run.
 
@@ -1160,7 +1160,7 @@ Three quantities travel through a continuous component:
 | | |
 |---|---|
 | **capability** | what each of its outputs could deliver if asked without bound — published downstream so its consumers can size a claim they can honour |
-| **demand** | what it publishes upstream — the downstream demand mapped back through the rule's declared coefficients, bounded by the scale its suppliers can sustain, its own included |
+| **demand** | what it publishes upstream — the downstream demand mapped back through the rule's declared coefficients, bounded by the scale the rule's other inputs can sustain |
 | **delivery** | what its suppliers actually give it — the lesser of production, demand and its allocated share |
 | **consumption** | what its rule actually uses — `scale × uptake × coefficient`: the scale set by the scarcest input, and the `uptake` its outputs were actually produced at |
 
@@ -1195,7 +1195,7 @@ Three draws are deliberately **not** capped, and none of them destroys anything:
 - an input **no rule accounts for** — a pure consumer *is* the sink;
 - a connection whose producer never allocated a split, which has nothing to correct.
 
-**Demand equals consumption too**, and the capability channel is what makes it so.
+**Demand equals consumption too** on every input but the limiting one, and the capability channel is what makes it so.
 
 The demand is mapped back through the *declared* coefficients — production has not run, so there is no scale to size it on — and left at that, a component limited by a scarce reagent asked for its nominal share of the abundant ones. It no longer took it, but it still competed for it, and two consumers of one supply were split in proportion to a demand one of them could not honour: `0.999` against `0.001` under an unbounded downstream demand, where `0.0909` and `0.909` are the shares each can actually use.
 
@@ -1215,10 +1215,10 @@ A demand is bounded by
 
 ```
 demand_i = coefficient_i × min( downstream scale ,
-                                min over j of ( capability_j / coefficient_j ) )
+                                min over j ≠ i of ( capability_j / coefficient_j ) )
 ```
 
-The minimum runs over **every** input, the one being sized included, so no claim exceeds what its own supplier could deliver. Up to 5.9.0 it ran over `j ≠ i`, on the fear that bounding an input by its own supplier would freeze it at what it already gets. That fear holds for a bound read from what *arrived*, not for a capability, which is computed with the demand removed and does not shrink with the claim. What the exclusion did instead was let a claim run past any supply: an electrolyser venting oxygen to a sink asking 1000 claimed 1666.67 of water from a pump delivering 5, and inside a proportional split that figure decided who was served. One source of 5 feeding a unit that needs 2 and a unit whose downstream asks `D`: the first got 0.83, 0.01 and 1e-5 for `D` = 10, 1000 and 1e6, then 1.43 for an unbounded `D`. It now gets 1.43 in every case.
+The minimum runs over the **other** inputs: a reaction short of one reagent does not claim the others it could not use. The input being sized is not bounded by its own supplier. Its claim is the need behind it, which may exceed the supply: an electrolyser venting oxygen to a sink asking 1000 claims 1666.67 of water from a pump delivering 5, and is delivered 5. On a shared supply that figure is the weight of the need. One source of 12 feeding a unit that needs 6 and a unit whose downstream asks 18 serves them 3 and 9, as it serves two plain consumers declaring 6 and 18. From 5.10.0 to 5.23.0 the minimum ran over every input, which truncated the second claim at 12 and served 4 and 8.
 
 The bound is only as good as the capabilities it reads. A component that replaces `compute_production` with an equation of its own must replace `compute_capability` too, or its outputs publish what the generic sweep computes (`var_fed_default`, 0 by default) and its consumers ask it for nothing.
 
