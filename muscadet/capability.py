@@ -50,17 +50,14 @@ DOWNSTREAM like production and therefore ahead of the demand sweep. A demand is
 then bounded by::
 
     demand_i = coefficient_i x min( downstream scale,
-                                    min over j of ( capability_j / coefficient_j ) )
+                                    min over j != i of ( capability_j / coefficient_j ) )
 
-The minimum runs over every input, the one being sized included. Up to 5.9.0 it
-ran over ``j != i`` only, on the grounds that including the input being sized
-would freeze it at its own current capability. That holds for a bound read from
-what ARRIVED, the variants measured above, and not for a capability: a
-capability is computed with the demand removed from every bound, so it does not
-shrink with what a consumer asks, and bounding a claim by it freezes nothing.
-What the exclusion did instead was let a claim exceed what its own supplier
-could ever deliver, and a split proportional to the claims then served the
-largest claim rather than the largest need (:func:`get_supply_scale`).
+The minimum runs over the OTHER inputs, never the one being sized. A claim is
+the need behind it, and a supply shared by several consumers is split in
+proportion to the claims: bounding a claim by its own supplier's capability
+would truncate it at the supply, and a large need would then weigh no more than
+the supply beside a small one (:func:`get_supply_scale`). A claim may therefore
+exceed what its supplier can deliver; the delivery is the lesser of the two.
 
 The bound holds only if every capability is honest. A component that replaces
 :func:`muscadet.evaluation.compute_production` with an equation of its own must
@@ -491,26 +488,22 @@ def get_input_capability(comp, flow_name):
 
 def get_supply_scale(comp, rule, exclude=None):
     """
-    The scale ``rule``'s suppliers could sustain, ignoring ``exclude``.
+    The scale ``rule``'s OTHER inputs could sustain, ignoring ``exclude``.
 
     The bound of R-20: ``min over j != exclude of (capability_j /
-    coefficient_j)``. The demand sweep calls it with no exclusion, so a claim
-    on an input is bounded by that input's own supplier as well as by the
-    others (5.10.0).
+    coefficient_j)``. The demand sweep excludes the input it is sizing, so a
+    reaction short of one reagent does not claim the others it could not use,
+    and the claim on the limiting reagent stays the need.
 
-    **Why the input being sized is no longer excluded.** Up to 5.9.0 the demand
-    sweep passed ``exclude=flow_name``, on the reading that a capability is
-    what the supplier delivers under the present demand, so that an input
-    bounded by it could never grow. A capability is computed with the demand
-    removed from every bound (:func:`evaluate_capability`), so that ratchet
-    does not exist. The exclusion did have a cost, measured on one source of 5
-    feeding two single-reagent units, ``B`` needing 2 and ``A`` asked ``D``
-    downstream. ``A`` claimed ``D`` whatever the source could give, and the
-    proportional split served ``B`` 0.83, 0.01 and 1e-5 for ``D`` = 10, 1000
-    and 1e6 -- then 1.43 for an unbounded ``D``, which
-    :func:`~muscadet.flow_continuous.regularize_demands` brings back to the
-    quantity available. Bounded by its own supplier, ``A`` claims 5 in every
-    case and ``B`` is served 1.43 throughout.
+    **Why the input being sized is excluded.** From 5.10.0 to 5.23.0 it was
+    not, and a claim never exceeded what its own supplier could deliver. On a
+    supplier shared by several consumers that is a truncation of the claim at
+    the supply, applied before the split reads it. One source of 12 feeding a
+    unit needing 6 and a unit asked 18 downstream served them 4 and 8, where
+    two plain consumers declaring 6 and 18 are served 3 and 9, half of each.
+    Excluded, the unit claims its 18 and one need weighs the same however its
+    consumer is modelled. Beside a unit whose downstream asks without bound,
+    the other is served nothing, the limit of the same pro rata.
 
     A coefficient of zero is skipped, mirroring
     :func:`muscadet.rules.rule_scale`: a catalyst named so it can be guarded on

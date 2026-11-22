@@ -612,11 +612,9 @@ def test_the_literal_plant_runs_instead_of_reading_zero_everywhere(the_run):
         assert entry["O2"] == pytest.approx(TTF_PLANT_SCALE)
         assert entry["H2O_received"] == pytest.approx(TTF_H2O_RATE)
 
-        # The tank's claim is what makes the whole chain draw: unbounded at the
-        # tank, bounded by the water source once it reaches the electrolyser's
-        # water input (R-20, since 5.10.0)
+        # The tank's claim is what makes the whole chain draw
         assert math.isinf(entry["H2_demand"])
-        assert entry["H2O_demand"] == pytest.approx(TTF_H2O_RATE)
+        assert math.isinf(entry["H2O_demand"])
 
         # ... and the battery really is serving out of its stock
         assert entry["battery_outflow"] > 0.0

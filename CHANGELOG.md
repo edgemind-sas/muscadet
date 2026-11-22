@@ -4,7 +4,40 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
-## 5.23.0 (unreleased)
+## 5.24.0 (unreleased)
+
+- The default proportional split weighs each consumer by the demand it
+  declares again. A supply of 12 shared by demands of 6 and 18 serves 3 and 9,
+  half of each: consumers in parallel on a saturating source are all served
+  the same fraction of what they need. From 5.11.0 each claim was truncated
+  at the quantity available first, which served 4 and 8.
+- An unbounded demand is the limit of an ever larger one. A supply of 5
+  shared by a consumer asking 2 and one asking `D` serves the first 0.83, 0.01
+  and 1e-5 for `D` = 10, 1000 and 1e6, and 0 for an unbounded `D`. The
+  unbounded claimants share the whole quantity equally and the finite ones
+  get nothing; no split divides by an infinite total.
+- The demand of a rule-bearing component is no longer bounded by its own
+  supplier, only by what the rule's other inputs can sustain (R-20 as it was
+  up to 5.9.0). The 5.10.0 bound truncated such a claim at the supply before
+  the split read it, so one need weighed differently according to how its
+  consumer was modelled.
+- Behaviour changes. Every shortage shared by the default policy moves
+  wherever a claim exceeds the supply. A published demand may exceed what its
+  supplier delivers: an electrolyser venting oxygen to a sink asking 1000
+  claims 1666.67 of water from a pump delivering 5. A consumer asking without
+  bound, a capacity at `fill_rate=math.inf` included, directly or through a
+  rule, takes the whole of a supply it shares: declare a finite claim where a
+  source is meant to be shared. An `allocation_fun` receives the claims as
+  declared, an unbounded one included, and a split proposing a non-finite
+  quantity raises `ValueError`. `regularize_demands` takes the claims alone.
+  Fixed shares and ordered priorities do not move; a priority tie is split at
+  the raw pro rata.
+- `tests/test_split_raw_pro_rata_001.py` pins the split and
+  `tests/test_demand_shared_supplier_001.py` the claim, replacing
+  `test_claim_truncated_at_supply_001.py` and
+  `test_demand_own_supplier_bound_001.py`.
+
+## 5.23.0 (2026-11-20)
 
 - Two more profile shapes. `TrapezoidProfile` is a periodic square whose
   edges are linear ramps (`low`, `high`, `period`, `high_duration`,

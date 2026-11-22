@@ -628,21 +628,21 @@ def test_the_claim_is_added_to_the_mapping_and_does_not_replace_it(the_run):
     assert mapping["level"] == pytest.approx(MAP_FILL_RATE * mapping["time"], rel=1e-2)
 
 
-def test_the_distributed_total_is_still_the_available_quantity(the_run):
+def test_a_buffer_claiming_without_bound_takes_the_whole_supply(the_run):
     """A claiming buffer takes part in an allocation like any other consumer.
 
-    Its demand is unbounded, so it is regularised to the whole quantity
-    available before any split is proposed -- and the split still hands out
-    exactly what the producer has, no more and no less.
+    Its demand is unbounded, the limit of an ever larger claim: it is served
+    everything the producer has and the finite consumer beside it nothing. The
+    split still hands out exactly what the producer has, no more and no less.
+    A buffer meant to share its source declares a finite ``fill_rate``.
     """
     split = the_run["split"]
 
     assert split["supplied"] == pytest.approx(FILL_SUPPLY)
     assert split["buffer"] + split["direct"] == pytest.approx(FILL_SUPPLY)
 
-    assert split["buffer"] > 0.0
-    assert split["direct"] > 0.0
-    assert split["direct"] <= SPLIT_DIRECT_DEMAND + 1e-9
+    assert split["buffer"] == pytest.approx(FILL_SUPPLY)
+    assert split["direct"] == pytest.approx(0.0)
 
     # What the buffer was allocated, less what its own consumer draws, stocks up
     assert split["level"] > 0.0

@@ -172,8 +172,8 @@ class Ramp(muscadet.ObjFlow):
 
     Replacing the production equation means replacing the capability equation
     too: the generic one would publish the declared ``var_fed_default`` of 0,
-    and since 5.10.0 a consumer bounds its claim by what its supplier publishes,
-    so it would ask this ramp for nothing.
+    and a consumer sizing the claims on its other inputs by that capability
+    would ask them for nothing.
     """
 
     def compute_capability(self):

@@ -1,21 +1,21 @@
-"""A claim never exceeds what its own supplier can deliver.
+"""A claim is the need behind it, whatever its own supplier can deliver.
 
 The demand on an input is the downstream scale mapped back through the rule's
-coefficients, bounded by the scale the rule's suppliers can sustain (R-20). Up
-to 5.9.0 that bound ran over the OTHER inputs only, so a claim could exceed what
-its own supplier would ever deliver. Two consequences, both asserted here:
+coefficients, bounded by the scale the rule's OTHER inputs can sustain (R-20):
+a reaction short of one reagent does not claim the others it could not use. It
+is not bounded by the input's own supplier. From 5.10.0 to 5.23.0 it was, which
+truncated the claim of a rule-bearing consumer at the supply before any split
+read it: a need then weighed differently on a shared source according to how
+its consumer was modelled. Asserted here:
 
-* **the published figure**: an electrolyser venting its oxygen to a sink asking
-  1000 claimed 1666.67 of water from a pump delivering 5;
-* **the split**: a source shared by two consumers is split in proportion to the
-  claims, so a consumer whose downstream asked more took the supply from its
-  rival -- and the more its downstream asked, the less the rival got, down to
-  nothing. An UNBOUNDED downstream, which ``regularize_demands`` brings back to
-  the quantity available, gave the rival its fair share again: the split was
-  discontinuous at infinity.
-
-Since 5.10.0 every claim is bounded by its own supplier as well, so the split no
-longer depends on how much more than the supply a downstream asks for.
+* **the published figure**: a unit whose downstream asks ``D`` claims ``D``,
+  and an electrolyser venting its oxygen to a sink asking 1000 claims 1666.67
+  of water from a pump delivering 5;
+* **the split**: a source shared by two units is split in proportion to those
+  claims, exactly as between two plain consumers declaring them, down to
+  nothing beside a unit whose downstream asks without bound;
+* **the bound that stays**: the electrolyser's power claim is still sized on
+  the water it can get.
 
 PyCATSHOO forbids more than one live system per process: one system carries
 every scenario, and the sweeps are driven by hand once the session has started,
@@ -35,9 +35,8 @@ OSB_SUPPLY = 5.0
 OSB_NEED = 2.0
 #: How much the greedy consumer's downstream asks for, scenario by scenario.
 OSB_ASKS = {"TEN": 10.0, "THOUSAND": 1000.0, "MILLION": 1e6, "UNBOUNDED": math.inf}
-#: Both claims are bounded by the supply, so the split is 5 against 2.
-OSB_GREEDY_SHARE = OSB_SUPPLY * OSB_SUPPLY / (OSB_SUPPLY + OSB_NEED)
-OSB_MODEST_SHARE = OSB_SUPPLY * OSB_NEED / (OSB_SUPPLY + OSB_NEED)
+#: The engine stores a quantity in single precision.
+OSB_REL = 1e-5
 
 #: The electrolyser of the H2 showcase: water and power in, hydrogen and oxygen out.
 OSB_STACK_CONS = {"H2O": 5.0, "Elec": 20.0}
@@ -47,6 +46,14 @@ OSB_GRID_RATE = 1e4
 OSB_SINK_DEMAND = 1000.0
 
 OSB_ROUNDS = 3
+
+
+def modest_share(asked):
+    """What the modest unit is served beside a rival whose downstream asks ``asked``."""
+    if math.isinf(asked):
+        return 0.0
+
+    return OSB_SUPPLY * OSB_NEED / (OSB_NEED + asked)
 
 
 class OsbSource(muscadet.ObjFlow):
@@ -118,7 +125,7 @@ def add_stack(system):
 
 @pytest.fixture(scope="module")
 def the_run():
-    system = muscadet.System(name="DemandOwnSupplierBound")
+    system = muscadet.System(name="DemandSharedSupplier")
     for key, asked in OSB_ASKS.items():
         add_rivals(system, key, asked)
     add_stack(system)
@@ -172,33 +179,36 @@ def the_run():
 
 
 @pytest.mark.parametrize("key", list(OSB_ASKS))
-def test_a_claim_is_bounded_by_what_its_own_supplier_delivers(the_run, key):
-    """Whatever its downstream asks, the greedy unit claims the supply, no more."""
+def test_a_claim_is_the_need_behind_it(the_run, key):
+    """The greedy unit claims what its downstream asks, past its supplier's 5."""
     greedy = the_run["rivals"][key]["GREEDY"]
 
-    assert greedy["claim"] == pytest.approx(OSB_SUPPLY)
+    assert greedy["claim"] == pytest.approx(OSB_ASKS[key])
 
 
 @pytest.mark.parametrize("key", list(OSB_ASKS))
-def test_the_split_does_not_depend_on_how_much_more_a_rival_asks(the_run, key):
-    """Up to 5.9.0 the modest unit got 0.83, 0.01, 1e-5, then 1.43 at infinity."""
+def test_two_units_split_a_source_as_two_plain_consumers_would(the_run, key):
     rivals = the_run["rivals"][key]
+    expected = modest_share(OSB_ASKS[key])
 
     assert rivals["MODEST"]["claim"] == pytest.approx(OSB_NEED)
-    assert rivals["GREEDY"]["served"] == pytest.approx(OSB_GREEDY_SHARE)
-    assert rivals["MODEST"]["served"] == pytest.approx(OSB_MODEST_SHARE)
+    assert rivals["MODEST"]["served"] == pytest.approx(expected, rel=OSB_REL, abs=1e-12)
+    assert rivals["GREEDY"]["served"] == pytest.approx(
+        OSB_SUPPLY - expected, rel=OSB_REL
+    )
 
 
-def test_the_stack_claims_the_water_the_pump_can_give(the_run):
-    """The showcase figure: 5, where 5.9.0 claimed 5 x 1000 / 3 = 1666.67."""
+def test_the_stack_claims_the_water_its_sinks_ask_for(the_run):
+    """5 x 1000 / 3 of water claimed, the 5 the pump delivers served."""
     stack = the_run["stack"]
+    scale = OSB_SINK_DEMAND / max(OSB_STACK_PROD.values())
 
-    assert stack["claim_H2O"] == pytest.approx(OSB_PUMP_RATE)
+    assert stack["claim_H2O"] == pytest.approx(scale * OSB_STACK_CONS["H2O"])
     assert stack["served_H2O"] == pytest.approx(OSB_PUMP_RATE)
 
 
 def test_the_other_input_is_still_bounded_by_the_scarce_one(the_run):
-    """R-20 as before: the water sustains a scale of 1, so 20 of power."""
+    """R-20: the water sustains a scale of 1, so 20 of power and no more."""
     stack = the_run["stack"]
     scale = OSB_PUMP_RATE / OSB_STACK_CONS["H2O"]
 
