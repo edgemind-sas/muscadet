@@ -1,0 +1,194 @@
+/* Animated figures of the Concepts pages (docs/tools/figures.py). */
+
+:root {
+  --mu-offer: #6b7a90;
+  --mu-demand: #d9661a;
+  --mu-prod: #2f64a3;
+  --mu-release: #1f8a7a;
+  --mu-comp: #1f416d;
+  --mu-comp-text: #fbfcfe;
+  --mu-machine: #2e5a8f;
+  --mu-panel: #f4f7fb;
+  --mu-ink: #1f2a3c;
+  --mu-muted: #8a97ab;
+  --mu-ok: #2f64a3;
+  --mu-fail: #c0392b;
+  --mu-level: #7fa7d6;
+}
+
+[data-md-color-scheme="slate"] {
+  --mu-offer: #a7b3c4;
+  --mu-demand: #f39a54;
+  --mu-prod: #7fb0ec;
+  --mu-release: #4fc4b1;
+  --mu-comp: #2c5a92;
+  --mu-machine: #3b6ea8;
+  --mu-panel: #1c2230;
+  --mu-ink: #e6ebf2;
+  --mu-muted: #7d8aa0;
+  --mu-ok: #7fb0ec;
+  --mu-fail: #ff7b6b;
+  --mu-level: #4b7cb8;
+}
+
+.md-typeset .mu-figure {
+  display: block;
+  width: 100%;
+  box-sizing: border-box;
+  margin: 1.5em 0;
+  padding: 1em;
+  background: var(--mu-panel);
+  border-radius: 12px;
+}
+
+.mu-svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  font-family: var(--md-text-font-family, sans-serif);
+}
+
+/* Stepping: an element with a range is hidden outside it. */
+.mu-figure [data-from] {
+  opacity: 0;
+  transition: opacity 0.35s ease;
+}
+.mu-figure [data-from].mu-on {
+  opacity: 1;
+}
+.mu-figure .mu-caption {
+  display: none;
+  margin: 0.6em 0 0;
+  min-height: 3em;
+}
+.mu-figure .mu-caption.mu-on {
+  display: block;
+}
+
+.mu-controls {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4em;
+  margin-top: 0.8em;
+}
+.mu-controls .md-button {
+  margin: 0;
+  padding: 0.2em 0.9em;
+  font-size: 0.75rem;
+}
+.mu-controls .md-button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+.mu-count {
+  margin-left: 0.4em;
+  font-size: 0.75rem;
+  color: var(--md-default-fg-color--light);
+}
+
+/* Boxes. */
+.mu-box rect { fill: var(--mu-comp); }
+.mu-machine rect { fill: var(--mu-machine); }
+.mu-sink rect { fill: var(--mu-machine); }
+.mu-ctrl > rect { fill: var(--mu-panel); stroke: var(--mu-demand); stroke-width: 4; }
+.mu-ctrl .mu-title { fill: var(--mu-ink); }
+.mu-discrete-off > rect { fill: var(--mu-muted); }
+.mu-title {
+  fill: var(--mu-comp-text);
+  font-size: 28px;
+  font-weight: 700;
+  text-anchor: middle;
+}
+.mu-title.mu-on-light { fill: var(--mu-ink); }
+.mu-badge rect { fill: var(--mu-comp-text); opacity: 0.92; }
+.mu-badge text {
+  /* The badge is always light, whatever the theme. */
+  fill: #1f2a3c;
+  font-size: 22px;
+  font-weight: 600;
+  text-anchor: middle;
+}
+.mu-badge.mu-offer rect { fill: var(--mu-offer); opacity: 1; }
+.mu-badge.mu-offer text { fill: #fbfcfe; }
+.mu-badge.mu-demand rect { fill: var(--mu-demand); opacity: 1; }
+.mu-badge.mu-demand text { fill: #14213d; }
+
+.mu-note, .mu-coef, .mu-scale, .mu-bool {
+  fill: var(--mu-ink);
+  font-size: 22px;
+}
+.mu-coef { font-weight: 700; }
+.mu-scale { font-size: 22px; font-weight: 700; fill: var(--mu-comp-text); text-anchor: middle; }
+
+/* Channels: colour AND dash pattern, so a figure survives black and white. */
+.mu-pass .mu-line { fill: none; stroke-linecap: round; }
+.mu-offer .mu-line { stroke: var(--mu-offer); stroke-dasharray: 1 11; stroke-width: 7; }
+.mu-demand .mu-line { stroke: var(--mu-demand); stroke-dasharray: 16 9; }
+.mu-prod .mu-line { stroke: var(--mu-prod); }
+.mu-release .mu-line { stroke: var(--mu-release); stroke-dasharray: 16 6 2 6; }
+marker.mu-offer path { fill: var(--mu-offer); }
+marker.mu-demand path { fill: var(--mu-demand); }
+marker.mu-prod path { fill: var(--mu-prod); }
+marker.mu-release path { fill: var(--mu-release); }
+
+/* A light dotted overlay running along an arrow, in its direction. */
+.mu-flowing {
+  fill: none;
+  stroke: #fbfcfe;
+  stroke-width: 2.4;
+  stroke-linecap: round;
+  stroke-dasharray: 4 16;
+  opacity: 0.85;
+  animation: mu-run 0.9s linear infinite;
+}
+.mu-offer .mu-flowing, .mu-demand .mu-flowing, .mu-release .mu-flowing,
+.mu-signal-off .mu-flowing { display: none; }
+@keyframes mu-run { to { stroke-dashoffset: -20; } }
+
+/* Value tokens. */
+.mu-token text {
+  font-size: 22px;
+  font-weight: 700;
+  text-anchor: middle;
+  fill: #fbfcfe;
+}
+.mu-offer .mu-token rect { fill: var(--mu-offer); }
+.mu-demand .mu-token rect { fill: var(--mu-demand); }
+.mu-demand .mu-token text { fill: #14213d; }
+.mu-prod .mu-token rect, .mu-token.mu-prod rect { fill: var(--mu-prod); }
+.mu-release .mu-token rect { fill: var(--mu-release); }
+
+/* Discrete signals. */
+.mu-signal-on .mu-line { stroke: var(--mu-ok); stroke-width: 6; }
+.mu-signal-off .mu-line { stroke: var(--mu-muted); stroke-width: 4; stroke-dasharray: 3 9; }
+.mu-bool.mu-signal-on { fill: var(--mu-ok); font-weight: 700; }
+.mu-bool.mu-signal-off { fill: var(--mu-muted); font-style: italic; }
+.mu-fail path { stroke: var(--mu-fail); stroke-width: 8; stroke-linecap: round; }
+
+/* Capacity. */
+.mu-vessel { fill: none; stroke: var(--mu-comp); stroke-width: 6; }
+.mu-level {
+  fill: var(--mu-level);
+  transform-box: fill-box;
+  transform-origin: bottom;
+  transform: scaleY(var(--lvl));
+}
+.mu-figure[data-current="4"] .mu-level-partial {
+  animation: mu-fill 6s ease-in-out infinite alternate;
+}
+@keyframes mu-fill { from { transform: scaleY(0.5); } to { transform: scaleY(0.75); } }
+
+/* Automaton. */
+.mu-axis { fill: none; stroke: var(--mu-ink); stroke-width: 2; }
+.mu-thr { fill: none; stroke: var(--mu-demand); stroke-width: 2; stroke-dasharray: 10 8; }
+.mu-curve { fill: none; stroke: var(--mu-prod); stroke-width: 5; stroke-linejoin: round; }
+.mu-order { fill: none; stroke: var(--mu-ink); stroke-width: 4; }
+.mu-state circle { fill: none; stroke: var(--mu-comp); stroke-width: 5; }
+.mu-state.mu-active circle { fill: var(--mu-level); }
+.mu-trans path { fill: none; stroke: var(--mu-prod); stroke-width: 4; }
+
+@media (prefers-reduced-motion: reduce) {
+  .mu-flowing, .mu-level-partial { animation: none !important; }
+  .mu-figure [data-from] { transition: none; }
+}

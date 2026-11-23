@@ -47,11 +47,23 @@ markdown_extensions:
       # once and the site never carries a copy of it.
       base_path: ["."]
       check_paths: true
+  - pymdownx.tabbed:
+      alternate_style: true
   - pymdownx.superfences:
       custom_fences:
         - name: mermaid
           class: mermaid
           format: !!python/name:pymdownx.superfences.fence_code_format
+
+# The animated figures of the Concepts pages are drawn at build time from
+# their description in docs/tools/figures.py.
+hooks:
+  - docs/tools/figures.py
+
+extra_css:
+  - assets/stylesheets/concepts.css
+extra_javascript:
+  - assets/javascripts/stepper.js
 
 plugins:
   - search
@@ -81,6 +93,13 @@ nav:
   - Home: index.md
   - Installation: installation.md
   - Getting started: getting-started.md
+  - Concepts:
+      - concepts/index.md
+      - Discrete flows: concepts/discrete-flows.md
+      - Continuous flows: concepts/continuous-flows.md
+      - Transformation: concepts/transformation.md
+      - Capacities: concepts/capacities.md
+      - Automata: concepts/automata.md
   - API reference:
       - reference/index.md
       - System: reference/system.md
