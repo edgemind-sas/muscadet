@@ -4,7 +4,7 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
-## 5.24.0 (unreleased)
+## 5.24.0 (2026-11-23)
 
 - The default proportional split weighs each consumer by the demand it
   declares again. A supply of 12 shared by demands of 6 and 18 serves 3 and 9,
