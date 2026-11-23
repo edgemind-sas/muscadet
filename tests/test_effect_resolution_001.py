@@ -8,13 +8,13 @@ completion and reports plausible-but-wrong numbers with no diagnostic.
    continuous output, so ``failure_effects=[(".*", False)]`` on a plant
    declaring an ``H2`` rate beside an ``H2_status`` signal cut the rate and left
    the signal telling every downstream consumer that the plant was alive. The
-   STANDALONE path (``ObjFailureMode.resolve_effects_on``) always branched per
-   flow and got this right; the two now share one resolution.
+   standalone ``ObjFailureMode`` path (removed in 6.0.0) always branched per
+   flow and got this right; the component path now does too.
 
 2. **The match used to be unanchored.** ``[("H2", 0.5)]`` on a component that
    also declares ``H2O`` derated the water output too, and a downstream mass
-   balance reported half the water it should. The standalone path anchors with
-   ``^...$``; both now do.
+   balance reported half the water it should. The match is now anchored with
+   ``^...$``.
 
 3. **An effect on a solver-owned variable used to be a silent no-op.** The
    filter that (correctly) protects ``{flow}_fed_out`` listed only the flow
@@ -351,10 +351,8 @@ def test_a_wildcard_reaches_the_discrete_output_beside_the_continuous_ones(the_r
     assert settled["lit"] is False
 
 
-def test_the_two_paths_resolve_a_wildcard_alike(the_run):
-    """The standalone path was right; the component path now agrees with it.
-
-    Both branch per flow: a continuous output to a derating variable owned by
+def test_a_wildcard_resolves_per_flow(the_run):
+    """The resolution branches per flow: a continuous output to a derating variable owned by
     the declaring mode, a discrete one to its availability gate. It used to
     return the two derating variables and nothing else.
     """
@@ -386,7 +384,7 @@ def test_deratings_do_not_spill_onto_a_sibling_output(the_run):
     assert settled["sibling_h2o"] == pytest.approx(ER_H2O_RATE)
 
 
-def test_the_anchoring_is_the_one_the_standalone_path_uses(the_run):
+def test_the_match_is_anchored(the_run):
     """``match_continuous_outputs`` names one output, not everything sharing a
     prefix -- and a wildcard still names them all."""
     sibling = the_run["system"].comp["SIBLING"]

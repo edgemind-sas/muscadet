@@ -86,19 +86,19 @@ def the_system():
     system.add_component(name="CB", cls="CompC")
 
     system.add_component(
-        cls="ObjFailureModeExp",
+        cls="ObjFMExp",
         fm_name="frun_1",
         targets=["CA", "CB"],
-        failure_effects={".*": False},
+        failure_effects={"c1_fed_available_out": False, "c2_fed_available_out": False},
         failure_param=[0.1, 0.1],
         repair_param=[0.1, 0.1],
     )
 
     system.add_component(
-        cls="ObjFailureModeExp",
+        cls="ObjFMExp",
         fm_name="frun_2",
         targets=["CA", "CB"],
-        failure_effects={"c2": False},
+        failure_effects={"c2_fed_available_out": False},
         failure_param=[0.1, 0.1],
         repair_param=[0.1, 0.1],
     )

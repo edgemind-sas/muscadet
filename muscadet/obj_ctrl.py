@@ -121,9 +121,8 @@ variable a ``cod3s.ObjFM*`` names by its exact basename:
 ============================================ ====================================
 
 The exact-name spelling is not a fallback, it is the only one available: a
-controller is a peer of ``ObjFlow`` and declares no flow at all, so the
-muscadet regex-on-flows spelling of :class:`muscadet.ObjFailureMode` has
-nothing to match on it.
+controller is a peer of ``ObjFlow`` and declares no flow at all, so there is
+no flow name a pattern could match on it.
 
 **None of these endpoints is reinitialised, and a mode owes both polarities.**
 The PyCATSHOO flag governs the reset at every STEP, and a parameter reset at
@@ -1342,9 +1341,8 @@ class ObjCtrl(cod3s.PycComponent):
 
     What a failure mode reaches, and how it is spelled (R44)
     --------------------------------------------------------
-    A controller declares no flow, so the muscadet regex-on-flows spelling of
-    :class:`muscadet.ObjFailureMode` has nothing to match on it. The spelling
-    is the engine's own, an exact variable basename on a ``cod3s.ObjFM*``, and
+    A controller declares no flow, so there is no flow name a pattern could
+    match on it. The spelling is the engine's own, an exact variable basename on a ``cod3s.ObjFM*``, and
     the three effects are::
 
         # a value output's publication, scaled -- 0 is a dead instrument

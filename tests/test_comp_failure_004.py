@@ -94,22 +94,24 @@ def the_system():
     system.auto_connect("CB", "T3|T4")
 
     system.add_component(
-        cls="ObjFailureModeExp",
+        cls="ObjFMExp",
         fm_name="frun",
         targets=["CA", "CB"],
-        failure_effects={"c1": False, "c2": False},
+        failure_effects={"c1_fed_available_out": False, "c2_fed_available_out": False},
         failure_param=[0.1, 0.2],
         repair_param=[0.1, 0.1],
     )
 
     system.add_component(
-        cls="ObjFailureModeExp",
+        cls="ObjFMExp",
         fm_name="frun",
         targets=["T1", "T2", "T3", "T4"],
         target_name="TXX",
-        failure_effects={"f1": False, "f2": False},
+        failure_effects={"f1_fed_available_out": False, "f2_fed_available_out": False},
         failure_param=[0.1, 0.01, 0.001, 0.0001],
-        failure_cond={"c1": True, "c2": True},
+        failure_cond=[
+            [{"attr": "c1_fed_in", "value": True}, {"attr": "c2_fed_in", "value": True}]
+        ],
         repair_param=[0.0001, 0.001, 0.01, 0.1],
     )
 

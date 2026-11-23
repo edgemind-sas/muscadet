@@ -8,6 +8,7 @@ from .declare import (
     GENERATED_INDICATORS_DEFAULT,
     checked_generated_indicators,
     declared_occurrence_state,
+    removed_mode_class_message,
 )
 from .engine import (
     check_run_targets,
@@ -25,6 +26,7 @@ from .flow_continuous import (
 )
 from .initial_state import initial_fixpoint_refusal, register_initial_settle
 from .mixture import MixtureGroupError, resolve_mixture_groups  # noqa: F401
+from .mode_signals import publish_mode_signals
 from .obj_logic import LogicAnd, LogicOr
 from .ordering import (
     CAPACITY_ORDER_BASE,
@@ -305,6 +307,10 @@ class System(cod3s.PycSystem):
         actually happens: a component carrying a continuous flow is the first
         thing that makes the system continuous.
         """
+        message = removed_mode_class_message(comp_specs.get("cls"))
+        if message is not None:
+            raise TypeError(message)
+
         comp = super().add_component(**comp_specs)
 
         if comp is not None and self.component_has_continuous_flow(comp):
@@ -587,6 +593,12 @@ class System(cod3s.PycSystem):
             check = getattr(comp, "check_input_profiles", None)
             if check is not None:
                 check()
+
+        # What each standalone cod3s mode reads and writes on its targets, for
+        # the loop analysis ``register_equation_order`` runs. Every mode exists
+        # by now, and publishing registers nothing, so a retried step publishes
+        # the same entries again.
+        publish_mode_signals(self)
 
         # BEFORE any equation is registered, and that ordering is load bearing:
         # PyCATSHOO refuses to register an equation its manager already holds and

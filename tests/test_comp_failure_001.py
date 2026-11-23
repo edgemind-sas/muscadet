@@ -94,10 +94,10 @@ def the_system():
     system.auto_connect("C1", ".*")
 
     system.add_component(
-        cls="ObjFailureModeExp",
+        cls="ObjFMExp",
         fm_name="frun",
         targets=["C1"],
-        failure_effects={"f1": False, "f2": False},
+        failure_effects={"f1_fed_available_out": False, "f2_fed_available_out": False},
         failure_param=1 / 10,
         repair_param=0.1,
     )

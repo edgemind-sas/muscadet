@@ -52,10 +52,10 @@ def test_system(the_system):
             return "__all"
 
     obj_frun = the_system.add_component(
-        cls="ObjFailureModeExp",
+        cls="ObjFMExp",
         fm_name="frun",
         targets=comp_name_list,
-        failure_effects={"f1": False, "f2": False},
+        failure_effects={"f1_fed_available_out": False, "f2_fed_available_out": False},
         failure_param=[1, 0, 1, 0, 1],
         trans_name_prefix_fun=trans_name_prefix_fun,
         drop_inactive_automata=True,

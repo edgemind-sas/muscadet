@@ -516,11 +516,11 @@ def the_run():
         repair_param=1e9,
     )
     system.add_component(
-        cls="ObjFailureModeExp",
+        cls="ObjFMExp",
         fm_name="common",
         targets=["A", "B", "C"],
         target_name="ABC",
-        failure_effects={"f": False},
+        failure_effects={"f_fed_available_out": False},
         failure_param=[1, 0, 0],
         repair_param=[1, 0, 0],
         drop_inactive_automata=False,
@@ -658,20 +658,15 @@ def test_a_field_left_at_its_default_says_nothing(the_run):
         assert silent not in spec, spec
 
 
-def test_the_muscadet_spelling_of_an_effect_survives_the_read(the_run):
-    """``ObjFailureMode*`` names its target's FLOWS with a regex where a
-    ``cod3s.ObjFM`` names variables by their exact basename, and it keeps the
-    declared dicts away from the engine during construction (the engine is
-    handed empty ones, and would reject a flow name as an unknown variable),
-    restoring them onto the public attributes afterwards.
-
-    So this is read from the public attribute and gets ``{"f": False}``. Read a
-    moment earlier, or from the engine's own storage, it would get ``{}`` and
-    declare a mode with no effect at all -- a plant that looks reliable.
-    """
-    spec = the_run["spec"]["components"]["ABC__common"]
-    assert spec["cls"] == "ObjFailureModeExp"
-    assert spec["failure_effects"] == {"f": False}
+def test_a_removed_facade_class_is_refused_with_its_replacement(the_run):
+    """``muscadet.ObjFailureMode*`` were removed in 6.0.0. A stored declaration
+    still naming one is refused by NAME, with the cod3s class to write and the
+    exact-name spelling of the effects, rather than with "names no component
+    class", which would leave the reader to find out what the class was."""
+    spec = dict(the_run["spec"]["components"]["ABC__common"], cls="ObjFailureModeExp")
+    with pytest.raises(ComponentSpecError, match="ObjFMExp") as info:
+        muscadet.check_spec(spec)
+    assert "f_fed_available_out" in str(info.value)
 
 
 def test_the_generic_two_state_engine_declares_itself_in_its_own_spelling(the_run):

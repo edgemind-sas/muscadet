@@ -30,17 +30,13 @@ def match_flow_name(pattern, flow_name):
     """
     Whether an effect pattern names ``flow_name``, ANCHORED.
 
-    The one spelling of the rule, shared by the two paths a mode reaches a
-    flow through: the modes muscadet declares on a component (here) and the
-    standalone ``ObjFailureMode*`` family, which anchors the very same way
-    (``ObjFailureMode.resolve_effects_on``). Unanchored, ``"H2"`` would name
-    ``H2O`` as well and a declaration meant for one output would silently
-    derate its neighbour -- two spellings of one declaration producing
-    different physics.
+    The one spelling of the rule for the modes muscadet declares on a
+    component. Unanchored, ``"H2"`` would name ``H2O`` as well and a
+    declaration meant for one output would silently derate its neighbour.
 
-    ``^...$`` rather than :func:`re.fullmatch`, deliberately: it is the exact
-    expression the standalone path uses, so an alternation is anchored the
-    same way on both sides.
+    ``^...$`` rather than :func:`re.fullmatch`, deliberately: an alternation is
+    then anchored as a whole, ``"a|b"`` reading ``^a|b$`` -- the spelling every
+    model declared since 2.0 was written against.
     """
     return re.search(f"^{pattern}$", flow_name) is not None
 
@@ -90,13 +86,11 @@ def add_derating(comp, mode_name, flow_name):
     the component without the variable and the mode was refused at
     construction.
 
-    The two muscadet-side modes allocate through :func:`allocate_derating`
-    instead and record nothing, because they recreate their variables
-    themselves when rebuilt: a mode declared on the component
-    (:func:`resolve_mode_effects`) and a standalone ``ObjFailureMode``
-    (``resolve_effects_on``). Recording them would change the declaration of
-    every component carrying such a mode, for a variable its rebuild allocates
-    anyway. For the same reason a pair recorded here that a mode declared ON
+    A mode declared on the component allocates through
+    :func:`allocate_derating` instead and records nothing, because it
+    recreates its variables itself when rebuilt (:func:`resolve_mode_effects`).
+    Recording them would change the declaration of every component carrying
+    such a mode, for a variable its rebuild allocates anyway. For the same reason a pair recorded here that a mode declared ON
     the component also allocates -- in either order -- is left out of the
     declaration: ``comp.mode_owned_deratings`` notes those, and the spec
     writes the difference.
@@ -118,9 +112,8 @@ def allocate_derating(comp, mode_name, flow_name):
     variables, and the effective rate is the minimum over them (R20, KTD8)
     rather than whatever the mode that fired last wrote.
 
-    Called by :func:`resolve_mode_effects` at declaration time and by a
-    standalone ``ObjFailureMode``, neither of which records the allocation:
-    see :func:`add_derating` for the door that does.
+    Called by :func:`resolve_mode_effects` at declaration time, which records
+    nothing: see :func:`add_derating` for the door that does.
 
     Parameters
     ----------
@@ -293,9 +286,8 @@ def resolve_effect_patterns(comp, pat_value_list, continuous_endpoint):
 
     The single resolution both muscadet-side entry points go through --
     :func:`resolve_mode_effects` for a mode declared on the component,
-    :func:`pat_to_var_value_list` for a caller holding only a pattern -- and
-    the same shape as ``ObjFailureMode.resolve_effects_on``, which is what
-    resolves a standalone mode. All three now answer alike.
+    :func:`pat_to_var_value_list` for a caller holding only a pattern. Both
+    answer alike.
 
     Two levels, in this order:
 

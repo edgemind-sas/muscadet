@@ -81,7 +81,7 @@ def the_system():
     system.add_component(name="CB", cls="CompB")
 
     # system.add_component(
-    #     cls="ObjFailureModeExp",
+    #     cls="ObjFMExp",
     #     fm_name="frun",
     #     targets=["CA", "CB"],
     #     failure_effects={"c1": False, "c2": False},
@@ -89,7 +89,7 @@ def the_system():
     # )
 
     # system.add_component(
-    #     cls="ObjFailureModeExp",
+    #     cls="ObjFMExp",
     #     fm_name="frun",
     #     targets=["T1", "T2", "T3", "T4"],
     #     target_name="TXX",
