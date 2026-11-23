@@ -135,6 +135,24 @@ from .flow_continuous import (
 #: The two sides a capacity may sit on, relative to the component's rules.
 SIDES = ("in", "out")
 
+#: How far under its volume a capacity still counts as FULL, as a fill.
+#:
+#: The engine stores a quantity in single precision, so the level
+#: :meth:`Capacity.clamp_to_bounds` puts back ON the volume is read back up to
+#: half an ulp under it (0.7 comes back 0.699999988), and a declared content
+#: equal to the volume likewise. Leaving the full state on ``fill < 1`` then
+#: fired at the instant the capacity was declared full: it claimed its fill
+#: again, crossed again, and chattered -- measured, 2649 bound transitions per
+#: time unit on a tank of 0.7 where two are expected.
+#:
+#: An order of magnitude above the single-precision epsilon (1.2e-7), so a
+#: weighted sum of several stored constituents is covered, and three below the
+#: residue the crossing search itself leaves (``dtCond``, 1e-3 by default), so
+#: nothing a model reads moves. ENTERING the full state stays on ``fill >= 1``:
+#: the two thresholds differing is what makes the state stable. The empty
+#: bound needs none, zero being stored exactly.
+BOUND_TOLERANCE = 1e-6
+
 #: A measurement channel reads a capacity LEVEL: an integrated state, the kind
 #: muscadet has always carried. The default, and byte-identical to 1.x.
 MEASUREMENT_LEVEL = "level"
@@ -246,6 +264,16 @@ def ratio_alias(channel: str, flow: str) -> str:
     reading -- an observer thresholding it would be thresholding the number one.
     """
     return f"{channel}_ratio_{flow}"
+
+
+def at_full_bound(fill: float) -> bool:
+    """True when ``fill`` stands on the volume, within :data:`BOUND_TOLERANCE`.
+
+    What decides that a capacity already full STAYS full, and that one declared
+    at its volume starts there. Reaching the bound from below is a different
+    test, ``fill >= 1``, which the solver root-finds.
+    """
+    return fill >= 1.0 - BOUND_TOLERANCE
 
 
 def share_of(quantity: float, total: float) -> float:
@@ -1029,7 +1057,7 @@ class Capacity(cod3s.ObjCOD3S):
         fill_init = self.total_fill()
         if fill_init <= 0.0:
             init_state = st_empty
-        elif fill_init >= 1.0:
+        elif at_full_bound(fill_init):
             init_state = st_full
         else:
             init_state = st_partial
@@ -1085,7 +1113,8 @@ class Capacity(cod3s.ObjCOD3S):
             "empty_partial": lambda: self.total_fill() > 0.0,
             "partial_empty": lambda: self.total_fill() <= 0.0,
             "partial_full": lambda: self.total_fill() >= 1.0,
-            "full_partial": lambda: self.total_fill() < 1.0,
+            # Not the negation of the line above: see BOUND_TOLERANCE.
+            "full_partial": lambda: not at_full_bound(self.total_fill()),
         }
         for key, condition in conditions.items():
             aut.get_transition_by_name(trans_names[key])._bkd.setCondition(condition)
@@ -1341,7 +1370,7 @@ class Capacity(cod3s.ObjCOD3S):
         if self.is_open:
             return False
         if self.state_full is None:
-            return self.total_fill() >= 1.0
+            return at_full_bound(self.total_fill())
         return bool(self.state_full.isActive())
 
     def clamp_to_bounds(self) -> None:

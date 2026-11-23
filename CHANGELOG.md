@@ -41,6 +41,16 @@ reconstructing them.
   `tests/test_demand_shared_supplier_001.py` the claim, replacing
   `test_claim_truncated_at_supply_001.py` and
   `test_demand_own_supplier_bound_001.py`.
+- A capacity stays full once it has reached a volume single precision rounds
+  down. The level put back on the bound was read back just under it (0.7 comes
+  back 0.699999988), so the capacity left the full state at once, claimed its
+  fill again and crossed again: 2649 bound transitions per time unit on a tank
+  of 0.7 fed at 10 and drawn at 4, a run about sixty times slower, and a level
+  read above the volume in between. A capacity now leaves the full state only
+  once its fill is more than `muscadet.capacity.BOUND_TOLERANCE` (1e-6) under
+  1, and one declared at its volume starts full. Reaching the bound is still
+  `fill >= 1`. Volumes stored exactly (60, 64, 100, 1000) do not move.
+  `tests/test_capacity_bound_precision_001.py` pins it.
 
 ## 5.23.0 (2026-11-20)
 
