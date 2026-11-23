@@ -657,6 +657,16 @@ class Capacity(cod3s.ObjCOD3S):
         None, exclude=True, repr=False, description="Backend 'full' state"
     )
 
+    constituent_automata: typing.Dict[str, typing.Any] = pydantic.Field(
+        default_factory=dict,
+        exclude=True,
+        repr=False,
+        description=(
+            "Per-flow held/depleted automata, one per constituent the rules "
+            "can run out of on its own. Empty unless watches_constituents."
+        ),
+    )
+
     mixture_draws: typing.List[typing.Any] = pydantic.Field(
         default_factory=list,
         exclude=True,
@@ -1135,6 +1145,111 @@ class Capacity(cod3s.ObjCOD3S):
 
         return aut
 
+    @property
+    def watches_constituents(self) -> bool:
+        """True when one held flow can run out while the volume still holds.
+
+        That takes both conditions. Several flows: with one, the constituent
+        IS the total the empty/full automaton already watches. And the input
+        side: there the rules draw each held flow on its own, at whatever
+        their coefficients ask, where an output volume serves at its
+        composition (:meth:`split_draw`), so a constituent in short supply
+        decays towards zero and never crosses it.
+        """
+        return self.side == "in" and len(self.flows) > 1
+
+    def add_constituent_automata(self, comp):
+        """Watch each constituent the rules can run out of on its own.
+
+        The empty/full automaton watches the TOTAL fill, so a volume holding
+        nothing of one flow and plenty of another is not empty, and the
+        crossing of that one flow through zero was watched by nothing: the
+        per-flow guard of :meth:`serve_limit` only saw the level at or under
+        zero at the following integration step, and nothing took the overshoot
+        back. Measured on a hopper holding 5 of one reagent and 500 of
+        another, both drawn at 10: the first settled at -0.05 for the rest of
+        the run, and the second had lost as much to a production no reagent
+        covered.
+
+        One watched two-state automaton per held flow, so the solver stops ON
+        the crossing as it does on the volume bounds (R7), with
+        :meth:`clamp_constituents` as its reset map. It decides nothing by
+        itself: :meth:`serves_from_stock` still reads the level, which the
+        reset map has just put on zero.
+
+        States and transitions carry a ``_stock_`` tag between the capacity
+        and the flow, as the variables carry ``_qty_``: a capacity ``a``
+        holding ``b_c`` and a capacity ``a_b`` holding ``c`` would otherwise
+        want the same engine names.
+        """
+        if not self.watches_constituents:
+            return {}
+
+        for entry in self.flows:
+            base = f"{self.name}_stock_{entry.name}"
+            st_held = f"{base}_held"
+            st_depleted = f"{base}_depleted"
+            var = self.var_qty[entry.name]
+
+            aut = cod3s.PycAutomaton(
+                name=f"{comp.name()}_{base}",
+                states=[st_held, st_depleted],
+                init_state=st_held if var.value() > 0.0 else st_depleted,
+                transitions=[
+                    {
+                        "name": f"{base}_held_depleted",
+                        "source": st_held,
+                        "target": st_depleted,
+                        "is_interruptible": True,
+                        "occ_law": fresh_instant_occ_law(),
+                    },
+                    {
+                        "name": f"{base}_depleted_held",
+                        "source": st_depleted,
+                        "target": st_held,
+                        "is_interruptible": True,
+                        "occ_law": fresh_instant_occ_law(),
+                    },
+                ],
+            )
+            aut.update_bkd(comp)
+
+            # ``var`` bound as a default: one closure per constituent.
+            aut.get_transition_by_name(f"{base}_held_depleted")._bkd.setCondition(
+                lambda var=var: var.value() <= 0.0
+            )
+            aut.get_transition_by_name(f"{base}_depleted_held")._bkd.setCondition(
+                lambda var=var: var.value() > 0.0
+            )
+
+            aut._bkd.addSensitiveMethod(
+                f"clamp_{comp.name()}_{base}", self.clamp_constituents
+            )
+
+            self.constituent_automata[entry.name] = aut
+            comp.automata_d[aut.name] = aut
+
+        return self.constituent_automata
+
+    def clamp_constituents(self) -> None:
+        """Put back on zero a constituent the solver just took under it.
+
+        The reset map of the constituent automata, and the per-flow half of
+        :meth:`clamp_to_bounds`: the crossing is root-found to ``dtCond``, so
+        the level stops just under zero, and left there it is permanent.
+        Lifting it costs a conservation error of that size, paid once per
+        crossing, which is the trade the volume bounds already make.
+        """
+        lifted = False
+
+        for var in self.var_qty.values():
+            if var.value() < 0.0:
+                var.setValue(0.0)
+                lifted = True
+
+        if lifted:
+            self.resync_total()
+
     def register(self, system):
         """Register the capacity's variables and bound transitions on the PDMP.
 
@@ -1155,6 +1270,9 @@ class Capacity(cod3s.ObjCOD3S):
 
         if self.automaton is not None:
             system.pdmp_add_watched_automaton(self.automaton)
+
+        for aut in self.constituent_automata.values():
+            system.pdmp_add_watched_automaton(aut)
 
     # ------------------------------------------------------------------
     # The capacity's own equation

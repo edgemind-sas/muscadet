@@ -4,6 +4,23 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 5.24.1 (2026-11-23)
+
+- A constituent of an input capacity no longer runs under zero. The empty/full
+  automaton watches the total fill, and on the input side the rules draw each
+  held flow on its own, so one reagent could run out while the volume still
+  held plenty, with nothing watching that crossing. Measured on a hopper
+  holding 5 of `a` and 500 of `b`, both drawn at 10: `a` settled at -0.05 for
+  the rest of the run. A capacity on the input side holding several flows now
+  builds one watched held/depleted automaton per flow
+  (`{component}_{capacity}_stock_{flow}`), and its reset map puts the level
+  back on zero.
+- Behaviour change. Such a capacity fires one more transition each time a
+  constituent runs out or is supplied again, which an interactive driver
+  stepping a fixed number of times will see. Single-flow capacities and
+  output-side ones build nothing new.
+- `tests/test_capacity_constituent_depletion_001.py` pins it.
+
 ## 5.24.0 (2026-11-23)
 
 - The default proportional split weighs each consumer by the demand it
