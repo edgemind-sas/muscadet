@@ -1459,6 +1459,7 @@ class ObjFlow(cod3s.PycComponent):
         capacity_obj.add_variables(self)
         capacity_obj.add_mb(self)
         capacity_obj.add_automaton(self)
+        capacity_obj.add_constituent_automata(self)
 
         self.capacities[name] = capacity_obj
 
