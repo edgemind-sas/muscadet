@@ -1,0 +1,3 @@
+# Discrete flows
+
+::: muscadet.flow

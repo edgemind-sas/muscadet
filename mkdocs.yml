@@ -1,0 +1,98 @@
+site_name: muscadet
+site_description: Stochastic flow system modelling on PyCATSHOO and RAICHU
+site_url: https://edgemind-sas.github.io/muscadet/
+repo_url: https://github.com/edgemind-sas/muscadet
+repo_name: edgemind-sas/muscadet
+edit_uri: edit/master/docs/manual/
+copyright: Copyright &copy; EdgeMind, MIT license
+
+# docs/ also holds plans, reviews and third-party references that are not part
+# of the site, so the site has a directory of its own.
+docs_dir: docs/manual
+strict: true
+
+theme:
+  name: material
+  features:
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - search.suggest
+    - content.code.copy
+    - content.action.edit
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to light mode
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight
+  - pymdownx.inlinehilite
+  - pymdownx.snippets:
+      # CHANGELOG.md is included from the repository root, so it is written
+      # once and the site never carries a copy of it.
+      base_path: ["."]
+      check_paths: true
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          # Read statically: the site builds without cod3s or PyCATSHOO.
+          paths: ["."]
+          options:
+            docstring_style: numpy
+            # Several builders document the keyword arguments they forward
+            # through **kwargs; griffe would report each as unknown.
+            docstring_options:
+              warn_unknown_params: false
+              warn_missing_types: false
+            show_source: false
+            show_root_heading: true
+            show_root_full_path: false
+            members_order: source
+            filters: ["!^_"]
+            merge_init_into_class: true
+            heading_level: 2
+
+nav:
+  - Home: index.md
+  - Installation: installation.md
+  - Getting started: getting-started.md
+  - API reference:
+      - reference/index.md
+      - System: reference/system.md
+      - Components: reference/components.md
+      - Discrete flows: reference/flows-discrete.md
+      - Continuous flows: reference/flows-continuous.md
+      - Rules: reference/rules.md
+      - Capacities and measurements: reference/capacities.md
+      - Mixtures: reference/mixtures.md
+      - Time profiles: reference/profiles.md
+      - Transfer pairs: reference/transfers.md
+      - Failure modes: reference/failure-modes.md
+      - Controllers: reference/controllers.md
+      - Declaring from data: reference/declare.md
+      - Engines and conformance: reference/engines.md
+      - Knowledge bases: reference/kb.md
+  - Changelog: changelog.md

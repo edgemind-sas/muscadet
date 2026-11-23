@@ -1,0 +1,3 @@
+# Rules
+
+::: muscadet.rules
