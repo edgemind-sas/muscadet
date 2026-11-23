@@ -790,8 +790,6 @@ class SensorContinuous(ContinuousComponent):
     guard uses -- and the memory that holds the output inside the band is a
     two-state automaton clamping its availability. No Python reads the level.
 
-    Parameters
-    ----------
     **Redundancy (R37).** ``combine`` makes the observed channel a many-to-one
     one: several instruments publish a reading, and the sensor votes on them.
     ``"median"`` is what redundancy exists for -- with an odd number of
