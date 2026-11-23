@@ -4,6 +4,37 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 6.0.0 (2026-11-23)
+
+- Breaking. `muscadet.ObjFailureMode`, `ObjFailureModeExp` and
+  `ObjFailureModeDelay` are removed, with `muscadet/failure_mode.py`. They were
+  deprecated façades over `cod3s.ObjFM`, `ObjFMExp` and `ObjFMDelay`, and
+  neither the COD3S Platform translator nor its importer uses them: the
+  platform emits the cod3s classes. A model naming one, through
+  `system.add_component(cls=...)` or a stored declaration, is refused by name
+  with the cod3s class to write and the exact-name spelling of its effects.
+  Migration: `{"f": False}` becomes `{"f_fed_available_out": False}`,
+  `{"q": 0.5}` becomes `{"q_out_rate": 0.5}`, a wildcard is written out flow by
+  flow, and the condition shorthand `{"c": True}` becomes
+  `[[{"attr": "c_fed_in", "value": True}]]`.
+- What is lost with them: two standalone modes derating one continuous output
+  no longer compose by minimum, since they now clamp one shared
+  `{flow}_out_rate`. Rank them with `effects_priority`, or declare the modes on
+  the component, where each keeps its own derating variable.
+- Every standalone cod3s mode is now visible to the loop analysis. The
+  façades were the only standalone modes publishing what they read and wrote
+  on their targets (`ObjFlow.mode_signals`), so an instantaneous loop closed
+  through a native `cod3s.ObjFM*` (what the platform emits) built and settled
+  on whatever ran first. The pre-run step now publishes, for every
+  `cod3s.ObjMode2S` and every muscadet target, the variables its structured
+  conditions read and the ones its effects clamp (`muscadet.mode_signals`).
+  Such a loop is refused at the first start with `RateComparisonLoopError`,
+  where it used to build. A condition written as a Python callable stays
+  invisible, as before.
+- `tests/test_mode_signals_native_001.py` pins the publication and the
+  refusals; `tests/test_rate_loop_seeds_001.py` now closes its loop through a
+  `cod3s.ObjFMDelay`. The façade-only tests are removed.
+
 ## 5.24.1 (2026-11-23)
 
 - A constituent of an input capacity no longer runs under zero. The empty/full

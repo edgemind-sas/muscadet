@@ -19,11 +19,11 @@ SET produces; those states are the seeds now.
 
 **The gate.** ``gates_production_on`` saw a mode only through
 ``comp.mode_signals``, written by ``ObjFlow.add_atm2states`` and by nothing
-else. A loop closed through a **standalone** failure mode -- an
-``ObjFailureModeDelay`` clamping a derating on the very output it is gated by --
-escaped entirely: the model built and the gated production settled on whatever
-the topological order happened to evaluate first. Standalone modes now publish
-what they read and what they write on each target.
+else. A loop closed through a **standalone** failure mode -- a ``cod3s.ObjFMDelay``
+clamping the rate of the very output it is gated by -- escaped entirely: the
+model built and the gated production settled on whatever the topological order
+happened to evaluate first. The pre-run step now publishes what every standalone
+mode reads and writes on each target (``muscadet.mode_signals``).
 
 Both models below build, run to completion and report a plausible number at
 ``399730d``. Refusing one that should build would be worse than missing one, so
@@ -236,21 +236,20 @@ def run_standalone_mode_scenario(obs):
     # no integrated state at all -- the shape RateComparisonLoopError exists
     # for, written with the mode declared outside the component.
     system.add_component(
-        cls="ObjFailureModeDelay",
+        cls="ObjFMDelay",
         fm_name="trip",
         targets=["SF_SRC"],
-        failure_cond={"run": True},
-        failure_effects={"q": 0.0},
+        failure_cond=[[{"attr": "run_fed_in", "value": True}]],
+        failure_effects={"q_out_rate": 0.0},
         failure_param=[(0.0,)],
-        repair_cond={"run": False},
+        repair_cond=[[{"attr": "run_fed_in", "value": False}]],
         repair_param=[(0.0,)],
     )
 
     source = system.comp["SF_SRC"]
-    obs["standalone_signals"] = {
-        key: dict(value) for key, value in source.mode_signals.items()
-    }
-    obs["standalone_gates"] = ordering.gates_production_on(source, "run")
+    # Published by the pre-run step, which the start attempt runs: nothing is
+    # published at declaration, when the targets may not all exist yet.
+    obs["signals_before_start"] = dict(source.mode_signals)
 
     obs["standalone_error"] = None
     obs["standalone_started"] = False
@@ -259,6 +258,11 @@ def run_standalone_mode_scenario(obs):
         obs["standalone_started"] = True
     except Exception as err:
         obs["standalone_error"] = err
+
+    obs["standalone_signals"] = {
+        key: dict(value) for key, value in source.mode_signals.items()
+    }
+    obs["standalone_gates"] = ordering.gates_production_on(source, "run")
 
     try:
         system.isimu_stop()
@@ -294,11 +298,11 @@ def run_near_miss_scenario(obs):
     system.add_component(name="BY_TANK", cls="RlsBufferedSink")
     system.connect_flow(source="BY_SRC", target="BY_TANK", flow_name="q")
     system.add_component(
-        cls="ObjFailureModeDelay",
+        cls="ObjFMDelay",
         fm_name="wear",
         targets=["BY_SRC"],
-        failure_cond={"run": True},
-        failure_effects={"q": 0.0},
+        failure_cond=[[{"attr": "run_fed_in", "value": True}]],
+        failure_effects={"q_out_rate": 0.0},
         failure_param=[(1.0,)],
         repair_param=[(1.0,)],
     )
@@ -378,17 +382,21 @@ def test_the_guard_loop_error_names_the_comparison_and_the_way_out(the_run):
 
 def test_a_standalone_mode_publishes_what_it_reads_and_writes(the_run):
     """``mode_signals`` was written by ``add_atm2states`` and by nothing else."""
+    assert (
+        the_run["signals_before_start"] == {}
+    ), "nothing is published at declaration: the pre-run step publishes"
+
     signals = the_run["standalone_signals"]
 
-    assert signals, "a standalone mode must publish its signals on its target"
+    assert list(signals) == ["SF_SRC__trip@SF_SRC"], signals
 
-    entry = next(iter(signals.values()))
-    assert (
-        "run_fed_in" in entry["conditions"]
-    ), "the dict shorthand reads the target's INPUT flow"
-    assert any(
-        "derating_q" in name for name in entry["effects"]
-    ), "the mode clamps a derating on the output it bears on"
+    entry = signals["SF_SRC__trip@SF_SRC"]
+    assert entry["conditions"] == [
+        "run_fed_in"
+    ], "the structured condition reads the target's INPUT flow"
+    assert entry["effects"] == [
+        "q_out_rate"
+    ], "the mode clamps the rate of the output it bears on"
 
 
 def test_a_standalone_mode_gates_production_on_its_condition(the_run):

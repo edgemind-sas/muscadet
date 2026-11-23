@@ -211,9 +211,9 @@ POST_SET_FLOWS_SECTIONS = ("deratings", "automata", "failure_modes")
 DERATING_KEYS = ("mode", "flow")
 
 #: ``cls`` values a ``failure_modes`` entry may carry, and the method each maps
-#: to. A failure mode declared on a component is one of exactly two shapes; the
-#: standalone ``ObjFailureMode*`` objects are components in their own right and
-#: are declared as components, not inside one.
+#: to. A failure mode declared on a component is one of exactly two shapes; a
+#: standalone ``cod3s.ObjFM*`` is a component in its own right and is declared
+#: as a component, not inside one.
 FAILURE_MODE_METHODS = {
     "exp": "add_exp_failure_mode",
     "delay": "add_delay_failure_mode",
@@ -508,9 +508,8 @@ class ModeVocabulary(pydantic.BaseModel):
         )
 
 
-#: ``cod3s.ObjFM`` and its subclasses, which is what a muscadet model writes --
-#: ``muscadet.ObjFailureMode*`` are subclasses of it -- and what
-#: ``system.add_component(cls="ObjFMDelay", ...)`` builds.
+#: ``cod3s.ObjFM`` and its subclasses, which is what a muscadet model writes
+#: and what ``system.add_component(cls="ObjFMDelay", ...)`` builds.
 FAILURE_MODE_VOCABULARY = ModeVocabulary(
     name_key="fm_name",
     fields=(
@@ -1257,7 +1256,7 @@ def _failure_mode_method(entry, name):
             f"Component {name}: failure mode {entry.get('name')!r} has "
             f"cls={kind!r}; a failure mode declared on a component is one of "
             f"{', '.join(sorted(FAILURE_MODE_METHODS))}. A standalone "
-            f"ObjFailureMode is a component of its own and is declared as one"
+            f"cod3s.ObjFM* is a component of its own and is declared as one"
         )
 
     return method_name
@@ -1955,6 +1954,44 @@ def mode_vocabulary(cls, where):
     )
 
 
+#: The standalone failure-mode façades removed in 6.0.0, and the cod3s class
+#: each one was a thin subclass of. Kept so a model or a stored declaration
+#: still naming one is refused with the replacement in the message, rather than
+#: with "names no component class".
+REMOVED_MODE_CLASSES = {
+    "ObjFailureMode": "ObjFM",
+    "ObjFailureModeExp": "ObjFMExp",
+    "ObjFailureModeDelay": "ObjFMDelay",
+}
+
+
+def removed_mode_class_message(clsname):
+    """The migration message for a removed façade, or None for any other name."""
+    name = getattr(clsname, "__name__", clsname)
+    replacement = REMOVED_MODE_CLASSES.get(name) if isinstance(name, str) else None
+
+    if replacement is None:
+        return None
+
+    return (
+        f"muscadet.{name} was removed in muscadet 6.0.0: declare "
+        f"cls={replacement!r} (cod3s.{replacement}) instead. Its effects and "
+        f"conditions name the targets' variables by their exact basename: a "
+        f"discrete output 'f' is 'f_fed_available_out', a continuous output "
+        f"'q' is 'q_out_rate', and the condition shorthand {{'c': True}} is "
+        f"the structured tree [[{{'attr': 'c_fed_in', 'value': True}}]]. A "
+        f"wildcard is written out flow by flow"
+    )
+
+
+def check_not_removed_mode_class(clsname, where):
+    """Refuse a removed façade class by name, pointing at its replacement."""
+    message = removed_mode_class_message(clsname)
+
+    if message is not None:
+        raise ComponentSpecError(f"{where}: {message}")
+
+
 def _mode_class(clsname, where):
     """The mode class named by ``clsname``, and the vocabulary it speaks.
 
@@ -1963,6 +2000,8 @@ def _mode_class(clsname, where):
     or written by a modeller is found the same way and muscadet keeps no list
     of the mode classes that may exist.
     """
+    check_not_removed_mode_class(clsname, where)
+
     known = {cls.__name__: cls for cls in cod3s.PycComponent.get_subclasses()}
     cls = known.get(str(clsname))
 

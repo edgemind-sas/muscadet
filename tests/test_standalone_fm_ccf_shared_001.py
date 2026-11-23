@@ -2,19 +2,16 @@
 
 A second-order standalone mode builds one automaton per target combination,
 so a target is covered by several of them: the order-1 one on that target and
-the order-2 one on both. ``ObjFailureMode`` resolves its flow-name patterns
-itself, per combination, in ``_build_fm_automaton``; up to 5.15.0 it then
-handed each combination its records, and every combination clamped the
-target's availability gate on its own. A combination at rest kept asserting
+the order-2 one on both. When every combination clamped the target's
+availability gate on its own, a combination at rest kept asserting
 ``repair_effects`` on a target that another combination had put in ``occ``:
 an availability held on both faces never settled (cod3s#4, the run spun with
 no diagnostic).
 
 Since cod3s 1.23.0 the engine clamps a target once over its covering
 combinations, ``failure_effects`` while one of them is in ``occ`` and
-``repair_effects`` only while all of them are at rest, and lets a subclass
-feed that clamp its own records. The availability gates now go through it;
-the deratings of continuous outputs stay per automaton, composed by minimum.
+``repair_effects`` only while all of them are at rest. This pins it on a
+muscadet target, through the exact-name spelling of a ``cod3s.ObjFMDelay``.
 
 Delay laws give one deterministic timeline: order 1 fails at 2 and repairs
 after 2, order 2 fails at 3 and repairs after 10. cc_1 / cc_2: occ 2, rep 4,
@@ -28,10 +25,6 @@ import pytest
 from cod3s.pycatshoo.system import PycMCSimulationParam
 
 import muscadet
-
-#: The wrapper classes warn on instantiation; the deprecation itself is
-#: asserted in tests/test_objfailuremode_deprecation.py.
-pytestmark = pytest.mark.filterwarnings("ignore::DeprecationWarning")
 
 SCHEDULE = [0.0, 2.5, 3.5, 4.5, 12.5, 13.5, 14.5]
 #: Each target covered by a combination in occ, per SCHEDULE instant.
@@ -54,11 +47,11 @@ def the_system():
 
     # The cod3s#4 shape: the availability is held on both faces.
     system.add_component(
-        cls="ObjFailureModeDelay",
+        cls="ObjFMDelay",
         fm_name="ccf",
         targets=["CcfShA", "CcfShB"],
-        failure_effects={"f1": False},
-        repair_effects={"f1": True},
+        failure_effects={"f1_fed_available_out": False},
+        repair_effects={"f1_fed_available_out": True},
         failure_param=[2.0, 3.0],
         repair_param=[2.0, 10.0],
     )
@@ -68,9 +61,8 @@ def the_system():
 def test_the_mode_shares_its_clamps(the_system):
     mode = the_system.comp["CcfShX__ccf"]
     assert mode.shared_target_clamps is True
-    # The declared patterns still read back as declared.
-    assert mode.failure_effects == {"f1": False}
-    assert mode.repair_effects == {"f1": True}
+    assert mode.failure_effects == {"f1_fed_available_out": False}
+    assert mode.repair_effects == {"f1_fed_available_out": True}
 
 
 def test_availability_follows_the_covering_combinations(the_system):

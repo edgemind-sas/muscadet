@@ -40,10 +40,10 @@ def the_system():
 
     # Exponential failure that turns the source flow OFF when it fires.
     system.add_component(
-        cls="ObjFailureModeExp",
+        cls="ObjFMExp",
         fm_name="fail_sd",
         targets=["SD"],
-        failure_effects={"fd": False},
+        failure_effects={"fd_fed_available_out": False},
         failure_param=1 / 10,
         repair_param=0.1,
     )

@@ -1262,7 +1262,7 @@ my_plant.comp["P"].add_exp_failure_mode(
 ```
 
 - The effect pattern is matched on the flow name **and** on the name of the variable it exports, so `"water"` and `"water_fed_out"` designate the same output.
-- The flow-name match is **anchored** (`^...$`), on this path and on the standalone `ObjFailureMode*` one alike: `("H2", 0.5)` names `H2` and never `H2O`. An unanchored match let a declaration meant for one output silently halve its neighbour, and made the two spellings of one declaration produce different physics.
+- The flow-name match is **anchored** (`^...$`): `("H2", 0.5)` names `H2` and never `H2O`. An unanchored match let a declaration meant for one output silently halve its neighbour.
 - One pattern reaches **every output it names, in both families**. `failure_effects=[(".*", False)]` on a plant declaring an `H2` rate beside an `H2_status` signal derates the rate *and* clears the signal's availability; a continuous match no longer diverts the pattern away from the discrete outputs it also names.
 - A pattern naming no output flow at all keeps the 1.x resolution: an unanchored regex over the component's variable basenames, which is what `("is_ok_fed_available_out", False)` relies on.
 - A rate of `0` expresses a **total loss of production**. Continuous flows carry no separate boolean availability gate: the one number expresses both the cut and the degradation.
@@ -1325,29 +1325,30 @@ The refusal names the variables the pattern reached and the endpoint that works.
 
 For a caller holding a pattern rather than an exact name, `comp.pat_to_var_value_list(("water", 0.5))` resolves onto `water_out_rate` and drops the solver-owned endpoints.
 
-#### Standalone failure modes derate too
+#### Standalone failure modes
 
-A failure mode declared as a **component of its own** — `ObjFailureModeExp`, `ObjFailureModeDelay`, or their `cod3s.ObjFM*` successors — resolves its effect patterns against its targets' output flows. A pattern matching a continuous output is routed to a derating exactly as one declared on the component would be, so a common-cause mode may hit both families at once:
+A failure mode declared as a **component of its own** (several targets, a common cause) is a `cod3s.ObjFM*`: `ObjFMExp`, `ObjFMDelay`, `ObjFMInst`, or the generic `cod3s.ObjMode2S`. It names its targets' variables by their **exact basename**, so a discrete output is reached through its availability gate and a continuous one through its public rate:
 
 ```python
 my_plant.add_component(
-    cls="ObjFailureModeDelay",
+    cls="ObjFMDelay",
     fm_name="shared_supply",
     targets=["P", "Q"],
-    failure_effects={".*": 0.4},   # 40 % on a continuous output, unavailable on a discrete one
+    failure_effects={"water_out_rate": 0.4, "status_fed_available_out": False},
+    failure_cond=[[{"attr": "power_fed_in", "value": True}]],
     failure_param=[(13.0,), (13.0,)],
-    repair_param=[(1e6,), (1e6,)],
+    repair_cond=False,
+    repair_param=[(1.0,), (1.0,)],
 )
 ```
 
-Each automaton the mode builds owns its own derating variable on each target, so the two combinations a second-order mode makes over one component compose by minimum rather than overwriting one another, and the direction that names nothing releases the rate it took. A pattern matching no output flow at all is still refused at declaration time.
+A condition is a cod3s structured tree: a list of alternatives, each a list of `{"attr", "ope", "value"}` leaves that must all hold, read on every target of the combination (or on `"obj"` when a leaf names one).
 
-`ObjFailureMode`, `ObjFailureModeExp` and `ObjFailureModeDelay` are **thin subclasses of `cod3s.ObjFM`, `cod3s.ObjFMExp` and `cod3s.ObjFMDelay`** since 2.0 — the common-cause combinatorics, the per-order parameter variables and the automaton build are the cod3s engine's, and the generated automaton, state and transition names are unchanged from 1.x. What MUSCADET still owns is the two spellings a 1.x model uses and a native cod3s mode does not:
+**What such a mode reads and writes is published for the loop analysis.** At the pre-run step MUSCADET records, on each target, the variables the mode's conditions read and the ones its effects clamp (`ObjFlow.mode_signals`, one entry per mode and target). An instantaneous loop closed through a standalone mode, a mode gated on a signal derived from the very rate it cuts, is therefore refused at the first start like any other. A condition written as a Python callable reads what nothing can derive from a function body and stays invisible to that check.
 
-- **effects named by flow, matched as a regex** — `{"f.*": False}`, `{".*": 0.4}` — resolved to what each matching output flow offers a mode: the availability variable of a discrete output, the derating variable of a continuous one. A native `cod3s.ObjFM*` names the target's variables by their exact basename instead (`{"f1_fed_available_out": False}`, `{"water_out_rate": 0.5}`); both contracts are supported, each by its own class;
-- **the dict shorthand for a condition** — `failure_cond={"c1": True}` requires every named *input* flow of every target of the combination to be fed with that value. cod3s structured condition lists and plain callables work too.
+**Two standalone modes clamping one `{flow}_out_rate` contest one variable.** They do not compose by minimum the way modes declared on the component do, since that composition needs a variable per mode. Declare `effects_priority` on the modes to rank them, or declare the modes on the component (`add_exp_failure_mode`, `add_delay_failure_mode`) when each needs its own derating.
 
-The classes stay available indefinitely under their own names, and keep emitting a `DeprecationWarning` at construction pointing at the `cod3s.ObjFM*` equivalent. Two `cod3s.ObjFM` keywords are **refused** rather than silently honoured with no effect, because they route effects through the engine's exact-variable-name path that a flow pattern never matches: `behaviour` and `failure_effects_trans` / `repair_effects_trans`. A model needing them wants `cod3s.ObjFM*` directly.
+`muscadet.ObjFailureMode`, `ObjFailureModeExp` and `ObjFailureModeDelay`, the regex-on-flows façades of 2.x to 5.x, were **removed in 6.0.0**. A model or a stored declaration naming one is refused with the cod3s class to write instead. The migration is mechanical: `{"f": False}` becomes `{"f_fed_available_out": False}`, `{"q": 0.5}` becomes `{"q_out_rate": 0.5}`, a wildcard is written out flow by flow, and the condition shorthand `{"c": True}` becomes `[[{"attr": "c_fed_in", "value": True}]]`.
 
 ### Time profiles: production as a function of the clock
 
@@ -1521,7 +1522,7 @@ A comparison operand over a continuous input reads **what this component is allo
 
 Such an alarm may be read anywhere **except back upstream of the flow it watches**. A comparison against a continuous *rate* is algebraic — the rate a producer exports this instant is a function of the guard it reads this instant, with nothing in between — so wiring the alarm's signal to a component producing that very rate closes a loop within one instant, and the two regimes select each other for ever. That is refused at the first run, like any other continuous-flow cycle, with a `muscadet.RateComparisonLoopError` — a subclass of `muscadet.ContinuousFlowCycleError`, so one `except muscadet.ContinuousFlowCycleError` catches both shapes of refusal and reads the offending `cycle` and `connections` off it. A deadband does not make it safe: a deadband damps a value that moves *through* the band, and a rate jumps across it, crossing both edges at once. To gate production on a quantity, threshold a **capacity level** instead — see the sensor pattern below. A level is integrated, and integrated state is what breaks the loop.
 
-The refusal does not depend on *how* either end of the loop is written. The comparison may sit in a discrete production condition as above **or in a rule guard** (`cond="q >= 5"`), and what the returning signal gates may be a rule guard **or a mode** — one declared on the component with `add_atm2states` / `add_exp_failure_mode`, or a standalone `ObjFailureMode*` declared outside it and derating the very output it is gated by. All four combinations close the same instantaneous loop and all four are refused. The residual is a mode whose condition is a Python **callable**: nothing can be derived from a function body, so such a mode stays invisible to the analysis.
+The refusal does not depend on *how* either end of the loop is written. The comparison may sit in a discrete production condition as above **or in a rule guard** (`cond="q >= 5"`), and what the returning signal gates may be a rule guard **or a mode** — one declared on the component with `add_atm2states` / `add_exp_failure_mode`, or a standalone `cod3s.ObjFM*` declared outside it and clamping the rate of the very output it is gated by. All four combinations close the same instantaneous loop and all four are refused. The residual is a mode whose condition is a Python **callable**: nothing can be derived from a function body, so such a mode stays invisible to the analysis.
 
 **Nor does it depend on the verdict leaving as a signal.** A *continuous* output carries a production condition too, so a threshold may command a rate outright, and a mode derating that output does the same thing by another route. Wire that rate back into the producer of the quantity the threshold reads and the same instantaneous loop closes with nothing discrete anywhere on it, which is why neither the flow graph (an observation link is never an edge of it) nor the walk over discrete channels used to see any part of it:
 

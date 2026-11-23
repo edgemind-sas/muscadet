@@ -88,16 +88,16 @@ def the_system():
     #     __import__("ipdb").set_trace()
 
     system.add_component(
-        cls="ObjFailureModeExp",
+        cls="ObjFMExp",
         fm_name="frun",
         targets="CB",
-        failure_effects={"b2": False},
+        failure_effects={"b2_fed_available_out": False},
         failure_param=1 / 10,
         repair_param=0.1,
     )
 
     # system.add_component(
-    #     cls="ObjFailureModeExp",
+    #     cls="ObjFMExp",
     #     fm_name="frun",
     #     targets=["T1", "T2", "T3", "T4"],
     #     target_name="TXX",

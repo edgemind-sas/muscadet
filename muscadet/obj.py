@@ -31,13 +31,12 @@ methods of the same names -- so ``comp.compute_demand()``,
 - ``muscadet.derating`` -- what the failure modes bearing on a continuous
   output leave of its rate.
 
-The STANDALONE failure modes -- ``ObjFailureMode`` and its two occurrence-law
-flavours, components in their own right rather than a declaration on one --
-live in ``muscadet.failure_mode`` and are re-exported here. They are thin
-subclasses of the ``cod3s.ObjFM*`` family, which owns the common-cause
-combinatorics and the automaton build; what muscadet keeps is the regex on
-flow names its effects are spelled with, and the deratings a continuous output
-needs.
+A failure mode declared as a component of its own -- several targets, a
+common cause -- is a ``cod3s.ObjFM*`` (``ObjFMExp``, ``ObjFMDelay``,
+``ObjFMInst``) or a ``cod3s.ObjMode2S``, naming its targets' variables by their
+exact basename. muscadet's own ``ObjFailureMode*`` façades were removed in
+6.0.0; :mod:`muscadet.mode_signals` publishes what such a mode reads and writes
+for the loop analysis.
 
 Main Classes
 ------------
@@ -46,20 +45,6 @@ ObjFlow : cod3s.PycComponent
     discrete and continuous input/output flows, transformation rules,
     capacities, measurement links, automata and failure modes, with rich
     visualization capabilities.
-
-ObjFailureMode : cod3s.ObjFM
-    Base class for modeling failure modes that can affect multiple target
-    components simultaneously. Deprecated in favour of ``cod3s.ObjFM``, of
-    which it is now a thin subclass; it lives in ``muscadet.failure_mode`` and
-    is re-exported here for compatibility.
-
-ObjFailureModeExp : ObjFailureMode, cod3s.ObjFMExp
-    Exponential failure mode implementation with lambda/mu parameters for failure
-    and repair rates following exponential distributions.
-
-ObjFailureModeDelay : ObjFailureMode, cod3s.ObjFMDelay
-    Delay-based failure mode implementation with fixed time-to-failure and
-    time-to-repair parameters.
 
 FailureModeExp : cod3s.ObjCOD3S
     Pydantic model for exponential failure modes providing structured representation
@@ -107,12 +92,12 @@ Usage Example
 >>> # Add failure mode
 >>> system.add_component(
 ...     name="pump_failure",
-...     cls=muscadet.ObjFailureModeExp,
+...     cls="ObjFMExp",
 ...     fm_name="failure",
 ...     targets=["pump1"],
 ...     failure_param=[0.001],  # lambda
 ...     repair_param=[0.1],     # mu
-...     failure_effects={"water": False}
+...     failure_effects={"water_fed_available_out": False}
 ... )
 
 Dependencies
@@ -155,16 +140,6 @@ from .capacity import (
     allocate_capacity_equation_order,
 )
 from .common import copy_declaration
-
-# Standalone failure modes: components of their own, re-exported here because
-# ``muscadet.obj.ObjFailureMode*`` is where every 1.x model imports them from,
-# and because importing them is what registers them under those names for the
-# ``cls="ObjFailureModeExp"`` spelling of ``System.add_component``.
-from .failure_mode import (  # noqa: F401
-    ObjFailureMode,
-    ObjFailureModeDelay,
-    ObjFailureModeExp,
-)
 from .flow import (
     FlowDiscreteIn,
     FlowDiscreteOut,
@@ -2759,8 +2734,8 @@ class ObjFlow(cod3s.PycComponent):
     #
     # The engine lives in ``muscadet.derating``, as functions over a component,
     # and is bound here under its own names: ``add_derating`` in particular is
-    # public API, called by a mode declared OUTSIDE the component
-    # (``ObjFailureMode.resolve_effects_on``).
+    # public API, called by a caller holding a mode declared OUTSIDE the
+    # component (see ``muscadet.derating.add_derating``).
 
     match_continuous_outputs = derating.match_continuous_outputs
     add_derating = derating.add_derating
