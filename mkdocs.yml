@@ -64,6 +64,8 @@ plugins:
             docstring_style: numpy
             # Several builders document the keyword arguments they forward
             # through **kwargs; griffe would report each as unknown.
+            extensions:
+              - docs/tools/griffe_rst.py:RstToMarkdown
             docstring_options:
               warn_unknown_params: false
               warn_missing_types: false
