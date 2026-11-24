@@ -4,6 +4,27 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 6.1.0 (2026-11-24)
+
+- A pure consumer takes its demand and hands the rest back. Every connection
+  carries a consumer's WHOLE demand, so with several suppliers each answers
+  within it and their sum may exceed it; a consumer carrying a rule has always
+  handed that surplus back (R-12), a consumer carrying none kept it. Measured,
+  sources of 9 and 3 behind a `ConsumerContinuous` asking 6 delivered 9, and
+  three sources of 5 delivered 15. Such an input is now capped at the demand
+  it published and releases the rest in proportion to what each supplier
+  delivered, through the release a rule uses: 4 and 2, and 2, 2 and 2, the
+  rates a 1:1 rule already settled on. A single supplier, a supply below the
+  demand and a consumer declaring `demand=math.inf` are unchanged.
+- Behaviour change: a model with several suppliers feeding one rule-less
+  consumer now delivers less, and every indicator reading those rates moves.
+  RAICHU 0.140.0 still delivers the uncapped rates, so the two engines differ
+  on such a model until it follows.
+- `evaluation.sink_input_flows` is the one definition of a pure consumer's
+  input, read by the demand sweep (what it claims) and the production sweep
+  (what it may take). `tests/test_sink_release_001.py` pins the five supply
+  shapes, the agreement with a 1:1 rule and the unbounded sink.
+
 ## 6.0.1 (2026-11-24)
 
 - A component holding an input capacity over several flows reads back as a

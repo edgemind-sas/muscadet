@@ -1189,10 +1189,11 @@ A rule producing **several** outputs is scaled by the **largest** of their facto
 
 The demand is deliberately **not** scaled, exactly like the derating and the profile themselves: the demand sweep maps demand back through the rule's *declared* coefficients. A derated component therefore still asks for its nominal share and hands the surplus straight back.
 
-Three draws are deliberately **not** capped, and none of them destroys anything:
+A **pure consumer** — an input no rule, transfer or mixture group accounts for — is capped at the demand it declares. Every connection carries that whole demand, so with several suppliers each answers within it and their sum does not: sources of 9 and 3 behind a consumer asking 6 would otherwise deliver 9. Capped, they deliver 4 and 2, exactly as they do behind a 1:1 rule. A consumer declaring `demand=math.inf` caps nothing and still takes whatever arrives.
+
+Two draws are deliberately **not** capped, and neither destroys anything:
 
 - an input a **capacity** buffers — the surplus enters the volume, which is what a buffer is for, and `draw = consumption + storage` still holds;
-- an input **no rule accounts for** — a pure consumer *is* the sink;
 - a connection whose producer never allocated a split, which has nothing to correct.
 
 **Demand equals consumption too** on every input but the limiting one, and the capability channel is what makes it so.

@@ -167,9 +167,10 @@ def test_two_sources_share_a_demand_in_proportion_to_their_offer():
     assert run(build, read) == pytest.approx((4.0, 2.0, 6.0))
 
 
-def test_a_pure_sink_keeps_what_two_sources_deliver():
-    """The note under figure "two sources": a consumer carrying no rule is the
-    sink itself and releases nothing, so it keeps 9 for a demand of 6."""
+def test_a_pure_sink_takes_only_its_demand():
+    """The note under figure "two sources": a consumer carrying no rule caps
+    what it takes at its declared demand and hands the rest back, exactly as
+    the machine does."""
 
     def build(system):
         source(system, "S1", 9.0)
@@ -182,7 +183,7 @@ def test_a_pure_sink_keeps_what_two_sources_deliver():
     def read(system):
         return delivered(system, "S1"), delivered(system, "S2"), received(system, "C")
 
-    assert run(build, read) == pytest.approx((6.0, 3.0, 9.0))
+    assert run(build, read) == pytest.approx((4.0, 2.0, 6.0))
 
 
 # --- concepts/transformation.md -----------------------------------------------

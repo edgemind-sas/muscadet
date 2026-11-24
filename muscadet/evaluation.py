@@ -417,13 +417,14 @@ def evaluate_demand(comp):
 
     # A continuous input no rule and no transfer covers claims what it was
     # declared with: a pure consumer has no output to map a demand back from.
+    # Which inputs those are is written once, in ``sink_input_flows``, because
+    # the production sweep caps the same inputs at this same claim.
     # A profile on it scales that declared demand. Read at the solver's own
     # instant rather than through the production sweep's memo, which this band
     # runs before and which belongs to that sweep. The pre-run step has refused
     # a profile on every input covered above, so none is skipped here.
-    for flow_name, flow in comp.flows_continuous_in.items():
-        if flow_name in demands:
-            continue
+    for flow_name in sink_input_flows(comp):
+        flow = comp.flows_continuous_in[flow_name]
         demand = float(flow.var_demand_default)
         if flow.profile is not None:
             factor = flow.get_profile_factor(comp.current_time())
@@ -1710,6 +1711,44 @@ def get_transferable_flows(comp):
     ]
 
 
+
+def sink_input_flows(comp):
+    """
+    Returns the continuous inputs the component itself is the sink of.
+
+    An input no rule set consumes, no identity transfer carries on, no conduit
+    meters and no mixture group draws: nothing in the component accounts for
+    what arrives there, so the component is where that quantity ends. This is
+    a pure consumer's input, and the one definition both sweeps use:
+
+    - the demand sweep has such an input claim what it was DECLARED with,
+      ``var_demand_default`` scaled by its time profile, there being no output
+      to map a demand back from;
+    - the production sweep caps what it takes at that same claim and hands the
+      rest back (:func:`release_unused_supply`), since nothing else sizes it.
+
+    An input a capacity buffers is listed too: what the volume holds is not
+    consumed, and the callers that must stand aside from it test for it.
+
+    Returns
+    -------
+    list of str
+        In declaration order.
+    """
+    # What the rules CONSUME, not every name they touch: an input sharing its
+    # name with an output a rule produces is still drawn by nothing.
+    covered = set()
+    for rule_set in (comp.rule_sets or {}).values():
+        covered.update(rule_set.consumed_flows)
+    covered.update(get_transferable_flows(comp))
+    covered.update(transfer_named_flows(comp))
+
+    for group in (comp.mixtures or {}).values():
+        covered.update(group.flows)
+
+    return [name for name in comp.flows_continuous_in if name not in covered]
+
+
 def continuous_flow_is_connected(flow, port):
     """
     Tells whether anything is wired to a continuous flow's port.
@@ -1780,17 +1819,24 @@ def release_unused_supply(comp, consumption):
     nominal rate for ever, and this pass had nothing to give back because it
     was comparing the draw against the very scale the derating had not reached.
 
-    Three inputs are deliberately left uncapped, and none of the three is an
-    oversight:
+    A **pure consumer's** input (:func:`sink_input_flows`) has no rule to
+    size what it takes, so it is capped at the demand it published in this
+    evaluation, its declared claim. It used to be left uncapped, on the ground
+    that such a component IS the sink and takes what it is given. That holds
+    with one supplier, whose delivery is ``min(offer, demand)``, and fails with
+    several: each connection carries the WHOLE demand, each supplier answers
+    within it, and their sum does not. Measured, sources of 9 and 3 behind a
+    consumer declaring 6 delivered 9; capped, they deliver 4 and 2, as they do
+    behind a rule. An unbounded claim caps nothing, so a sink declared to take
+    whatever it is given still does.
+
+    Two inputs are deliberately left uncapped, and neither is an oversight:
 
     - an input a **capacity** buffers. What arrives there is not drawn by the
       rules but stored, and hop 1 of KTD13 has already put all of it in the
       volume: ``draw = consumption + storage`` is conservation, not a breach of
       it. Capping the draw would starve the buffer of exactly what a buffer is
       for;
-    - an input **no rule and no transfer accounts for** -- a pure consumer's
-      input, absent from ``consumption``. There is no scale to cap it against:
-      such a component IS the sink, and what it is given is what it takes;
     - a connection whose producer is **not a continuous output**, or one that
       allocated nothing to this consumer. There is no split behind it to
       correct.
@@ -1829,6 +1875,18 @@ def release_unused_supply(comp, consumption):
             continue
 
         comp.release_input_surplus(flow, drawn)
+
+    for flow_name in comp.sink_input_flows():
+        if comp.get_capacity_of_flow(flow_name, "in") is not None:
+            continue
+
+        flow = comp.flows_continuous_in[flow_name]
+        claim = flow.get_var_demand_value()
+
+        # An unbounded claim takes whatever arrives: nothing to give back, and
+        # `inf` is not a quantity to compute a share of.
+        if math.isfinite(claim):
+            comp.release_input_surplus(flow, claim)
 
 
 def release_input_surplus(comp, flow, drawn):
