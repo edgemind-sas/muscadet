@@ -4,6 +4,18 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 6.0.1 (2026-11-24)
+
+- A component holding an input capacity over several flows reads back as a
+  spec again. The per-flow held/depleted automata 5.24.1 builds on such a
+  volume (`constituent_automata`) were read as a declaration, so
+  `component_spec`, `system_spec` and the declaration an engine is handed all
+  raised `ComponentSpecError` on it, and a study holding one could no longer
+  be run from its declaration on either engine. They are built objects,
+  rebuilt by the capacity's own declaration, and a spec now leaves them out.
+  5.24.1 and 6.0.0 are affected.
+- `tests/test_capacity_constituent_depletion_001.py` pins it.
+
 ## 6.0.0 (2026-11-23)
 
 - Breaking. `muscadet.ObjFailureMode`, `ObjFailureModeExp` and

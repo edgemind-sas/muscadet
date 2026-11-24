@@ -706,7 +706,8 @@ RUNTIME_HANDLE_PREFIXES = ("sm_",)
 #: allocated on an output -- recreated by the mode declared ON the component
 #: that allocated each, or replayed from the component's ``deratings`` section
 #: when a mode outside it did (#13) -- ``automaton`` / ``state_empty``
-#: / ``state_full`` are a capacity's built bound automaton, ``mode`` is the
+#: / ``state_full`` are a capacity's built bound automaton and
+#: ``constituent_automata`` its per-flow held/depleted ones, ``mode`` is the
 #: automaton a rule set's guards compile into, and ``flow`` is the object a
 #: guard operand resolved onto. ``mixture_draws`` holds the bindings the pre-run step
 #: writes on a volume from its CONSUMER's ``mixtures`` section, so a system read
@@ -721,6 +722,7 @@ DERIVED_EXCLUDED_FIELDS = frozenset(
         "automaton",
         "state_empty",
         "state_full",
+        "constituent_automata",
         "mode",
         "flow",
         "mixture_draws",

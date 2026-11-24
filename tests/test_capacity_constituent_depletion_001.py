@@ -179,6 +179,28 @@ def test_only_a_volume_the_rules_draw_per_flow_is_watched():
         cod3s.terminate_session()
 
 
+def test_a_watched_volume_still_reads_back_as_a_spec():
+    """The per-flow automata are built objects, rebuilt by the capacity's own
+    declaration: a spec leaves them out. Read as a declaration, they made every
+    component holding such a volume unreadable (`ComponentSpecError` on
+    `constituent_automata`), and with it the system declaration an engine is
+    handed."""
+    system = build("CdSpec")
+    try:
+        capacity = system.comp["H"].capacities["hop"]
+        assert set(capacity.constituent_automata) == {"a", "b"}
+
+        spec = muscadet.component_spec(system.comp["H"])
+
+        (declared,) = spec["capacities"]
+        assert declared["name"] == "hop"
+        assert "constituent_automata" not in declared
+        assert "H" in muscadet.system_spec(system)["components"]
+    finally:
+        system.deleteSys()
+        cod3s.terminate_session()
+
+
 def test_delete():
     """Each scenario deletes its own system; this closes the session."""
     cod3s.terminate_session()
