@@ -66,15 +66,14 @@ its nominal share and distort the split among its neighbours.
 
 A demand is not split between sources: each is asked for the whole of it and
 answers within its offer. The consumer then takes what it uses and hands the
-surplus back.
+surplus back, in proportion to what each source delivered.
 
 <!-- figure: continuous-two-sources -->
 
-!!! note "A pure sink keeps everything"
-    The surplus is handed back by a component whose rule or transfer sizes
-    what it uses. A consumer carrying no rule (`ConsumerContinuous`) is the
-    sink itself: fed 9 by these two sources for a demand of 6, it keeps the 9.
-    Put a machine in front of it to cap what it takes.
+A consumer carrying no rule (`ConsumerContinuous`) behaves the same way: it
+takes its declared demand and hands the rest back, so the same two sources
+deliver 4 and 2 to it. A consumer declaring `demand=math.inf` takes whatever
+arrives.
 
 ## Declaring it
 

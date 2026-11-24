@@ -2540,6 +2540,7 @@ class ObjFlow(cod3s.PycComponent):
     continuous_flow_is_connected = staticmethod(evaluation.continuous_flow_is_connected)
     apply_consumption = evaluation.apply_consumption
     release_unused_supply = evaluation.release_unused_supply
+    sink_input_flows = evaluation.sink_input_flows
     release_input_surplus = evaluation.release_input_surplus
     release_output = evaluation.release_output
     apply_production = evaluation.apply_production
