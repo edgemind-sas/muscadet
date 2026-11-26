@@ -78,11 +78,13 @@ def build_reference(system):
 
 @pytest.fixture(scope="module")
 def declared():
-    system = build_reference(muscadet.System(name="EngineFreeReference"))
-    spec = json.loads(json.dumps(system_spec(system)))
-    yield spec
-    system.deleteSys()
-    cod3s.terminate_session()
+    system = muscadet.System(name="EngineFreeReference")
+    try:
+        build_reference(system)
+        yield json.loads(json.dumps(system_spec(system)))
+    finally:
+        system.deleteSys()
+        cod3s.terminate_session()
 
 
 def test_the_stored_reference_is_the_declaration_of_the_system_built_by_hand(declared):

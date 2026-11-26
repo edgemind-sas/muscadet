@@ -14,7 +14,7 @@ Importing this package never fails for want of an engine.
 
 import importlib
 
-from .combine import (
+from .combine_policies import (
     combine,
     COMBINE_MAX,
     combine_max,
@@ -251,7 +251,10 @@ def __getattr__(name):
 
 
 def __dir__():
-    return sorted(set(globals()) | set(_ENGINE_EXPORTS) | set(_ENGINE_SUBMODULES))
+    # Only what is bound: without the engine the execution names are not
+    # listed, so a tool walking ``dir()`` does not trip on them. Ask
+    # ``ENGINE_AVAILABLE`` rather than ``hasattr`` to detect the engine.
+    return sorted(globals())
 
 
 def _load_execution_layer():

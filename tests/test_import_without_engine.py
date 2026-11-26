@@ -60,7 +60,11 @@ def test_muscadet_imports_without_the_engine():
             import muscadet.importers
             import muscadet.conformance
 
+            import inspect
+
             assert muscadet.ENGINE_AVAILABLE is False
+            assert "ObjFlow" not in dir(muscadet)
+            inspect.getmembers(muscadet)
             assert "Pycatshoo" not in sys.modules
             assert muscadet.__version__
             assert muscadet.registered_engines() is not None
@@ -126,16 +130,22 @@ def test_an_unknown_name_stays_an_attribute_error():
 def test_a_foreign_mode_class_is_refused_where_no_engine_can_resolve_it():
     """A class cod3s does not ship is looked up in the live tree, which needs the engine."""
     _assert_ok(_run_without_engine("""
-            from muscadet.declare import ComponentSpecError, check_system_spec
+            from muscadet.declare import (
+                ModeClassUnresolvedError,
+                check_system_spec,
+                declared_events,
+            )
 
             spec = json.load(open("tests/fixtures/engine_free_reference.json"))
-            spec["components"]["X__common"]["cls"] = "ModellerOwnMode"
-            try:
-                check_system_spec(spec)
-            except ComponentSpecError as error:
-                assert "ModellerOwnMode" in str(error), str(error)
-            else:
-                raise SystemExit("an unresolvable mode class was accepted")
+            spec["components"]["feared"]["cls"] = "ModellerOwnEvent"
+            for read in (check_system_spec, declared_events):
+                try:
+                    read(spec)
+                except ModeClassUnresolvedError as error:
+                    assert "ModellerOwnEvent" in str(error), str(error)
+                    assert "engine" in str(error), str(error)
+                else:
+                    raise SystemExit(f"{read.__name__} read past an unresolvable class")
             """))
 
 
@@ -152,4 +162,4 @@ def test_the_engine_free_part_of_the_suite_runs_without_the_engine():
     assert result.returncode == 0, report[-4000:]
     passed = re.search(r"(\d+) passed", report)
     assert passed and int(passed.group(1)) >= 10, report[-2000:]
-    assert "skipped" not in report.rsplit("=", 2)[-2]
+    assert not re.search(r"\d+ (skipped|deselected|xfailed)", report), report[-2000:]

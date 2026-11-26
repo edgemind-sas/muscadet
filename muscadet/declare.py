@@ -756,6 +756,10 @@ class ComponentSpecError(ValueError):
     """A component declaration muscadet refuses to build or to read back."""
 
 
+class ModeClassUnresolvedError(ComponentSpecError):
+    """A mode class cod3s does not ship, named where no engine can resolve it."""
+
+
 def _is_serialisable(value):
     """True when ``value`` is made only of JSON-native parts.
 
@@ -2039,10 +2043,12 @@ def check_not_removed_mode_class(clsname, where):
 def _mode_class(clsname, where):
     """The mode class named by ``clsname``, and the vocabulary it speaks.
 
-    Resolved the way ``PycComponent.from_dict`` resolves a ``cls``, through the
-    live subclass tree, so a mode class shipped by cod3s, defined by muscadet
-    or written by a modeller is found the same way and muscadet keeps no list
-    of the mode classes that may exist.
+    A class cod3s ships is read off :data:`SHIPPED_MODE_CLASSES`, and the
+    class itself is then returned as None. Any other name is resolved the way
+    ``PycComponent.from_dict`` resolves a ``cls``, through the live subclass
+    tree, so a mode class defined by a modeller is found without muscadet
+    listing it. That lookup needs the engine: without one it is refused with
+    :class:`ModeClassUnresolvedError`.
     """
     check_not_removed_mode_class(clsname, where)
 
@@ -2055,9 +2061,15 @@ def _mode_class(clsname, where):
 
     try:
         known = {cls.__name__: cls for cls in cod3s.PycComponent.get_subclasses()}
-    except ImportError:
-        # No engine here, so no live tree to look a foreign class up in.
-        known = {}
+    except ImportError as error:
+        # No engine here, so no live tree to look a foreign class up in. Said
+        # as such: the class may well exist where the engine does.
+        raise ModeClassUnresolvedError(
+            f"{where}: cls={clsname!r} is not a mode class cod3s ships "
+            f"({', '.join(sorted(SHIPPED_MODE_CLASSES))}), and a class defined "
+            f"elsewhere is resolved through the engine, which is not "
+            f"installed here"
+        ) from error
     cls = known.get(str(clsname))
 
     if cls is None:
@@ -3658,6 +3670,10 @@ def declared_events(spec):
             continue
         try:
             _, vocabulary = _mode_class(comp_spec.get("cls"), f"Component {name!r}")
+        except ModeClassUnresolvedError:
+            # Not "this is no event": nobody here can tell. Dropping it would
+            # silently lose a modeller's own event class.
+            raise
         except ComponentSpecError:
             continue
         if vocabulary is EVENT_VOCABULARY:

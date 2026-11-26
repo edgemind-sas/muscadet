@@ -2,4 +2,4 @@
 
 ::: muscadet.capacity
 
-::: muscadet.combine
+::: muscadet.combine_policies
