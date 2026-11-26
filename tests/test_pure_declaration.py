@@ -19,7 +19,7 @@ import textwrap
 from pathlib import Path
 
 import pytest
-from test_cod3s_platform_h2_rebuild import h2_payload
+from test_cod3s_platform_h2_rebuild import _continuous, h2_payload
 
 from muscadet import declare, package_declaration
 from muscadet.importers import cod3s_platform as importer
@@ -168,7 +168,9 @@ def test_a_mode_that_cannot_be_declared_refuses_the_package():
     assert "no_such_variable" in str(refusal.value)
     assert "NOWHERE" in str(refusal.value)
 
-    live, added = double_reading.live_package_declaration(export, a_study)
+    live, added = double_reading.live_package_declaration(
+        export, a_study, check_catalogue=False
+    )
     assert added == 1
     half_built = live["components"]["U0002__broken"]
     assert half_built["occ_param"] is None and half_built["occ_param_name"] is None
@@ -205,6 +207,111 @@ def test_the_gap_on_an_undeclarable_mode_is_in_the_conformance_registry():
     assert "package_declaration" in recorded[0].compensation
 
 
+def _refused(export, a_study):
+    """The refusals of the pure road, and how many modes the live road added."""
+    with pytest.raises(package_declaration.PackageDeclarationError) as refusal:
+        package_declaration.package_declaration(export, a_study)
+    _live, added = double_reading.live_package_declaration(
+        export, a_study, check_catalogue=False
+    )
+    return [name for name, _reason in refusal.value.refusals], added
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        pytest.param(
+            {"occ_param": [0.1, None], "not_occ_param": [1.0, 1.0]},
+            id="one-direction-marked-inactive",
+        ),
+        pytest.param(
+            {
+                "occ_effects": {},
+                "occ_effects_trans": {"sig_is_active": False},
+                "not_occ_effects_trans": {"sig_is_active": True},
+            },
+            id="pulsed-on-both-faces",
+        ),
+    ],
+)
+def test_a_group_mode_the_engine_refuses_is_refused(fields):
+    a_study = study(
+        failure_modes=[mode("m", ["U0001", "U0002"], [0.1, 0.1], [1.0, 1.0], **fields)]
+    )
+
+    assert _refused(chain_export(2, "RefusedGroup"), a_study) == (["m"], 0)
+
+
+def test_an_independent_repair_needs_an_active_return_law():
+    a_study = study(
+        failure_modes=[
+            mode("m", ["U0001"], [0.1], [0.0], behaviour="external_rep_indep")
+        ]
+    )
+
+    assert _refused(chain_export(1, "NoReturn"), a_study) == (["m"], 0)
+
+
+def test_a_targeted_mode_without_a_law_is_refused():
+    declared = mode("m", ["U0001"], [0.1], [1.0])
+    del declared["occ_law"]
+    declared["occ_param"] = [0.1]
+
+    assert _refused(chain_export(1, "NoLaw"), study(failure_modes=[declared])) == (
+        ["m"],
+        0,
+    )
+
+
+def test_two_ranked_modes_holding_two_values_at_one_rank_are_refused():
+    a_study = study(
+        failure_modes=[
+            mode("first", ["U0001"], [0.1], [1.0], effects_priority=1),
+            mode(
+                "second",
+                ["U0001"],
+                [0.1],
+                [1.0],
+                effects_priority=1,
+                occ_effects={"sig_fed_available_out": True},
+            ),
+        ]
+    )
+
+    assert _refused(chain_export(1, "SameRank"), a_study) == (["second"], 1)
+
+
+@pytest.mark.parametrize(
+    "probabilities, parked",
+    [
+        pytest.param([0.3], None, id="a-random-draw-parks-under-the-default-name"),
+        pytest.param([1.0], "pk", id="a-certain-draw-parks-nowhere"),
+        pytest.param([0.3, 0.0, 1.0], None, id="each-order-on-its-own"),
+    ],
+)
+def test_the_parked_states_of_a_draw_are_the_ones_the_engine_builds(
+    probabilities, parked
+):
+    """Every state of a drawn mode is designated the same way by a pattern."""
+    targets = [f"U{index:04d}" for index in range(1, len(probabilities) + 1)]
+    declared = {
+        **mode("drawn", targets, [0.0], [0.0], behaviour="external"),
+        "occ_law": {"cls": "inst", "prob": probabilities},
+        "occ_param_name": ["gamma"],
+        "not_occ_law": {"cls": "exp", "rate": [0.1] * len(targets)},
+        "failure_cond": [[{"attr": "sig_fed_in", "ope": "==", "value": True}]],
+    }
+    if parked:
+        declared["occ_parked_state"] = parked
+    a_study = study(
+        failure_modes=[declared], indicators=[indicator(".*", ".*", attr_type="ST")]
+    )
+    pure, live, added = both_roads(chain_export(len(targets), "Parked"), a_study)
+
+    assert added == 1
+    assert_same(pure, live)
+
+
 # ---------------------------------------------------------------------------
 # Events and indicators
 # ---------------------------------------------------------------------------
@@ -235,6 +342,61 @@ def test_an_event_reads_the_same():
     assert_same(pure, live)
     assert pure["components"]["chain_cut"]["tempo_occ"] == 2.0
     assert declare.declared_events(pure) == ("chain_cut",)
+
+
+def test_an_event_named_like_a_component_is_refused():
+    a_study = study(
+        events=[
+            {
+                "name": "U0001",
+                "cond": [[{"attr": "sig_fed_out", "obj": "U0002", "value": True}]],
+            }
+        ]
+    )
+
+    with pytest.raises(package_declaration.StudyModeError, match="already exists"):
+        package_declaration.package_declaration(chain_export(2, "Clash"), a_study)
+
+
+@pytest.mark.parametrize(
+    "fields",
+    [
+        {"occ_state_name": "x", "not_occ_state_name": "x"},
+        {"event_aut_name": "my aut"},
+    ],
+)
+def test_an_event_the_engine_refuses_is_refused_by_both_roads(fields):
+    export = chain_export(1, "BadEvent")
+    a_study = study(
+        events=[
+            {
+                "name": "cut",
+                "cond": [[{"attr": "sig_fed_out", "obj": "U0001", "value": False}]],
+                **fields,
+            }
+        ]
+    )
+
+    with pytest.raises(package_declaration.StudyModeError):
+        package_declaration.package_declaration(export, a_study)
+    with pytest.raises(ValueError):
+        double_reading.live_package_declaration(export, a_study)
+
+
+def test_a_naming_pattern_reads_every_field_of_the_indicator():
+    a_study = study(
+        indicators=[
+            indicator(
+                "^U0001$",
+                "^sig_fed_out$",
+                name_pattern="{component}-{attr_type}-{stats}",
+            )
+        ]
+    )
+    pure, live, _added = both_roads(chain_export(1, "NamePattern"), a_study)
+
+    assert_same(pure, live)
+    assert pure["indicators"][0]["name"] == "U0001-VAR-['mean']"
 
 
 def test_a_pattern_designating_several_variables_expands_to_the_same_list():
@@ -340,9 +502,27 @@ def _condition_on_an_unknown_flow(payload):
     unit["interfaces"]["sig__output"]["prod_cond"] = [[{"name": "ghost"}]]
 
 
+def _operand(**fields):
+    def spoil(payload):
+        unit = payload["kb"]["component_templates"]["Unit"]
+        unit["interfaces"]["sig__output"]["prod_cond"] = [
+            [{"name": "sig", "port": "in", **fields}]
+        ]
+
+    return spoil
+
+
 @pytest.mark.parametrize(
     "spoil",
-    [_unknown_class, _capacity_on_a_discrete_flow, _condition_on_an_unknown_flow],
+    [
+        _unknown_class,
+        _capacity_on_a_discrete_flow,
+        _condition_on_an_unknown_flow,
+        pytest.param(_operand(port="bogus"), id="operand-port"),
+        pytest.param(_operand(negate=True, op=">", value=1), id="negated-comparison"),
+        pytest.param(_operand(op="~", value=1), id="unknown-operator"),
+        pytest.param(_operand(op=">"), id="comparison-without-a-value"),
+    ],
 )
 def test_an_invalid_export_is_refused_alike_by_both_roads(spoil):
     payload = chain_export(1, "Invalid")
@@ -357,6 +537,68 @@ def test_an_invalid_export_is_refused_alike_by_both_roads(spoil):
 
     cod3s.terminate_session()
     assert type(pure.value) is type(live.value)
+
+
+def _two_volumes(capacities):
+    return {
+        "model": {
+            "name": "TwoVolumes",
+            "kb": {"name": "KB", "version": "1.0.0"},
+            "elements": {
+                "components": {
+                    "c1": {"name": "TANK", "class_name": "Tank", "attributes": []}
+                },
+                "connections": {},
+            },
+        },
+        "kb": {
+            "component_templates": {
+                "Tank": {
+                    "interfaces": {
+                        "H2__input": _continuous("H2", "input"),
+                        "H2__output": _continuous("H2", "output"),
+                    },
+                    "capacities": capacities,
+                }
+            }
+        },
+    }
+
+
+def test_one_flow_buffered_on_each_side_is_declared_whatever_the_order():
+    """A volume that names no side takes the input one; the other is free."""
+    upstream = {"name": "a", "volume": 6.0, "flows": [{"name": "H2"}]}
+    downstream = {**upstream, "name": "b", "side": "out"}
+
+    for capacities in ([upstream, downstream], [downstream, upstream]):
+        payload = _two_volumes(capacities)
+        pure = package_declaration.export_declaration(payload)
+        built = importer.system_from_export(payload)  # compared by the double reading
+        double_reading.tear_down(built)
+        sides = {c["name"]: c["side"] for c in pure["components"]["TANK"]["capacities"]}
+        assert sides == {"a": "in", "b": "out"}
+
+
+@pytest.mark.parametrize("content", [{"H2": 50.0}, {"H2": -1.0}])
+def test_an_initial_content_the_volume_cannot_hold_is_refused_by_both_roads(content):
+    payload = _two_volumes(
+        [
+            {
+                "name": "a",
+                "volume": 6.0,
+                "flows": [{"name": "H2"}],
+                "content_init": content,
+            }
+        ]
+    )
+
+    with pytest.raises(importer.Cod3sPlatformImportError):
+        package_declaration.export_declaration(payload)
+    with pytest.raises(importer.Cod3sPlatformImportError):
+        importer.system_from_export(payload)
+    import cod3s
+
+    cod3s.terminate_session()
 
 
 def test_the_defaults_table_is_what_a_live_declaration_holds():

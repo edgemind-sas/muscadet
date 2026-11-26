@@ -362,7 +362,8 @@ SEMANTIC_POINTS: typing.Final[typing.Tuple[SemanticPoint, ...]] = (
         rule=(
             "A failure mode of a study that cannot be declared on the system "
             "-- a target the system does not hold, an effect on a variable "
-            "its target does not expose, a condition naming nothing -- "
+            "its target does not expose, a condition naming nothing, a mode "
+            "class other than ObjMode2S -- "
             "refuses the whole run package, by name. The package has no "
             "declaration, and no engine is handed one."
         ),
@@ -520,7 +521,10 @@ DEVIATIONS: typing.Final[typing.Tuple[Deviation, ...]] = (
             "the engine: the component is registered before its targets and "
             "its effects are checked, so a mode that then fails is logged and "
             "stays in the system half-built. The declaration read back from "
-            "that system carries it, with null parameter fields."
+            "that system carries it, with null parameter fields. A mode of "
+            "the two-state facade classes (ObjFMExp, ObjFMDelay, ObjFMInst) "
+            "is built and declared by that reading, where the declaration "
+            "written from data covers ObjMode2S alone."
         ),
         consequence=(
             "None on a result: both engines refuse that declaration when "

@@ -50,7 +50,7 @@ from .common import copy_declaration
 from .ctrl_grammar import CTRL_IN_SERVICE, CtrlRepublish, build_ctrl_node
 from .importers import cod3s_platform as importer
 from .profile import PROFILE_CLASSES, build_profile
-from .rules import RuleSet, normalise_boolean_operand
+from .rules import RuleSet, normalise_boolean_operand, validate_operand_shape
 
 # ---------------------------------------------------------------------------
 # Table 1 -- the defaults of every declaration class
@@ -142,6 +142,36 @@ class _FlowRef:
         self.is_continuous = flow.flow_family == importer.CONTINUOUS_FAMILY
 
 
+#: How a refused operand names what a comparison is, as the engine words it.
+_COMPARISON_KIND = "a comparison against a continuous quantity"
+
+
+def _checked_operand(side: _Side, op: dict, name, port, cmp_op, cmp_value):
+    """Refuse an operand mapping the engine refuses; the threshold as a number."""
+    where = f"Object {side.name}: production condition operand"
+    if not isinstance(name, str):
+        raise importer.Cod3sPlatformImportError(
+            f"{where} mapping must carry a string 'name' : {op}"
+        )
+    if port not in (None, "in", "out"):
+        raise importer.Cod3sPlatformImportError(
+            f"{where} 'port' must be 'in' or 'out', got {port!r}"
+        )
+    try:
+        validate_operand_shape(
+            f"{where} {name!r}",
+            cmp_op,
+            cmp_value,
+            bool(op.get("negate", False)),
+            _COMPARISON_KIND,
+        )
+        return None if cmp_op is None else float(cmp_value)
+    except (TypeError, ValueError) as err:
+        raise importer.Cod3sPlatformImportError(
+            f"{where} {name!r}: {err}" if isinstance(err, TypeError) else str(err)
+        ) from err
+
+
 def _condition_spec(side: _Side, cond: Any, created_out: set) -> List[List[dict]]:
     """A declared condition, in the form the document carries.
 
@@ -160,6 +190,10 @@ def _condition_spec(side: _Side, cond: Any, created_out: set) -> List[List[dict]
         operands = [group] if isinstance(group, (str, dict)) else list(group)
         row = []
         for op in operands:
+            if not isinstance(op, (str, dict)):
+                raise importer.Cod3sPlatformImportError(
+                    f"Bad format for production condition operand : {op}"
+                )
             if isinstance(op, str):
                 name, negate, port, cmp_op, cmp_value = op, False, None, None, None
             else:
@@ -168,8 +202,7 @@ def _condition_spec(side: _Side, cond: Any, created_out: set) -> List[List[dict]
                 port = op.get("port")
                 cmp_op = op.get("op")
                 cmp_value = op.get("value")
-                if cmp_op is not None:
-                    cmp_value = float(cmp_value)
+                cmp_value = _checked_operand(side, op, name, port, cmp_op, cmp_value)
             if port == "in":
                 flow, resolved = side.inputs.get(name), "in"
             elif port == "out":
@@ -392,8 +425,12 @@ def _capacity(
         if other is capacity:
             break
         other_side = other.side
+        if other_side is None:
+            other_side = (
+                "in" if any(held.name in side.inputs for held in other.flows) else "out"
+            )
         clash = sorted(held_names & {held.name for held in other.flows})
-        if clash and other_side in (None, capacity_side):
+        if clash and other_side == capacity_side:
             raise importer.Cod3sPlatformImportError(
                 f"Object {side.name}: {where} claims flow {', '.join(clash)} on "
                 f"side {capacity_side!r}, already held by capacity {other.name}: "
@@ -403,11 +440,29 @@ def _capacity(
     content = {
         name: float(value) for name, value in (kwargs.get("content_init") or {}).items()
     }
+    weights = {entry["name"]: entry["weight"] for entry in flows}
     for entry in flows:
         content.setdefault(entry["name"], 0.0)
+    unknown = sorted(set(content) - set(weights))
+    if unknown:
+        raise importer.Cod3sPlatformImportError(
+            f"Capacity {capacity.name}: 'content_init' names flows the capacity "
+            f"does not hold : {', '.join(unknown)}"
+        )
+    for name, quantity in content.items():
+        if quantity < 0 or quantity != quantity:
+            raise importer.Cod3sPlatformImportError(
+                f"Capacity {capacity.name}: initial content of {name!r} must be "
+                f"positive or zero, got {quantity}"
+            )
+    occupied = sum(quantity * weights[name] for name, quantity in content.items())
+    if occupied > kwargs["capacity"]:
+        raise importer.Cod3sPlatformImportError(
+            f"Capacity {capacity.name}: the initial content occupies "
+            f"{occupied:g} of a volume of {kwargs['capacity']:g}"
+        )
     makeup = kwargs.get("makeup_flow")
     if makeup is not None:
-        weights = {entry["name"]: entry["weight"] for entry in flows}
         room = kwargs["capacity"] - sum(
             quantity * weights[name] for name, quantity in content.items()
         )
@@ -523,7 +578,9 @@ def _flow_component(
     out["metadata"] = {
         "class_name": spec.class_name,
         "platform_id": spec.metadata.get("platform_id"),
-        "attributes_initial": spec.metadata.get("attributes_initial", []),
+        "attributes_initial": copy.deepcopy(
+            spec.metadata.get("attributes_initial", [])
+        ),
         "instance_overrides": importer._copied_audit_trail(
             spec.metadata.get("instance_overrides")
         ),
@@ -967,14 +1024,9 @@ def _expose_mode(name: str, spec: dict, exposed: Dict[str, Exposed]) -> None:
     targets = spec.get("targets")
     occ_state = spec.get("occ_state", "occ")
     not_occ_state = spec.get("not_occ_state", "not_occ")
-    parked = [
-        spec[key]
-        for key in ("occ_parked_state", "not_occ_parked_state")
-        if spec.get(key) is not None
-    ]
     if targets is None:
         out.automata.add(spec.get("aut_name") or mode_name)
-        out.states.update({occ_state, not_occ_state, *parked})
+        out.states.update({occ_state, not_occ_state})
         return
 
     behaviour = spec.get("behaviour", "internal")
@@ -982,8 +1034,12 @@ def _expose_mode(name: str, spec: dict, exposed: Dict[str, Exposed]) -> None:
     prefix = spec.get("param_name_order_prefix", "__{order}_o_{order_max}")
     trans_prefix = spec.get("trans_name_prefix", "__cc_{target_comb_u}")
     for direction in ("occ", "not_occ"):
+        names = spec.get(f"{direction}_param_name") or []
+        values = spec.get(f"{direction}_param") or []
         for order in range(1, order_max + 1):
-            for base in spec.get(f"{direction}_param_name") or []:
+            entry = values[order - 1] if len(values) >= order else None
+            width = len(entry) if isinstance(entry, (list, tuple)) else 1
+            for base in names[:width]:
                 out.variables.add(order_param_name(base, order, order_max, fmt=prefix))
     if behaviour in ("external", "external_rep_indep"):
         for target in targets:
@@ -994,6 +1050,7 @@ def _expose_mode(name: str, spec: dict, exposed: Dict[str, Exposed]) -> None:
                     {f"{mode_name}__{occ_state}", f"{mode_name}__{not_occ_state}"}
                 )
     for order in kept:
+        parked = _parked_states(spec, order, occ_state, not_occ_state)
         for combination in itertools.combinations(range(order_max), order):
             suffix = cc_comb_suffix(combination, order_max, trans_prefix)
             out.automata.add(f"{mode_name}{suffix}")
@@ -1001,6 +1058,33 @@ def _expose_mode(name: str, spec: dict, exposed: Dict[str, Exposed]) -> None:
                 {f"{occ_state}{suffix}", f"{not_occ_state}{suffix}"}
                 | {f"{state}{suffix}" for state in parked}
             )
+
+
+def _parked_states(spec: dict, order: int, occ_state: str, not_occ_state: str) -> set:
+    """The parked states the instantaneous draws of one order build.
+
+    A direction drawn instantaneously parks beside the state it leaves, under
+    the name the mode declares or ``<state>_star``. A CERTAIN draw
+    (probability 1) parks nowhere: the engine builds it as a single branch.
+    """
+    parked = set()
+    for direction, declared, beside in (
+        ("occ", spec.get("occ_parked_state"), not_occ_state),
+        ("not_occ", spec.get("not_occ_parked_state"), occ_state),
+    ):
+        law = spec.get(f"{direction}_law")
+        if not isinstance(law, dict) or law.get("cls") != "inst":
+            continue
+        values = spec.get(f"{direction}_param") or []
+        value = values[order - 1] if len(values) >= order else None
+        value = declare._law_order_value(value)
+        try:
+            certain = value is not None and float(value) == 1.0
+        except (TypeError, ValueError):
+            certain = False
+        if not certain:
+            parked.add(declared or f"{beside}_star")
+    return parked
 
 
 def component_catalogue(declaration: Dict[str, Any]) -> Dict[str, Dict[str, List[str]]]:
@@ -1071,7 +1155,7 @@ class _StudyState:
         self.exposed = _exposed(declaration)
         #: ``(target, variable) -> "direct" | "arbiter"``: who holds a value on
         #: a target variable, to refuse a ranked mode beside an unranked one.
-        self.holders: Dict[Tuple[str, str], Tuple[str, str]] = {}
+        self.holders: Dict[Tuple[str, str], List[Tuple[str, str, Any, Any]]] = {}
 
     def add(self, name: str, spec: dict) -> None:
         self.components[name] = spec
@@ -1115,8 +1199,68 @@ def _check_condition(state: _StudyState, cond: Any, default: Optional[str]) -> N
     walk(sanitize_cond_format(cond))
 
 
-def _mode2s_entry(kwargs: Dict[str, Any], state: _StudyState) -> dict:
-    """The declaration entry of one ``ObjMode2S`` of a study, or a refusal."""
+def _check_orders(mode_name, targets, behaviour, laws, params, effects, drop_inactive):
+    """Refuse what the engine refuses once it knows which orders a mode keeps."""
+    for direction in ("occ", "not_occ"):
+        if laws[direction] is None:
+            which = "occ_law" if direction == "occ" else "not_occ_law"
+            raise StudyModeError(
+                f"Mode '{mode_name}': no {which} provided. Declare the law with a "
+                f"ModeLaw spec, e.g. {{'cls': 'exp', 'rate': ...}}."
+            )
+
+    def marked(direction, order):
+        entry = params[direction][order - 1]
+        values = entry if isinstance(entry, (list, tuple)) else (entry,)
+        return any(value is None for value in values)
+
+    def inactive(direction, order):
+        if marked(direction, order):
+            return True
+        value = declare._law_order_value(params[direction][order - 1])
+        return not laws[direction].is_active_value(value)
+
+    order_max = len(targets)
+    kept = []
+    for order in range(1, order_max + 1):
+        both_inactive = inactive("occ", order) and inactive("not_occ", order)
+        if marked("occ", order) != marked("not_occ", order) and not both_inactive:
+            raise StudyModeError(
+                f"Mode {mode_name!r}: CC order {order} marks exactly one "
+                f"direction inactive (None) while the other is active — mark "
+                f"both directions None for an undeclared order, or give both a "
+                f"value."
+            )
+        if not (drop_inactive and both_inactive):
+            kept.append(order)
+
+    if behaviour == "internal" and order_max >= 2:
+        writers = sum(math.comb(order_max - 1, order - 1) for order in kept)
+        both_pulse = sorted(
+            set(effects["occ_effects_trans"]) & set(effects["not_occ_effects_trans"])
+        )
+        if writers >= 2 and both_pulse:
+            raise StudyModeError(
+                f"Mode {mode_name!r} (behaviour='internal', {order_max} targets, "
+                f"CC orders {kept} kept): {writers} combination automata write "
+                f"each target. Variables {both_pulse} are pulsed on both faces: "
+                f"one combination's repair would clear them while another "
+                f"combination covering the same target is still in occ."
+            )
+    if behaviour == "external_rep_indep" and order_max and inactive("not_occ", 1):
+        raise StudyModeError(
+            f"behaviour='external_rep_indep' requires the order-1 return "
+            f"(repair) law to be active for mode '{mode_name}'. Provide a "
+            f"non-zero order-1 parameter (repair_param / not_occ_param)."
+        )
+
+
+def _mode2s_entry(kwargs: Dict[str, Any], state: _StudyState):
+    """``(entry, held)`` of one ``ObjMode2S`` of a study, or a refusal.
+
+    ``held`` is what the mode holds on its targets, for the caller to record
+    once the mode is in the document.
+    """
     kwargs = dict(kwargs)
     mode_name = kwargs.pop("mode_name", None)
     fm_name = kwargs.pop("fm_name", None)
@@ -1357,31 +1501,50 @@ def _mode2s_entry(kwargs: Dict[str, Any], state: _StudyState) -> dict:
                 )
             params[direction] = current
 
+    if not self_hosted:
+        _check_orders(
+            mode_name, targets, behaviour, laws, params, effects, drop_inactive
+        )
+    for label, value in (
+        ("cond_inner_logic", inner_logic),
+        ("cond_outer_logic", outer_logic),
+    ):
+        if value not in (all, any):
+            raise StudyModeError(
+                f"Mode {mode_name!r}: {label} is a function of the engine, all "
+                f"or any, and {value!r} is neither"
+            )
+
     # Conditions are compiled per target when the mode builds its automata.
     for cond in (occ_cond, not_occ_cond):
         if isinstance(cond, list):
             for target in targets or [None]:
                 _check_condition(state, cond, target)
 
-    arbitrated = effects_priority is not None
-    for target in targets:
-        for key in ("occ_effects", "not_occ_effects"):
-            for var in effects[key]:
-                holder = state.holders.get((target, var))
-                wanted = "arbiter" if arbitrated else "direct"
-                if holder is not None and holder[0] != wanted:
-                    raise StudyModeError(
-                        f"Variable {var!r}: mode {mode_name!r} and mode "
-                        f"{holder[1]!r} both hold a value on it, one with "
-                        f"effects_priority and the other without. Their clamps "
-                        f"would fight each other: declare effects_priority on "
-                        f"both."
-                    )
-    for target in targets:
-        for key in ("occ_effects", "not_occ_effects"):
-            for var in effects[key]:
-                state.holders.setdefault(
-                    (target, var), ("arbiter" if arbitrated else "direct", mode_name)
+    kind = "direct" if effects_priority is None else "arbiter"
+    held = [
+        ((target, var), (kind, mode_name, effects_priority, value))
+        for target in targets
+        for key in ("occ_effects", "not_occ_effects")
+        for var, value in effects[key].items()
+    ]
+    for (target, var), (_kind, _owner, rank, value) in held:
+        for other_kind, other, other_rank, other_value in state.holders.get(
+            (target, var), ()
+        ):
+            if other_kind != kind:
+                raise StudyModeError(
+                    f"Variable {var!r}: mode {mode_name!r} and mode {other!r} "
+                    f"both hold a value on it, one with effects_priority and "
+                    f"the other without. Their clamps would fight each other: "
+                    f"declare effects_priority on both."
+                )
+            if kind == "arbiter" and other_rank == rank and other_value != value:
+                raise StudyModeError(
+                    f"Variable {var!r}: modes {other!r} and {mode_name!r} hold "
+                    f"different values ({other_value!r} and {value!r}) at the "
+                    f"same effects_priority {rank}. The rank cannot decide "
+                    f"between them: give them different ranks or the same value."
                 )
 
     where = f"Failure mode {name}"
@@ -1437,7 +1600,6 @@ def _mode2s_entry(kwargs: Dict[str, Any], state: _StudyState) -> dict:
         ("cond_inner_logic", inner_logic, all),
         ("cond_outer_logic", outer_logic, any),
     ):
-        value = _LOGIC_NAMES.get(value, value) if isinstance(value, str) else value
         if value is not default:
             entry[key] = declare._mode_logic_name(value, key, where)
 
@@ -1459,7 +1621,7 @@ def _mode2s_entry(kwargs: Dict[str, Any], state: _StudyState) -> dict:
         entry["metadata"] = declare._checked_declaration(
             kwargs["metadata"], f"{where}, metadata"
         )
-    return entry
+    return entry, held
 
 
 def _event_entry(payload: Dict[str, Any], state: _StudyState) -> dict:
@@ -1482,6 +1644,21 @@ def _event_entry(payload: Dict[str, Any], state: _StudyState) -> dict:
         "occ_state_name": payload.pop("occ_state_name", "occ"),
         "not_occ_state_name": payload.pop("not_occ_state_name", "not_occ"),
     }
+    for label in ("event_aut_name", "occ_state_name", "not_occ_state_name"):
+        if not isinstance(values[label], str) or not _STATE_NAME.match(values[label]):
+            raise StudyModeError(
+                f"Event {name!r}: {label}={values[label]!r} is not a valid name "
+                f"(identifier-like, regex-safe names only)."
+            )
+    if values["occ_state_name"] == values["not_occ_state_name"]:
+        raise StudyModeError(
+            f"Event {name!r}: occ_state_name and not_occ_state_name must be "
+            f"distinct, both are {values['occ_state_name']!r}."
+        )
+    if name in state.components:
+        raise StudyModeError(
+            f"Event {name!r}: a component of that name already exists in the system"
+        )
     vocabulary = declare.EVENT_VOCABULARY
     entry = {
         "name": name,
@@ -1563,8 +1740,14 @@ def _indicators(study_indicators: List[Any], state: _StudyState) -> List[dict]:
                     "component": component,
                     "attr_type": attr_type,
                     "attr_name": attr,
+                    "stats": list(stats) if stats is not None else [],
                     **payload,
                 }
+                if "measure" in fields and not isinstance(fields["measure"], str):
+                    raise ValueError(
+                        f"indicator on {component}.{attr}: measure must be a "
+                        f"string, got {fields['measure']!r}"
+                    )
                 pattern = fields.get("name_pattern")
                 if pattern is None:
                     pattern = "{component}_{attr_name}"
@@ -1579,7 +1762,6 @@ def _indicators(study_indicators: List[Any], state: _StudyState) -> List[dict]:
                 fields.setdefault("unit", "")
                 fields.setdefault("measure", "value")
                 fields.setdefault("operator", "==")
-                fields["stats"] = list(stats) if stats is not None else []
                 entry = {
                     key: fields[key]
                     for key in declare._INDICATOR_COMMON_KEYS
@@ -1625,7 +1807,7 @@ def _apply_mode_param_override(override: Any, state: _StudyState) -> None:
                 f"order {order}: expected {len(names)} value(s) for parameters "
                 f"{names}, got {len(scalars)}"
             )
-        if isinstance(law, ModeLawInst):
+        if isinstance(law, ModeLawInst) and order in _mode_orders(entry)[1]:
             before = declare._law_order_value(entry[f"{direction}_param"][order - 1])
             try:
                 was_certain = float(before) == 1.0
@@ -1705,19 +1887,23 @@ def apply_study(
                     f"mode class {spec.cls!r} has no declaration built from "
                     f"data; a study declares its modes as ObjMode2S"
                 )
-            entry = _mode2s_entry(spec.model_dump(exclude={"cls", "enabled"}), state)
+            entry, held = _mode2s_entry(
+                spec.model_dump(exclude={"cls", "enabled"}), state
+            )
             if entry["name"] in state.components:
                 raise StudyModeError(
                     f"component {entry['name']!r} already exists in the system"
                 )
-        except (
-            Exception
-        ) as err:  # noqa: BLE001 - every refusal is collected, then raised
+            state.add(entry["name"], entry)
+        except ValueError as err:
+            # StudyModeError, a law the schema refuses, a field no document
+            # carries: every refusal is collected, then raised together.
             refusals.append((spec.fm_name, str(err)))
             if logger is not None:
                 logger.error(f"FM {spec.fm_name!r} (cls={spec.cls}) failed: {err}")
             continue
-        state.add(entry["name"], entry)
+        for key, record in held:
+            state.holders.setdefault(key, []).append(record)
     if refusals:
         raise PackageDeclarationError(refusals)
 
