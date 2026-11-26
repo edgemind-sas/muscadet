@@ -993,8 +993,64 @@ def _expose_emit(name: str, iface: str, node: dict, path: str, out: Exposed) -> 
         _expose_emit(name, iface, operand, f"{path}_operand_{index}", out)
 
 
+#: The two-state FACADE classes a study may still name, each with the law its
+#: class stands for: ``(law, parameter of the law, default parameter names)``.
+#: Such a mode writes no law field, its class carries it.
+_FACADE_LAWS = {
+    "ObjFMExp": ("exp", "rate", ("lambda", "mu")),
+    "ObjFMDelay": ("delay", "time", ("ttf", "ttr")),
+}
+
+#: ``(facade key, engine key)`` for every field the two spellings share.
+_FACADE_KEYS = (
+    ("fm_name", "mode_name"),
+    ("failure_state", "occ_state"),
+    ("failure_cond", "occ_cond"),
+    ("failure_effects", "occ_effects"),
+    ("failure_effects_trans", "occ_effects_trans"),
+    ("failure_param_name", "occ_param_name"),
+    ("failure_param", "occ_param"),
+    ("repair_state", "not_occ_state"),
+    ("repair_cond", "not_occ_cond"),
+    ("repair_effects", "not_occ_effects"),
+    ("repair_effects_trans", "not_occ_effects_trans"),
+    ("repair_param_name", "not_occ_param_name"),
+    ("repair_param", "not_occ_param"),
+)
+
+
+def _engine_view(spec: dict) -> dict:
+    """A two-state mode declaration in the ENGINE spelling, whatever its class.
+
+    A facade mode (``ObjFMExp``, ``ObjFMDelay``) spells ``failure_*`` /
+    ``repair_*`` and carries its law in its class. Read through this, it
+    answers the same questions an ``ObjMode2S`` declaration answers: which
+    orders it keeps, what it exposes.
+    """
+    facade = _FACADE_LAWS.get(spec.get("cls"))
+    if facade is None:
+        return spec
+    law, field, _names = facade
+    defaults = declare.FAILURE_MODE_VOCABULARY.defaults
+    view = {key: value for key, value in spec.items()}
+    for facade_key, engine_key in _FACADE_KEYS:
+        if facade_key in spec:
+            view[engine_key] = spec[facade_key]
+        elif facade_key in defaults:
+            view[engine_key] = defaults[facade_key]
+    for direction in ("occ", "not_occ"):
+        scalars = [
+            declare._law_order_value(entry)
+            for entry in view.get(f"{direction}_param") or []
+        ]
+        view[f"{direction}_param"] = scalars
+        view[f"{direction}_law"] = {"cls": law, field: scalars}
+    return view
+
+
 def _mode_orders(spec: dict):
     """``(order_max, kept orders)`` of a targeted two-state mode declaration."""
+    spec = _engine_view(spec)
     targets = spec.get("targets") or []
     footprint = mode_footprint(
         len(targets),
@@ -1020,6 +1076,7 @@ def _expose_mode(name: str, spec: dict, exposed: Dict[str, Exposed]) -> None:
         )
         return
 
+    spec = _engine_view(spec)
     mode_name = spec["mode_name"]
     targets = spec.get("targets")
     occ_state = spec.get("occ_state", "occ")
@@ -1624,6 +1681,83 @@ def _mode2s_entry(kwargs: Dict[str, Any], state: _StudyState):
     return entry, held
 
 
+def _facade_entry(clsname: str, kwargs: Dict[str, Any], state: _StudyState):
+    """``(entry, held)`` of one facade mode of a study (``ObjFMExp``, ``ObjFMDelay``).
+
+    The mode is checked as the ``ObjMode2S`` it stands for -- same targets,
+    same effects, same conditions, the law its class carries -- and written
+    back in the facade spelling its own constructor takes.
+    """
+    law, field, default_names = _FACADE_LAWS[clsname]
+    kwargs = dict(kwargs)
+    if kwargs.get("effects_priority") is not None:
+        raise StudyModeError(
+            f"Mode {kwargs.get('fm_name')!r}: effects_priority is an ObjMode2S "
+            f"engine field; {clsname} wires its effects through the historical "
+            f"ObjFM hooks. Declare the mode as ObjMode2S."
+        )
+    targets = kwargs.get("targets") or []
+    targets = [targets] if isinstance(targets, str) else list(targets)
+    engine = {}
+    for facade_key, engine_key in _FACADE_KEYS:
+        if facade_key in kwargs:
+            engine[engine_key] = kwargs.pop(facade_key)
+    engine.setdefault("occ_state", "occ")
+    engine.setdefault("not_occ_state", "rep")
+    spelled = {}
+    for direction, default_name in zip(("occ", "not_occ"), default_names):
+        if not engine.get(f"{direction}_param_name"):
+            engine[f"{direction}_param_name"] = [default_name]
+        vector = engine.get(f"{direction}_param")
+        vector = [] if vector is None else vector
+        vector = list(vector) if isinstance(vector, list) else [vector]
+        # A facade vector shorter than the targets is completed with zeros,
+        # where the engine class asks for every order.
+        vector += [[0]] * (len(targets) - len(vector))
+        spelled[direction] = vector
+        scalars = [declare._law_order_value(entry) for entry in vector]
+        engine[f"{direction}_param"] = scalars
+        engine[f"{direction}_law"] = {"cls": law, field: scalars}
+    generic, held = _mode2s_entry({**kwargs, **engine}, state)
+
+    vocabulary = declare.FAILURE_MODE_VOCABULARY
+    engine_defaults = declare.MODE_VOCABULARY.defaults
+    engine_key_of = dict(_FACADE_KEYS)
+    values = {
+        "failure_param": spelled["occ"],
+        "repair_param": spelled["not_occ"],
+    }
+    entry = {
+        "name": generic["name"],
+        declare.COMPONENT_KIND_KEY: declare.COMPONENT_KIND_TWO_STATE_MODE,
+        "cls": clsname,
+    }
+    for key, _attribute in vocabulary.fields:
+        engine_key = engine_key_of.get(key, key)
+        if key in values:
+            value = values[key]
+        elif engine_key in generic:
+            value = generic[engine_key]
+        elif engine_key in engine_defaults:
+            value = engine_defaults[engine_key]
+        else:
+            continue
+        if key in vocabulary.defaults and value == vocabulary.defaults[key]:
+            continue
+        entry[key] = value
+    for key in (
+        "cond_inner_logic",
+        "cond_outer_logic",
+        "drop_inactive_automata",
+        "label",
+        "description",
+        "metadata",
+    ):
+        if key in generic:
+            entry[key] = generic[key]
+    return entry, held
+
+
 def _event_entry(payload: Dict[str, Any], state: _StudyState) -> dict:
     """The declaration entry of one event of a study."""
     payload = dict(payload)
@@ -1782,7 +1916,9 @@ def _apply_mode_param_override(override: Any, state: _StudyState) -> None:
     ):
         raise StudyModeError(f"failure mode {override.fm_name!r} not found")
     direction = "occ" if override.field == "failure_param" else "not_occ"
-    names = entry.get(f"{direction}_param_name")
+    facade = entry.get("cls") in _FACADE_LAWS
+    view = _engine_view(entry)
+    names = view.get(f"{direction}_param_name")
     targets = entry.get("targets")
     if not isinstance(names, list) or not names:
         raise StudyModeError(
@@ -1799,7 +1935,7 @@ def _apply_mode_param_override(override: Any, state: _StudyState) -> None:
         raise StudyModeError(
             f"expected {len(targets)} per-order entries, got {len(values)}"
         )
-    law = parse_mode_law(entry[f"{direction}_law"], what=f"{direction}_law")
+    law = parse_mode_law(view[f"{direction}_law"], what=f"{direction}_law")
     for order, value in enumerate(values, start=1):
         scalars = list(value) if isinstance(value, (tuple, list)) else [value]
         if len(scalars) != len(names):
@@ -1808,7 +1944,7 @@ def _apply_mode_param_override(override: Any, state: _StudyState) -> None:
                 f"{names}, got {len(scalars)}"
             )
         if isinstance(law, ModeLawInst) and order in _mode_orders(entry)[1]:
-            before = declare._law_order_value(entry[f"{direction}_param"][order - 1])
+            before = declare._law_order_value(view[f"{direction}_param"][order - 1])
             try:
                 was_certain = float(before) == 1.0
                 certain = float(scalars[0]) == 1.0
@@ -1819,6 +1955,11 @@ def _apply_mode_param_override(override: Any, state: _StudyState) -> None:
                     f"order {order}: a draw built certain (probability 1) "
                     f"cannot become random after construction, nor the reverse"
                 )
+    if facade:
+        # A facade mode carries its law in its class: the vector is the whole
+        # of what it declares.
+        entry[override.field] = values
+        return
     entry[f"{direction}_param"] = values
     dump = dict(entry[f"{direction}_law"])
     fields = getattr(law, "param_fields", (law.param_field,))
@@ -1882,14 +2023,17 @@ def apply_study(
         if not getattr(spec, "enabled", True):
             continue
         try:
-            if spec.cls != "ObjMode2S":
+            fields = spec.model_dump(exclude={"cls", "enabled"})
+            if spec.cls == "ObjMode2S":
+                entry, held = _mode2s_entry(fields, state)
+            elif spec.cls in _FACADE_LAWS:
+                entry, held = _facade_entry(spec.cls, fields, state)
+            else:
                 raise StudyModeError(
                     f"mode class {spec.cls!r} has no declaration built from "
-                    f"data; a study declares its modes as ObjMode2S"
+                    f"data; a study declares its modes as ObjMode2S, or as one "
+                    f"of {sorted(_FACADE_LAWS)}"
                 )
-            entry, held = _mode2s_entry(
-                spec.model_dump(exclude={"cls", "enabled"}), state
-            )
             if entry["name"] in state.components:
                 raise StudyModeError(
                     f"component {entry['name']!r} already exists in the system"

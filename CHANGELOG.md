@@ -22,14 +22,15 @@ pure-consumer change of 6.1.0.
   `component_catalogue(declaration)` lists the variables, the states and the
   automata each component of a declaration exposes, which is what an indicator
   pattern of a study is expanded on.
-- A study's modes are declared as `ObjMode2S`, with their common-cause vectors,
+- A study's modes are declared with their common-cause vectors,
   their conditions and their effects checked against the catalogue. A mode
   that cannot be declared refuses the whole package by name, every such mode
   listed at once (`PackageDeclarationError`). Read through a live system, the
   same study leaves a half-built mode in the declaration, which both engines
   refuse when they build from it: `muscadet.conformance` records the
-  difference (`POINT_UNDECLARABLE_MODE`). A mode class other than `ObjMode2S`
-  is refused; the platform emits no other.
+  difference (`POINT_UNDECLARABLE_MODE`). The facade classes `ObjFMExp` and
+  `ObjFMDelay` are declared too, in their own spelling; any other mode class
+  is refused by name.
 - `muscadet.engine.run_declaration_on`, `simulate_declaration_on` and
   `isimu_start_declaration_on` hand a declaration to a registered engine with
   no system anywhere. `run_on_engine` and its two shorthands still read a live
