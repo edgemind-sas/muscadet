@@ -177,6 +177,12 @@ def pytest_configure(config):
 
     if broken:
         raise pytest.UsageError(_wrong_interpreter_message(broken))
+    if not no_engine_requested(config):
+        # Every export the suite materialises is read by both roads, the pure
+        # one and the live one, and a difference fails the test that built it.
+        from tests import double_reading
+
+        double_reading.install()
 
 
 def pytest_ignore_collect(collection_path, config):
