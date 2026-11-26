@@ -102,23 +102,25 @@ import re
 import typing
 
 import cod3s
-import cod3s.pycatshoo.mode_law
+import cod3s.specs.mode_law
 import pydantic
+from cod3s.specs.conditions import sanitize_cond_format
 
-from .capacity import MeasurementOut
-from .common import copy_declaration
-from .flow import FlowDiscreteOutTempo
-from .obj_ctrl import (
+from .common import copy_declaration, resolve_gate_logic
+from .ctrl_grammar import (
+    CONTROLLER_DECLARATION_KEYS,
     CTRL_IN_SERVICE,
     CTRL_OUT_BOOL,
     CTRL_OUT_VALUE,
     CtrlRepublish,
-    ObjCtrl,
     build_ctrl_node,
 )
-from .obj_logic import ObjLogicGate
 from .profile import PROFILE_CLASSES, Profile
-from .transfer import TRANSFER_CLASSES, Transfer
+
+# This module is read on machines where no engine is installed: checking a
+# declaration (:func:`check_system_spec`) drives nothing. So it imports no
+# engine-bound module at module level. The functions that READ a live system
+# or BUILD one import the class they need where they use it.
 
 #: Keys the component CONSTRUCTOR consumes, in the order it takes them.
 #: ``partial_init`` is deliberately absent: this module always builds partially
@@ -316,7 +318,7 @@ COMPONENT_KINDS = (
 CONTROLLER_SECTIONS = tuple(
     section
     for section, _ in DECLARATION_SECTIONS
-    if section in ObjCtrl.DECLARATION_KEYS
+    if section in CONTROLLER_DECLARATION_KEYS
 )
 
 #: Every key a controller declaration may carry.
@@ -391,7 +393,7 @@ MODE_OPERATORS = {
 #: a document it cannot read.
 MODE_LAW_PARAM_FIELDS = {
     law_cls.model_fields["cls"].default: law_cls.param_field
-    for law_cls in typing.get_args(typing.get_args(cod3s.pycatshoo.mode_law.ModeLaw)[0])
+    for law_cls in typing.get_args(typing.get_args(cod3s.specs.mode_law.ModeLaw)[0])
 }
 
 #: ``{"exp": ("rate",), ..., "uniform": ("low", "high")}``: EVERY parameter
@@ -403,7 +405,7 @@ MODE_LAW_PARAMS = {
     law_cls.model_fields["cls"].default: tuple(
         getattr(law_cls, "param_fields", (law_cls.param_field,))
     )
-    for law_cls in typing.get_args(typing.get_args(cod3s.pycatshoo.mode_law.ModeLaw)[0])
+    for law_cls in typing.get_args(typing.get_args(cod3s.specs.mode_law.ModeLaw)[0])
 }
 
 
@@ -458,7 +460,7 @@ class ModeVocabulary(pydantic.BaseModel):
     order_vectors: tuple
 
     #: ``(law key, parameter key)``: the fields holding a
-    #: ``cod3s.pycatshoo.mode_law.ModeLaw``, which is a pydantic model rather
+    #: ``cod3s.specs.mode_law.ModeLaw``, which is a pydantic model rather
     #: than data and is dumped rather than refused, EACH PAIRED WITH THE FIELD
     #: OF :attr:`order_vectors` THAT WRITES THE SAME NUMBERS. Empty for the
     #: façade family, whose law is carried by the class itself.
@@ -662,11 +664,31 @@ EVENT_VOCABULARY = ModeVocabulary(
 #: ``cod3s.ObjDegMode`` is deliberately absent: it is a multi-state mode and
 #: not an ``ObjMode2S`` in the first place, so it has neither of these shapes
 #: and gets the refusal :func:`component_spec` gives.
+#:
+#: Keyed by the NAME of the cod3s family class, not by the class: the classes
+#: are engine-bound, and a declaration is checked where no engine is
+#: installed. :func:`mode_vocabulary` matches a class through its ancestry.
 MODE_VOCABULARIES = (
-    (cod3s.ObjEvent, EVENT_VOCABULARY),
-    (cod3s.ObjFM, FAILURE_MODE_VOCABULARY),
-    (cod3s.ObjMode2S, MODE_VOCABULARY),
+    ("ObjEvent", EVENT_VOCABULARY),
+    ("ObjFM", FAILURE_MODE_VOCABULARY),
+    ("ObjMode2S", MODE_VOCABULARY),
 )
+
+#: The mode classes cod3s ships, each with the family whose vocabulary it
+#: speaks. It is what lets a declaration naming one of them be checked without
+#: the engine. A mode class defined elsewhere (by a modeller) is still resolved
+#: through the live subclass tree, which needs the engine that would run it.
+#:
+#: ``tests/test_mode_class_catalogue_001.py`` pins this table against the live
+#: tree, so a class cod3s adds or re-parents cannot leave it stale in silence.
+SHIPPED_MODE_CLASSES = {
+    "ObjEvent": "ObjEvent",
+    "ObjFM": "ObjFM",
+    "ObjFMDelay": "ObjFM",
+    "ObjFMExp": "ObjFM",
+    "ObjFMInst": "ObjFM",
+    "ObjMode2S": "ObjMode2S",
+}
 
 #: Field-name prefixes a RUNTIME HANDLE may carry: the PyCATSHOO variables and
 #: references a flow is wired to at ``set_flows()``, and the sensitive methods
@@ -732,6 +754,10 @@ DERIVED_EXCLUDED_FIELDS = frozenset(
 
 class ComponentSpecError(ValueError):
     """A component declaration muscadet refuses to build or to read back."""
+
+
+class ModeClassUnresolvedError(ComponentSpecError):
+    """A mode class cod3s does not ship, named where no engine can resolve it."""
 
 
 def _is_serialisable(value):
@@ -1130,6 +1156,8 @@ def _declaration_fields(obj, where, skip=()):
     a mapping cannot carry, and a spec that quietly dropped it would rebuild a
     component splitting its supply by a different policy.
     """
+    from .transfer import TRANSFER_CLASSES, Transfer
+
     fields = {}
 
     def classify(key, value):
@@ -1568,13 +1596,12 @@ def check_logic_gate_spec(spec):
     if spec.get("cls", "ObjLogicGate") != "ObjLogicGate":
         raise ComponentSpecError(f"{where}: cls must be 'ObjLogicGate'")
     try:
-        ObjLogicGate._resolve_logic(spec.get("logic_kind", "or"), spec.get("k"))
+        resolve_gate_logic(spec.get("logic_kind", "or"), spec.get("k"))
     except ValueError as error:
         raise ComponentSpecError(f"{where}: {error}") from error
     cond = spec.get("cond", [])
     if not isinstance(cond, (dict, list)):
         raise ComponentSpecError(f"{where}: cond must be a mapping or list")
-    from cod3s.pycatshoo.common import sanitize_cond_format
 
     try:
         groups = sanitize_cond_format(cond)
@@ -1609,7 +1636,7 @@ def build_logic_gate_component(system, spec):
     name = check_logic_gate_spec(spec)
     if name in system.comp:
         raise ComponentSpecError(f"Logic gate {name}: component already exists")
-    from cod3s.pycatshoo.common import prepare_attr_tree, sanitize_cond_format
+    from cod3s.pycatshoo.common import prepare_attr_tree
 
     groups = sanitize_cond_format(copy_declaration(spec.get("cond", [])))
     for group in groups:
@@ -1696,6 +1723,9 @@ def component_spec(comp):
         When a declaration holds something no mapping can carry, or when the
         component is of a kind no declaration describes.
     """
+    from .obj_ctrl import ObjCtrl
+    from .obj_logic import ObjLogicGate
+
     if isinstance(comp, ObjLogicGate):
         return logic_gate_component_spec(comp)
 
@@ -1764,6 +1794,9 @@ def flow_component_spec(comp):
     ComponentSpecError
         When a declaration holds something no mapping can carry.
     """
+    from .flow import FlowDiscreteOutTempo
+    from .transfer import TRANSFER_CLASSES
+
     where = f"Component {comp.basename()}"
 
     flows = []
@@ -1933,6 +1966,19 @@ def flow_component_spec(comp):
     return _checked_document(spec, f"component {comp.basename()}")
 
 
+def _descends_from_cod3s(cls, family):
+    """Whether ``cls`` is, or derives from, the cod3s class named ``family``.
+
+    ``issubclass`` against the class itself, written without importing it: the
+    family classes are engine-bound and this question is asked of a document
+    as well as of a live component.
+    """
+    return any(
+        base.__name__ == family and base.__module__.split(".")[0] == "cod3s"
+        for base in cls.__mro__
+    )
+
+
 def mode_vocabulary(cls, where):
     """The :class:`ModeVocabulary` ``cls`` speaks, or a refusal naming it.
 
@@ -1944,7 +1990,7 @@ def mode_vocabulary(cls, where):
     a vocabulary that does not fit it.
     """
     for family, vocabulary in MODE_VOCABULARIES:
-        if isinstance(cls, type) and issubclass(cls, family):
+        if isinstance(cls, type) and _descends_from_cod3s(cls, family):
             return vocabulary
 
     raise ComponentSpecError(
@@ -1997,14 +2043,33 @@ def check_not_removed_mode_class(clsname, where):
 def _mode_class(clsname, where):
     """The mode class named by ``clsname``, and the vocabulary it speaks.
 
-    Resolved the way ``PycComponent.from_dict`` resolves a ``cls``, through the
-    live subclass tree, so a mode class shipped by cod3s, defined by muscadet
-    or written by a modeller is found the same way and muscadet keeps no list
-    of the mode classes that may exist.
+    A class cod3s ships is read off :data:`SHIPPED_MODE_CLASSES`, and the
+    class itself is then returned as None. Any other name is resolved the way
+    ``PycComponent.from_dict`` resolves a ``cls``, through the live subclass
+    tree, so a mode class defined by a modeller is found without muscadet
+    listing it. That lookup needs the engine: without one it is refused with
+    :class:`ModeClassUnresolvedError`.
     """
     check_not_removed_mode_class(clsname, where)
 
-    known = {cls.__name__: cls for cls in cod3s.PycComponent.get_subclasses()}
+    # A class cod3s ships is read off the table, with no engine: the class
+    # itself is then left unresolved (None), nothing on a checking path needs
+    # it, and the engine that builds the mode resolves it by the same name.
+    family = SHIPPED_MODE_CLASSES.get(str(clsname))
+    if family is not None:
+        return None, dict(MODE_VOCABULARIES)[family]
+
+    try:
+        known = {cls.__name__: cls for cls in cod3s.PycComponent.get_subclasses()}
+    except ImportError as error:
+        # No engine here, so no live tree to look a foreign class up in. Said
+        # as such: the class may well exist where the engine does.
+        raise ModeClassUnresolvedError(
+            f"{where}: cls={clsname!r} is not a mode class cod3s ships "
+            f"({', '.join(sorted(SHIPPED_MODE_CLASSES))}), and a class defined "
+            f"elsewhere is resolved through the engine, which is not "
+            f"installed here"
+        ) from error
     cls = known.get(str(clsname))
 
     if cls is None:
@@ -2633,6 +2698,8 @@ def controller_component_spec(comp):
     ComponentSpecError
         When a declaration holds something no mapping can carry.
     """
+    from .capacity import MeasurementOut
+
     where = f"Controller {comp.basename()}"
 
     controls_in = []
@@ -3603,6 +3670,10 @@ def declared_events(spec):
             continue
         try:
             _, vocabulary = _mode_class(comp_spec.get("cls"), f"Component {name!r}")
+        except ModeClassUnresolvedError:
+            # Not "this is no event": nobody here can tell. Dropping it would
+            # silently lose a modeller's own event class.
+            raise
         except ComponentSpecError:
             continue
         if vocabulary is EVENT_VOCABULARY:

@@ -4,6 +4,45 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 6.2.0 (2026-11-26)
+
+- muscadet imports without PyCATSHOO. `import muscadet` used to load the
+  engine unconditionally, so not even a declaration could be checked on a
+  machine without the binary. The declarative part now loads there:
+  `muscadet.declare` (`check_system_spec`, `declared_events`,
+  `component_build_order`), `muscadet.engine` (the registry),
+  `muscadet.importers` (`parse_platform_export`), `muscadet.profile` and
+  `muscadet.conformance`. Reaching an execution name (`muscadet.ObjFlow`,
+  `muscadet.System`, a flow or capacity class) without the engine raises an
+  `ImportError` naming PyCATSHOO. `muscadet.ENGINE_AVAILABLE` tells which case
+  holds.
+- An engine that is installed and fails to load (its native library missing
+  from `LD_LIBRARY_PATH`) still fails `import muscadet`, as before: only a
+  PyCATSHOO that is not installed at all selects the engine-free form.
+- Nothing changes where PyCATSHOO is installed: the execution layer is loaded
+  at import as before, every component class is registered and resolves by
+  its `cls` name, and every public name is bound on the package. No model
+  behaviour changes, and `SYSTEM_SPEC_VERSION` stays 1.2.0.
+- `muscadet.declare` imports no engine-bound module at module level. What a
+  declaration is CHECKED against moved to modules of its own:
+  `muscadet.ctrl_grammar` (the controller grammar, `build_ctrl_node` and the
+  key lists, re-exported by `muscadet.obj_ctrl`) and `muscadet.combine_policies` (the
+  combination policies, re-exported by `muscadet.capacity`).
+  `declare.MODE_VOCABULARIES` is keyed by the NAME of the cod3s family class
+  rather than by the class.
+- A mode class cod3s ships is checked off `declare.SHIPPED_MODE_CLASSES`,
+  without resolving the class. A mode class defined elsewhere is still looked
+  up in the live subclass tree, which needs the engine that would run it;
+  without one, a declaration naming it is refused.
+  `tests/test_mode_class_catalogue_001.py` pins the table against the live
+  tree.
+- `pytest --no-engine` runs the engine-free part of the suite,
+  `tests/engine_free/`, in a process where PyCATSHOO cannot be imported. It is
+  asked for, never fallen back to: an ordinary run without the engine is still
+  refused by name. `tests/test_import_without_engine.py` plays the scenarios
+  from the ordinary suite, in subprocesses.
+- Requires cod3s 1.26.0, whose declarative part loads without PyCATSHOO.
+
 ## 6.1.0 (2026-11-24)
 
 - A pure consumer takes its demand and hands the rest back. Every connection

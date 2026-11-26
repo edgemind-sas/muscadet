@@ -46,6 +46,19 @@
   check runs from a systemd user service, which reads no profile, and a line
   that leaves the environment out ends in 0.3 s on the `conftest.py` refusal
   naming `Pycatshoo`, having run no test at all
+- The engine-free part of the suite is `tests/engine_free/`, and it runs on
+  request with `uv run pytest --no-engine`, in a process where PyCATSHOO is
+  made unimportable. A test goes there when it reads documents and builds
+  nothing: checking a declaration, parsing an export, reading the registry.
+  It must hold with the engine present too, since the ordinary suite collects
+  the directory as well. A missing engine never selects this subset by itself:
+  the ordinary run stays refused by name, so that an environment that lost
+  PyCATSHOO cannot shrink the suite to a dozen tests and report green
+- muscadet's declarative modules import no engine-bound module at module
+  level: `declare`, `engine`, `importers`, `profile`, `conformance`,
+  `ctrl_grammar`, `combine_policies`, `common`, `rules`, `initial_state`. A function of
+  `declare` that READS a live system or BUILDS one imports the class it needs
+  where it uses it. `tests/test_import_without_engine.py` is the guard
 - Test configuration lives in `pyproject.toml` alone. pytest reads the first
   inifile it finds and never merges two, so adding a `pytest.ini`,
   `tox.ini` or `setup.cfg` section beside it silently disables `testpaths`,

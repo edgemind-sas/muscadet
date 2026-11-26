@@ -1,0 +1,206 @@
+{
+  "components": {
+    "A": {
+      "automata": [],
+      "capacities": [],
+      "cls": "ObjFlow",
+      "failure_modes": [],
+      "flows": [
+        {
+          "cls": "FlowOut",
+          "component_authorized": [
+            {
+              "class_name_bkd": ".*"
+            }
+          ],
+          "name": "f",
+          "negate": false,
+          "var_fed_available_out_init": true,
+          "var_fed_available_out_reset": true,
+          "var_fed_default": false,
+          "var_is_active_default": true,
+          "var_prod_cond_inner_mode": "or",
+          "var_prod_default": true,
+          "var_type": "bool"
+        }
+      ],
+      "measurements_in": [],
+      "measurements_out": [],
+      "mixtures": [],
+      "name": "A",
+      "rules": [],
+      "source_cls": "ObjFlow",
+      "transfers": []
+    },
+    "A__engine": {
+      "cls": "ObjMode2S",
+      "kind": "two_state_mode",
+      "mode_name": "engine",
+      "name": "A__engine",
+      "not_occ_law": {
+        "cls": "delay",
+        "time": [
+          3.0
+        ]
+      },
+      "not_occ_param": [
+        3.0
+      ],
+      "not_occ_param_name": [
+        "not_occ_time"
+      ],
+      "occ_effects": {
+        "f_fed_available_out": false
+      },
+      "occ_law": {
+        "cls": "exp",
+        "rate": [
+          0.1
+        ]
+      },
+      "occ_param": [
+        0.1
+      ],
+      "occ_param_name": [
+        "occ_rate"
+      ],
+      "target_name": "A",
+      "targets": [
+        "A"
+      ]
+    },
+    "B": {
+      "automata": [],
+      "capacities": [],
+      "cls": "ObjFlow",
+      "failure_modes": [],
+      "flows": [
+        {
+          "cls": "FlowOut",
+          "component_authorized": [
+            {
+              "class_name_bkd": ".*"
+            }
+          ],
+          "name": "f",
+          "negate": false,
+          "var_fed_available_out_init": true,
+          "var_fed_available_out_reset": true,
+          "var_fed_default": false,
+          "var_is_active_default": true,
+          "var_prod_cond_inner_mode": "or",
+          "var_prod_default": true,
+          "var_type": "bool"
+        }
+      ],
+      "measurements_in": [],
+      "measurements_out": [],
+      "mixtures": [],
+      "name": "B",
+      "rules": [],
+      "source_cls": "ObjFlow",
+      "transfers": []
+    },
+    "CTRL": {
+      "cls": "ObjCtrl",
+      "controls_in": [
+        {
+          "aggregate": null,
+          "fill_default": 0.0,
+          "flows": [],
+          "kind": "level",
+          "level_default": 0.0,
+          "name": "level",
+          "rate_default": 0.0,
+          "ratio_default": 0.0
+        }
+      ],
+      "controls_out": [
+        {
+          "default": false,
+          "kind": "bool",
+          "name": "go"
+        }
+      ],
+      "kind": "controller",
+      "name": "CTRL",
+      "source_cls": "ObjCtrl"
+    },
+    "Gate": {
+      "cls": "ObjLogicGate",
+      "cond": [
+        [
+          {
+            "attr": "f_fed_out",
+            "obj": "A",
+            "value": true
+          }
+        ],
+        [
+          {
+            "attr": "f_fed_out",
+            "obj": "B",
+            "value": true
+          }
+        ]
+      ],
+      "k": null,
+      "kind": "logic_gate",
+      "logic_kind": "and",
+      "name": "Gate",
+      "out_elements": [
+        "g"
+      ],
+      "source_cls": "ObjLogicGate"
+    },
+    "X__common": {
+      "cls": "ObjFMExp",
+      "drop_inactive_automata": false,
+      "failure_effects": {
+        "f_fed_available_out": false
+      },
+      "failure_param": [
+        0.001,
+        0.0001
+      ],
+      "failure_param_name": [
+        "lambda"
+      ],
+      "fm_name": "common",
+      "kind": "two_state_mode",
+      "name": "X__common",
+      "repair_param": [
+        0.1,
+        0.1
+      ],
+      "repair_param_name": [
+        "mu"
+      ],
+      "target_name": "X",
+      "targets": [
+        "A",
+        "B"
+      ]
+    },
+    "feared": {
+      "cls": "ObjEvent",
+      "cond": [
+        [
+          {
+            "attr": "f_fed_out",
+            "obj": "A",
+            "value": false
+          }
+        ]
+      ],
+      "kind": "two_state_mode",
+      "name": "feared",
+      "tempo_occ": 2.0
+    }
+  },
+  "connections": [],
+  "generated_indicators": true,
+  "indicators": [],
+  "name": "EngineFreeReference",
+  "version": "1.2.0"
+}
