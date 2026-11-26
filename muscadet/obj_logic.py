@@ -4,7 +4,7 @@ import cod3s
 import Pycatshoo as Pyc
 from cod3s.pycatshoo.common import prepare_attr_tree, sanitize_cond_format
 
-from .common import copy_declaration
+from .common import copy_declaration, resolve_gate_logic
 from .initial_state import RANK_OUTPUT, register_initial_evaluation
 from .obj import ObjFlow
 
@@ -148,16 +148,4 @@ class ObjLogicGate(cod3s.PycComponent):
     @staticmethod
     def _resolve_logic(kind, k):
         """Return ``(inner_logic, outer_logic)`` for unit-clause conds."""
-        if kind == "or":
-            return all, any
-        if kind == "and":
-            return all, all
-        if kind == "k":
-            if not isinstance(k, int) or isinstance(k, bool) or k < 1:
-                raise ValueError(
-                    f"ObjLogicGate kind='k' requires an int k>=1, got {k!r}"
-                )
-            return all, (lambda flags: sum(1 for flag in flags if flag) >= k)
-        raise ValueError(
-            f"ObjLogicGate: unknown kind {kind!r} (expected 'or', 'and' or 'k')"
-        )
+        return resolve_gate_logic(kind, k)

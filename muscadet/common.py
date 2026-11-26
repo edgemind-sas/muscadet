@@ -1,5 +1,3 @@
-import Pycatshoo as pyc
-
 #: Occurrence law of an instantaneous transition: it fires as soon as its
 #: condition holds. Every automaton muscadet builds to watch a crossing uses
 #: it -- a rule set's mode automaton (R12), a capacity's empty/full bounds
@@ -97,6 +95,8 @@ def entity_label(kind, info, quote=False):
 
 
 def get_pyc_type(var_type):
+    import Pycatshoo as pyc
+
     if var_type == "bool":
         return (bool, pyc.TVarType.t_bool)
     elif var_type == "int":
@@ -105,3 +105,22 @@ def get_pyc_type(var_type):
         return (float, pyc.TVarType.t_double)
     else:
         raise ValueError(f"Type {var_type} not supported by PyCATSHOO")
+
+
+def resolve_gate_logic(kind, k):
+    """Return ``(inner_logic, outer_logic)`` for a logic gate's unit-clause conds.
+
+    Pure, and written here rather than on :class:`muscadet.ObjLogicGate` so a
+    gate DECLARATION is checked without the engine the gate would be built on.
+    """
+    if kind == "or":
+        return all, any
+    if kind == "and":
+        return all, all
+    if kind == "k":
+        if not isinstance(k, int) or isinstance(k, bool) or k < 1:
+            raise ValueError(f"ObjLogicGate kind='k' requires an int k>=1, got {k!r}")
+        return all, (lambda flags: sum(1 for flag in flags if flag) >= k)
+    raise ValueError(
+        f"ObjLogicGate: unknown kind {kind!r} (expected 'or', 'and' or 'k')"
+    )
