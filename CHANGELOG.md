@@ -4,6 +4,43 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 6.0.3 (2026-11-26)
+
+Maintenance release of the 6.0 line: the 6.3.0 change below, without the
+pure-consumer change of 6.1.0.
+
+- `muscadet.package_declaration` declares a run package without an engine. A
+  run package is a COD3S Platform export and the study beside it. Its system
+  declaration used to be read back from a live system: the export was built on
+  PyCATSHOO, the study was applied on the live objects, and
+  `declare.system_spec` dumped the result. `package_declaration(export, study)`
+  writes the same document from the data alone, and creates no engine object.
+  `export_declaration` and `context_declaration` declare the export without a
+  study, `apply_study` adds a study to a declaration.
+- Two tables hold what the live objects used to supply. `DECLARATION_DEFAULTS`
+  gives every declaration field the value it takes when nothing set it.
+  `component_catalogue(declaration)` lists the variables, the states and the
+  automata each component of a declaration exposes, which is what an indicator
+  pattern of a study is expanded on.
+- A study's modes are declared as `ObjMode2S`, with their common-cause vectors,
+  their conditions and their effects checked against the catalogue. A mode
+  that cannot be declared refuses the whole package by name, every such mode
+  listed at once (`PackageDeclarationError`). Read through a live system, the
+  same study leaves a half-built mode in the declaration, which both engines
+  refuse when they build from it: `muscadet.conformance` records the
+  difference (`POINT_UNDECLARABLE_MODE`). A mode class other than `ObjMode2S`
+  is refused; the platform emits no other.
+- The document is unchanged: same keys, same values, `SYSTEM_SPEC_VERSION`
+  stays 1.2.0, and nothing changes for a model built on PyCATSHOO.
+- The suite reads every export it materialises by both roads
+  (`tests/double_reading.py`, installed around `apply_to_system` by the root
+  `conftest.py`) and fails the test that built the system when the two
+  documents, or the catalogue and what the engine exposes, differ.
+  `tests/test_pure_declaration.py` does the same for studies, and
+  `tests/test_declaration_build_scaling.py` at 100, 500, 1 000 and 10 000
+  components: the pure road takes 0.6 s at 10 000 components where the live
+  one takes 13.8 s.
+
 ## 6.0.2 (2026-11-26)
 
 - Maintenance release on the 6.0 line: the engine-free import of 6.2.0,
