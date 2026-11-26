@@ -1,90 +1,41 @@
+"""muscadet: a declarative description of flow systems, and the engines that run it.
+
+Importing this package never fails for want of an engine.
+
+- The DECLARATIVE part (:mod:`muscadet.declare`, :mod:`muscadet.engine`,
+  :mod:`muscadet.importers`, :mod:`muscadet.profile`, the controller grammar)
+  loads on a machine where PyCATSHOO is not installed.
+- The EXECUTION part (``ObjFlow``, ``System``, the flow and capacity classes)
+  drives PyCATSHOO. Where the engine is installed it is loaded at import, as
+  it always was, so every component class is registered and resolves by its
+  ``cls`` name. Where it is not, reaching one of its names raises an
+  ``ImportError`` naming PyCATSHOO.
+"""
+
 import importlib
 
-from .capacity import (
+from .combine import (
+    combine,
     COMBINE_MAX,
+    combine_max,
     COMBINE_MEAN,
+    combine_mean,
     COMBINE_MEDIAN,
+    combine_median,
     COMBINE_MIN,
+    combine_min,
     COMBINE_POLICIES,
     COMBINE_SUM,
-    Capacity,
-    CapacityFlow,
-    MeasurementIn,
-    MeasurementOut,
-    combine,
-    combine_max,
-    combine_mean,
-    combine_median,
-    combine_min,
     combine_sum,
 )
-from .declare import (
-    COMPONENT_REFERENCE_KEYS,
-    GENERATED_INDICATORS,
-    GENERATED_INDICATORS_DEFAULT,
-    ComponentSpecError,
-    SystemSpecError,
-    build_component,
-    build_system,
-    check_spec,
-    check_system_spec,
-    component_build_order,
-    component_references,
-    component_spec,
-    declared_events,
-    declared_occurrence_state,
-    generated_indicators,
-    system_spec,
-)
-from .engine import (
-    ENGINE_ENTRY_POINT_GROUP,
-    REFERENCE_ENGINE,
-    RUN_TARGETS,
-    Engine,
-    EngineAlreadyRegisteredError,
-    EngineError,
-    EngineRunnerMissingError,
-    RunTargetError,
-    UnknownEngineError,
-    check_run_targets,
-    get_engine,
-    is_reference_engine,
-    reference_declaration,
-    reference_isimu_start,
-    reference_run,
-    reference_simulate,
-    register_engine,
-    registered_engines,
-    reset_engines,
-    run_target_names,
-    run_targets,
-    unregister_engine,
-)
-from .evaluation import UnboundedRateError
-from .flow import (
-    FlowDiscrete,
-    FlowDiscreteIn,
-    FlowDiscreteOut,
-    FlowDiscreteOutOnTrigger,
-    FlowDiscreteOutTempo,
-    FlowIn,
-    FlowOut,
-    FlowOutOnTrigger,
-    FlowOutTempo,
-)
-from .flow_continuous import (
-    FlowContinuous,
-    FlowContinuousIn,
-    FlowContinuousOut,
-)
-from .initial_state import InitialFixpointError
-from .mixture import MixtureDraw, MixtureGroupError, MixtureIn
-from .obj import ObjFlow
-from .obj_ctrl import (
+from .ctrl_grammar import (
     AGGREGATION_CROSSING_CAP,
     AGGREGATION_KINK_POLICIES,
     AGGREGATION_SMOOTH_POLICIES,
+    build_ctrl_node,
     CONTROL_AGGREGATIONS,
+    crossing_count,
+    crossing_pairs,
     CTRL_BAND_ABOVE,
     CTRL_BAND_BELOW,
     CTRL_BAND_DIRECTIONS,
@@ -109,43 +60,155 @@ from .obj_ctrl import (
     CtrlCompare,
     CtrlNode,
     CtrlRepublish,
-    CtrlServiceIn,
-    CtrlSignalOut,
-    ObjCtrl,
-    build_ctrl_node,
-    crossing_count,
-    crossing_pairs,
 )
-from .obj_logic import LogicAnd, LogicOr, ObjLogicGate
-from .ordering import (
-    CommandedRateLoopError,
-    CommandedRateSelfLoopError,
-    ContinuousFlowCycleError,
-    ControllerSignalCycleError,
-    RateComparisonLoopError,
-    RateObservationLoopError,
+from .declare import (
+    build_component,
+    build_system,
+    check_spec,
+    check_system_spec,
+    component_build_order,
+    COMPONENT_REFERENCE_KEYS,
+    component_references,
+    component_spec,
+    ComponentSpecError,
+    declared_events,
+    declared_occurrence_state,
+    GENERATED_INDICATORS,
+    generated_indicators,
+    GENERATED_INDICATORS_DEFAULT,
+    system_spec,
+    SystemSpecError,
 )
+from .engine import (
+    check_run_targets,
+    Engine,
+    ENGINE_ENTRY_POINT_GROUP,
+    EngineAlreadyRegisteredError,
+    EngineError,
+    EngineRunnerMissingError,
+    get_engine,
+    is_reference_engine,
+    reference_declaration,
+    REFERENCE_ENGINE,
+    reference_isimu_start,
+    reference_run,
+    reference_simulate,
+    register_engine,
+    registered_engines,
+    reset_engines,
+    run_target_names,
+    RUN_TARGETS,
+    run_targets,
+    RunTargetError,
+    UnknownEngineError,
+    unregister_engine,
+)
+from .initial_state import InitialFixpointError
 from .profile import (
+    build_profile,
     PiecewiseLinearProfile,
     Profile,
     SinusoidalProfile,
     TrapezoidProfile,
-    build_profile,
 )
-from .rules import Rule, RuleOperand, RuleSet
-from .system import ModelChangedAfterPrerunError, System
-from .transfer import (
-    ConductiveTransfer,
-    Transfer,
-    TransferPair,
-    build_transfer,
-    resolve_operand,
+from .rules import (
+    Rule,
+    RuleOperand,
+    RuleSet,
 )
 from .version import __version__
 
+#: Engine-bound public names, each with the submodule that defines it.
+_ENGINE_EXPORTS = {
+    "Capacity": "capacity",
+    "CapacityFlow": "capacity",
+    "MeasurementIn": "capacity",
+    "MeasurementOut": "capacity",
+    "UnboundedRateError": "evaluation",
+    "FlowDiscrete": "flow",
+    "FlowDiscreteIn": "flow",
+    "FlowDiscreteOut": "flow",
+    "FlowDiscreteOutOnTrigger": "flow",
+    "FlowDiscreteOutTempo": "flow",
+    "FlowIn": "flow",
+    "FlowOut": "flow",
+    "FlowOutOnTrigger": "flow",
+    "FlowOutTempo": "flow",
+    "FlowContinuous": "flow_continuous",
+    "FlowContinuousIn": "flow_continuous",
+    "FlowContinuousOut": "flow_continuous",
+    "MixtureDraw": "mixture",
+    "MixtureGroupError": "mixture",
+    "MixtureIn": "mixture",
+    "ObjFlow": "obj",
+    "CtrlServiceIn": "obj_ctrl",
+    "CtrlSignalOut": "obj_ctrl",
+    "ObjCtrl": "obj_ctrl",
+    "LogicAnd": "obj_logic",
+    "LogicOr": "obj_logic",
+    "ObjLogicGate": "obj_logic",
+    "CommandedRateLoopError": "ordering",
+    "CommandedRateSelfLoopError": "ordering",
+    "ContinuousFlowCycleError": "ordering",
+    "ControllerSignalCycleError": "ordering",
+    "RateComparisonLoopError": "ordering",
+    "RateObservationLoopError": "ordering",
+    "ModelChangedAfterPrerunError": "system",
+    "System": "system",
+    "ConductiveTransfer": "transfer",
+    "Transfer": "transfer",
+    "TransferPair": "transfer",
+    "build_transfer": "transfer",
+    "resolve_operand": "transfer",
+}
+
+#: The execution submodules, reachable as attributes of the package.
+_ENGINE_SUBMODULES = (
+    "capability",
+    "derating",
+    "mode_signals",
+    "capacity",
+    "evaluation",
+    "flow",
+    "flow_continuous",
+    "mixture",
+    "obj",
+    "obj_ctrl",
+    "obj_logic",
+    "ordering",
+    "system",
+    "transfer",
+)
+
+
+def _engine_import(module, name):
+    """Import an execution submodule, naming PyCATSHOO when it is what is missing."""
+    try:
+        return importlib.import_module(f".{module}", __name__)
+    except ImportError as error:
+        from cod3s.pycatshoo import EngineNotAvailableError, is_missing_engine
+
+        if is_missing_engine(error) and not isinstance(error, EngineNotAvailableError):
+            raise EngineNotAvailableError(
+                f"'muscadet.{name}' needs the PyCATSHOO engine, which could not "
+                f"be imported ({error}). The declarative part of muscadet "
+                "(muscadet.declare, muscadet.engine, muscadet.importers) works "
+                "without it."
+            ) from error
+        raise
+
 
 def __getattr__(name):
-    """Bind ``muscadet.conformance`` on first use, and only then (PEP 562).
+    """Resolve what this package does not bind at import (PEP 562).
+
+    Two kinds of name land here.
+
+    **The execution layer**, where PyCATSHOO is not installed: a name of
+    ``_ENGINE_EXPORTS`` or an execution submodule. It raises an ``ImportError``
+    naming PyCATSHOO. Where the engine is installed these names are bound at
+    import by :func:`_load_execution_layer` and never reach this function.
+
+    **``muscadet.conformance``**, bound on first use, and only then.
 
     The conformance registry says where an engine departs from what muscadet
     defines. Three things follow from resolving it lazily rather than importing
@@ -176,4 +239,36 @@ def __getattr__(name):
     if name == "conformance":
         return importlib.import_module(f".{name}", __name__)
 
-    raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+    if name in _ENGINE_EXPORTS:
+        value = getattr(_engine_import(_ENGINE_EXPORTS[name], name), name)
+    elif name in _ENGINE_SUBMODULES:
+        value = _engine_import(name, name)
+    else:
+        raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
+
+    globals()[name] = value
+    return value
+
+
+def __dir__():
+    return sorted(set(globals()) | set(_ENGINE_EXPORTS) | set(_ENGINE_SUBMODULES))
+
+
+def _load_execution_layer():
+    """Bind the whole execution layer now. False when PyCATSHOO is missing."""
+    from cod3s.pycatshoo import is_missing_engine
+
+    try:
+        for name in (*_ENGINE_SUBMODULES, *sorted(_ENGINE_EXPORTS)):
+            if name not in globals():
+                __getattr__(name)
+    except ImportError as error:
+        if is_missing_engine(error):
+            return False
+        raise
+    return True
+
+
+#: Whether the execution layer is loaded, i.e. PyCATSHOO was importable when
+#: this package was.
+ENGINE_AVAILABLE = _load_execution_layer()

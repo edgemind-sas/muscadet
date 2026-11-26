@@ -1,0 +1,37 @@
+name: tests (no engine)
+
+# Runs the engine-free part of the suite: PyCATSHOO is proprietary and cannot
+# be installed here, which is exactly the machine this job stands for. It
+# proves that muscadet installs, imports, checks a declaration and parses a
+# platform export without any engine.
+#
+# The full suite needs PyCATSHOO and runs on the maintainer's machine before
+# every merge (CONVENTIONS.md, "Delivery").
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: tests-no-engine-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  engine-free:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+        with:
+          python-version: "3.10"
+      - name: Install muscadet and its dev tools
+        run: uv sync
+      - name: PyCATSHOO is absent from this machine
+        run: uv run python -c "import importlib.util, sys; sys.exit(importlib.util.find_spec('Pycatshoo') is not None)"
+      - name: Engine-free suite
+        run: uv run pytest --no-engine
