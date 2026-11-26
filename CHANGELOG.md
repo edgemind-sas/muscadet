@@ -20,6 +20,9 @@ reconstructing them.
   `muscadet.System`, a flow or capacity class) without the engine raises an
   `ImportError` naming PyCATSHOO. `muscadet.ENGINE_AVAILABLE` tells which case
   holds.
+- An engine that is installed and fails to load (its native library missing
+  from `LD_LIBRARY_PATH`) still fails `import muscadet`, as before: only a
+  PyCATSHOO that is not installed at all selects the engine-free form.
 - Nothing changes where PyCATSHOO is installed: the execution layer is loaded
   at import as before, every component class is registered and resolves by
   its `cls` name, and every public name is bound on the package. No model
@@ -27,7 +30,7 @@ reconstructing them.
 - `muscadet.declare` imports no engine-bound module at module level. What a
   declaration is CHECKED against moved to modules of its own:
   `muscadet.ctrl_grammar` (the controller grammar, `build_ctrl_node` and the
-  key lists, re-exported by `muscadet.obj_ctrl`) and `muscadet.combine` (the
+  key lists, re-exported by `muscadet.obj_ctrl`) and `muscadet.combine_policies` (the
   combination policies, re-exported by `muscadet.capacity`).
   `declare.MODE_VOCABULARIES` is keyed by the NAME of the cod3s family class
   rather than by the class.

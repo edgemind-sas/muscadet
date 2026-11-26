@@ -124,7 +124,7 @@ import Pycatshoo as pyc
 import pydantic
 from colored import attr, fg
 
-from .combine import (  # noqa: F401
+from .combine_policies import (  # noqa: F401
     COMBINE_FUNCTIONS,
     COMBINE_MAX,
     COMBINE_MEAN,

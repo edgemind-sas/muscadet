@@ -56,7 +56,7 @@
   PyCATSHOO cannot shrink the suite to a dozen tests and report green
 - muscadet's declarative modules import no engine-bound module at module
   level: `declare`, `engine`, `importers`, `profile`, `conformance`,
-  `ctrl_grammar`, `combine`, `common`, `rules`, `initial_state`. A function of
+  `ctrl_grammar`, `combine_policies`, `common`, `rules`, `initial_state`. A function of
   `declare` that READS a live system or BUILDS one imports the class it needs
   where it uses it. `tests/test_import_without_engine.py` is the guard
 - Test configuration lives in `pyproject.toml` alone. pytest reads the first

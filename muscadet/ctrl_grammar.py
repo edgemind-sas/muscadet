@@ -15,7 +15,7 @@ import typing
 
 import pydantic
 
-from .combine import (
+from .combine_policies import (
     COMBINE_MAX,
     COMBINE_MEAN,
     COMBINE_MEDIAN,
@@ -35,7 +35,7 @@ CONTROLLER_DECLARATION_KEYS = ("controls_in", "controls_out")
 #: :data:`muscadet.COMBINE_POLICIES` already gives them.
 #:
 #: An alias, deliberately not a copy. What each name means is settled once, in
-#: :mod:`muscadet.capacity` -- notably the median of an EVEN count, which is the
+#: :mod:`muscadet.combine_policies` -- notably the median of an EVEN count, which is the
 #: mean of the two central readings and not a tie-break -- and a second tuple
 #: here would be free to drift from it silently.
 #:
