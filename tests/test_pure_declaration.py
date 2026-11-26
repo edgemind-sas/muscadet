@@ -207,6 +207,77 @@ def test_the_gap_on_an_undeclarable_mode_is_in_the_conformance_registry():
     assert "package_declaration" in recorded[0].compensation
 
 
+def facade_mode(cls, name, targets, failure, repair, **fields):
+    """One mode of a two-state facade class, as an older study spells it."""
+    return {
+        "cls": cls,
+        "fm_name": name,
+        "targets": list(targets),
+        "failure_param": list(failure),
+        "repair_param": list(repair),
+        "failure_effects": {"sig_fed_available_out": False},
+        **fields,
+    }
+
+
+@pytest.mark.parametrize("cls", ["ObjFMExp", "ObjFMDelay"])
+@pytest.mark.parametrize("behaviour", ["internal", "external", "external_rep_indep"])
+def test_a_facade_mode_reads_the_same(cls, behaviour):
+    a_study = study(
+        failure_modes=[
+            facade_mode(cls, "loss", ["U0001"], [0.01], [0.5], behaviour=behaviour),
+            facade_mode(
+                cls,
+                "group",
+                ["U0002", "U0003"],
+                [0.01, 0.0],
+                [0.5, 0.0],
+                behaviour=behaviour,
+                failure_cond=[
+                    [{"attr": "occ", "obj": "U0001__loss", "ope": "==", "value": True}]
+                ],
+            ),
+        ],
+        indicators=[
+            indicator(".*", ".*", attr_type="ST"),
+            indicator("^U000X__group$", ".*"),
+        ],
+        attribute_overrides={
+            "failure_mode_param": [
+                {"fm_name": "U0001__loss", "field": "failure_param", "value": [0.02]}
+            ]
+        },
+    )
+    pure, live, added = both_roads(chain_export(3, f"Facade{cls}{behaviour}"), a_study)
+
+    assert added == 2
+    assert_same(pure, live)
+    assert pure["components"]["U0001__loss"]["cls"] == cls
+    assert pure["components"]["U0001__loss"]["failure_param"] == [0.02]
+
+
+def test_a_facade_vector_shorter_than_its_targets_is_completed_the_same_way():
+    a_study = study(
+        failure_modes=[
+            facade_mode("ObjFMExp", "group", ["U0001", "U0002"], [0.01], [0.5])
+        ]
+    )
+    pure, live, added = both_roads(chain_export(2, "ShortVector"), a_study)
+
+    assert added == 1
+    assert_same(pure, live)
+
+
+def test_a_mode_class_no_declaration_covers_is_refused_by_name():
+    a_study = study(
+        failure_modes=[facade_mode("ObjFMInst", "drawn", ["U0001"], [0.2], [0.0])]
+    )
+
+    with pytest.raises(package_declaration.PackageDeclarationError) as refusal:
+        package_declaration.package_declaration(chain_export(1, "Inst"), a_study)
+    assert "ObjFMInst" in str(refusal.value)
+
+
 def _refused(export, a_study):
     """The refusals of the pure road, and how many modes the live road added."""
     with pytest.raises(package_declaration.PackageDeclarationError) as refusal:
