@@ -55,10 +55,24 @@
   the ordinary run stays refused by name, so that an environment that lost
   PyCATSHOO cannot shrink the suite to a dozen tests and report green
 - muscadet's declarative modules import no engine-bound module at module
-  level: `declare`, `engine`, `importers`, `profile`, `conformance`,
-  `ctrl_grammar`, `combine_policies`, `common`, `rules`, `initial_state`. A function of
-  `declare` that READS a live system or BUILDS one imports the class it needs
-  where it uses it. `tests/test_import_without_engine.py` is the guard
+  level: `declare`, `package_declaration`, `engine`, `importers`, `profile`,
+  `conformance`, `ctrl_grammar`, `combine_policies`, `common`, `rules`,
+  `initial_state`. A function of `declare` that READS a live system or BUILDS
+  one imports the class it needs where it uses it.
+  `tests/test_import_without_engine.py` is the guard
+- A platform export reaches a system declaration by two roads, and the suite
+  reads every export it materialises by both. The live road builds the system
+  on the engine and reads it back; the pure road,
+  `muscadet.package_declaration`, writes the document from the parse context
+  and creates no engine object. `tests/double_reading.py`, installed by the
+  root `conftest.py`, compares the two documents and the catalogue of exposed
+  names after every `apply_to_system`, and fails the test that built the
+  system on any difference. So a change to what a flow, a capacity, a rule
+  set or a controller declares or exposes is made on both roads in the same
+  commit: the engine-side class, and the two tables of
+  `muscadet.package_declaration` (`DECLARATION_DEFAULTS`, and the catalogue
+  behind `component_catalogue`). A difference that is meant to stay is
+  recorded in `muscadet.conformance`, with its cause
 - Test configuration lives in `pyproject.toml` alone. pytest reads the first
   inifile it finds and never merges two, so adding a `pytest.ini`,
   `tox.ini` or `setup.cfg` section beside it silently disables `testpaths`,

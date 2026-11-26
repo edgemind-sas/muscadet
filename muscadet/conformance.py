@@ -154,6 +154,10 @@ POINT_ADVANCE_TO_DATE: typing.Final[str] = "advance_to_date"
 POINT_INITIAL_STATE_OCCURRENCE: typing.Final[str] = "initial_state_occurrence"
 
 
+#: A study mode that cannot be declared on the system refuses the package.
+POINT_UNDECLARABLE_MODE: typing.Final[str] = "undeclarable_mode_refusal"
+
+
 class SemanticPoint(pydantic.BaseModel):
     """One place muscadet had to decide what a model means.
 
@@ -353,6 +357,28 @@ SEMANTIC_POINTS: typing.Final[typing.Tuple[SemanticPoint, ...]] = (
             "'The initial state, and what counts as an occurrence'"
         ),
     ),
+    SemanticPoint(
+        name=POINT_UNDECLARABLE_MODE,
+        rule=(
+            "A failure mode of a study that cannot be declared on the system "
+            "-- a target the system does not hold, an effect on a variable "
+            "its target does not expose, a condition naming nothing, a mode "
+            "class the declaration does not cover -- "
+            "refuses the whole run package, by name. The package has no "
+            "declaration, and no engine is handed one."
+        ),
+        rationale=(
+            "A document is what every engine builds from, so a mode it cannot "
+            "state in full must not be in it. Running the study without the "
+            "mode would return numbers for another study, and declaring half "
+            "of it leaves each engine to refuse it in its own words, after "
+            "the package was accepted."
+        ),
+        source=(
+            "muscadet.package_declaration.apply_study; measured 2026-11-26 by "
+            "the double reading of tests/test_pure_declaration.py"
+        ),
+    ),
 )
 
 #: What each assessed engine does otherwise, in point order then engine order.
@@ -485,6 +511,35 @@ DEVIATIONS: typing.Final[typing.Tuple[Deviation, ...]] = (
             "Measured 2026-10-11 on the pyraichu checkout of 2026-09-21 "
             "(raichu-muscadet-corpus) against muscadet 5.14.0; muscadet "
             "issue #12"
+        ),
+    ),
+    Deviation(
+        engine=ENGINE_PYCATSHOO,
+        point=POINT_UNDECLARABLE_MODE,
+        behaviour=(
+            "Read through a live system, the study's mode is constructed on "
+            "the engine: the component is registered before its targets and "
+            "its effects are checked, so a mode that then fails is logged and "
+            "stays in the system half-built. The declaration read back from "
+            "that system carries it, with null parameter fields. A mode of "
+            "ObjFMInst, or of a class of the modeller's own, is built and "
+            "declared by that reading, where the declaration written from "
+            "data covers ObjMode2S, ObjFMExp and ObjFMDelay."
+        ),
+        consequence=(
+            "None on a result: both engines refuse that declaration when "
+            "they build from it, so the study does not run either way. What "
+            "differs is where the refusal is raised and what it says -- at "
+            "the engine's build step, in the engine's words, instead of at "
+            "the reading, naming every undeclarable mode at once."
+        ),
+        compensation=(
+            "muscadet.package_declaration, which declares a run package from "
+            "data and refuses it before any engine is involved."
+        ),
+        source=(
+            "tests/test_pure_declaration.py, "
+            "test_a_mode_that_cannot_be_declared_refuses_the_package"
         ),
     ),
 )
