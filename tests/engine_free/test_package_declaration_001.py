@@ -133,3 +133,49 @@ def test_an_invalid_export_is_refused_as_the_importer_refuses_it():
 
     with pytest.raises(Cod3sPlatformImportError):
         package_declaration.export_declaration(payload)
+
+
+def test_a_declared_package_is_run_on_an_engine_without_any_system():
+    """The document goes from the package to the engine, and nothing is built."""
+    from muscadet import engine
+
+    received = {}
+
+    def simulate(spec, *args, **kwargs):
+        received.update(kind="simulate", spec=spec, args=args, kwargs=kwargs)
+        return "ran"
+
+    def isimu_start(spec, *args, **kwargs):
+        received.update(kind="isimu_start", spec=spec, args=args, kwargs=kwargs)
+        return "session"
+
+    document = package_declaration.package_declaration(
+        chain_export(2),
+        study(
+            events=[
+                {
+                    "name": "cut",
+                    "cond": [[{"attr": "sig_fed_out", "obj": "U0002", "value": False}]],
+                }
+            ]
+        ),
+    )
+    engine.register_engine(name="recording", simulate=simulate, isimu_start=isimu_start)
+    try:
+        assert engine.simulate_declaration_on("recording", document, 7) == "ran"
+        assert received["spec"] is document
+        assert received["args"] == (7,) and received["kwargs"] == {}
+
+        assert (
+            engine.isimu_start_declaration_on("recording", document, targets=["cut"])
+            == "session"
+        )
+        assert received["kind"] == "isimu_start"
+        assert received["kwargs"] == {engine.RUN_TARGETS: ("cut",)}
+
+        with pytest.raises(engine.RunTargetError):
+            engine.simulate_declaration_on("recording", document, targets=["nope"])
+        with pytest.raises(engine.UnknownEngineError):
+            engine.simulate_declaration_on("absent", document)
+    finally:
+        engine.unregister_engine("recording")

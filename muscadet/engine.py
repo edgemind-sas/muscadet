@@ -679,8 +679,15 @@ def run_targets(spec, targets) -> Tuple[str, ...]:
     )
 
 
-def run_on_engine(kind: str, name: str, system, *args, targets=None, **kwargs) -> Any:
-    """Read ``system`` back as a declaration and run it on the engine ``name``.
+def run_declaration_on(
+    kind: str, name: str, declaration: dict, *args, targets=None, **kwargs
+) -> Any:
+    """Run a system DECLARATION on the engine ``name``, with no system anywhere.
+
+    The seam itself, for a caller that already holds the document -- a run
+    package declared from data (:mod:`muscadet.package_declaration`), a
+    document read from a file. No system is read back, so no engine is needed
+    to reach another one.
 
     ``targets`` is :data:`RUN_TARGETS`, the one run parameter muscadet spells
     itself: the events this run stops at, checked against the declaration and
@@ -692,13 +699,33 @@ def run_on_engine(kind: str, name: str, system, *args, targets=None, **kwargs) -
     who really asks for a target meets an engine that cannot serve it.
     """
     engine = get_engine(name)
-    spec = system_declaration(system)
-    declared = run_targets(spec, targets)
-
+    declared = run_targets(declaration, targets)
     if declared:
         kwargs[RUN_TARGETS] = declared
+    return engine.run(kind, declaration, *args, **kwargs)
 
-    return engine.run(kind, spec, *args, **kwargs)
+
+def simulate_declaration_on(name: str, declaration: dict, *args, **kwargs) -> Any:
+    """Batch run of a declaration on the registered engine ``name``."""
+    return run_declaration_on(RUN_BATCH, name, declaration, *args, **kwargs)
+
+
+def isimu_start_declaration_on(name: str, declaration: dict, *args, **kwargs) -> Any:
+    """Interactive session for a declaration on the registered engine ``name``."""
+    return run_declaration_on(RUN_INTERACTIVE, name, declaration, *args, **kwargs)
+
+
+def run_on_engine(kind: str, name: str, system, *args, targets=None, **kwargs) -> Any:
+    """Read ``system`` back as a declaration and run it on the engine ``name``.
+
+    :func:`run_declaration_on` with the document read off a live system. The
+    engine is resolved first, so an unknown name is refused before the system
+    is read.
+    """
+    get_engine(name)
+    return run_declaration_on(
+        kind, name, system_declaration(system), *args, targets=targets, **kwargs
+    )
 
 
 def simulate_on(name: str, system, *args, **kwargs) -> Any:

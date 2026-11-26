@@ -27,6 +27,10 @@ reconstructing them.
   refuse when they build from it: `muscadet.conformance` records the
   difference (`POINT_UNDECLARABLE_MODE`). A mode class other than `ObjMode2S`
   is refused; the platform emits no other.
+- `muscadet.engine.run_declaration_on`, `simulate_declaration_on` and
+  `isimu_start_declaration_on` hand a declaration to a registered engine with
+  no system anywhere. `run_on_engine` and its two shorthands still read a live
+  system back first, and now go through them.
 - The document is unchanged: same keys, same values, `SYSTEM_SPEC_VERSION`
   stays 1.2.0, and nothing changes for a model built on PyCATSHOO.
 - The suite reads every export it materialises by both roads

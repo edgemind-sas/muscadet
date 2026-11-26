@@ -126,19 +126,20 @@ def install():
         original(ctx, system, create_default_out_automata=create_default_out_automata)
         if fresh:
             name = system.name() if callable(getattr(system, "name", None)) else None
-            pure = package_declaration.context_declaration(
-                ctx, name=name, create_default_out_automata=create_default_out_automata
-            )
             try:
+                pure = package_declaration.context_declaration(
+                    ctx,
+                    name=name,
+                    create_default_out_automata=create_default_out_automata,
+                )
                 compare(pure, system)
-            except DoubleReadingMismatch:
+            except BaseException:
                 # The caller never receives the system, so nobody else can
                 # drop it: left alive, it would fail every later build of the
-                # process on a bare engine error naming nothing.
-                import cod3s
-
-                system.deleteSys()
-                cod3s.terminate_session()
+                # process on a bare engine error naming nothing. Whatever the
+                # pure road raised, a mismatch or a refusal the live road did
+                # not make, the system goes first.
+                tear_down(system)
                 raise
 
     apply_to_system.double_reading = True
@@ -154,12 +155,17 @@ def tear_down(system):
     cod3s.terminate_session()
 
 
-def live_package_declaration(export, study):
+def live_package_declaration(export, study, check_catalogue=True):
     """The declaration of a run package by the LIVE road, then the teardown.
 
     The export is materialised on the engine and the study applied on the live
     objects, section by section, by the helpers a run uses. ``(document,
     modes added)`` is returned, the second being what the live road counts.
+
+    The catalogue read off that document is compared to what the engine
+    exposes, modes included. ``check_catalogue=False`` is for a study the live
+    road half-builds: a mode it logged as failed is in its document and builds
+    nothing on the engine, so there is nothing to compare.
     """
     from cod3s.scripts.study_runner import (
         add_events,
@@ -177,6 +183,15 @@ def live_package_declaration(export, study):
         add_indicators(system, study.indicators)
         if study.attribute_overrides is not None:
             apply_attribute_overrides(system, study.attribute_overrides)
-        return canonical(declare.system_spec(system)), added
+        live = canonical(declare.system_spec(system))
+        names = check_catalogue and differences(
+            canonical(package_declaration.component_catalogue(live)),
+            canonical(live_catalogue(system)),
+        )
+        if names:
+            raise DoubleReadingMismatch(
+                _report("the catalogue differs from what the engine exposes:", names)
+            )
+        return live, added
     finally:
         tear_down(system)
