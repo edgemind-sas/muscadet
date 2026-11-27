@@ -1632,11 +1632,23 @@ def check_logic_gate_spec(spec):
 
 
 def build_logic_gate_component(system, spec):
-    """Build a portable gate after its named source components exist."""
+    """Build a portable gate after its named source components exist.
+
+    The gate is built by the engine when the engine registered a component
+    builder for the kind, and by muscadet's own class otherwise.
+    """
     name = check_logic_gate_spec(spec)
     if name in system.comp:
         raise ComponentSpecError(f"Logic gate {name}: component already exists")
+    from .engine import REFERENCE_ENGINE, find_component_builder
+
+    builder = find_component_builder(REFERENCE_ENGINE, COMPONENT_KIND_LOGIC_GATE)
+    if builder is not None:
+        return builder(system, copy_declaration(spec))
+
     from cod3s.pycatshoo.common import prepare_attr_tree
+
+    from .obj_logic import ObjLogicGate
 
     groups = sanitize_cond_format(copy_declaration(spec.get("cond", [])))
     for group in groups:
@@ -1648,9 +1660,11 @@ def build_logic_gate_component(system, spec):
                     f"Logic gate {name}: cannot resolve source "
                     f"{leaf['obj']}.{leaf['attr']}: {error}"
                 ) from error
-    return system.add_component(
-        name=name,
-        cls="ObjLogicGate",
+    # Instantiated directly: ``system.add_component`` is what hands a gate to
+    # this function, and a search by class name could not tell this class from
+    # the one an engine carries under the same name.
+    return ObjLogicGate(
+        name,
         kind=spec.get("logic_kind", "or"),
         k=spec.get("k"),
         cond=copy_declaration(spec.get("cond", [])),
@@ -1670,8 +1684,8 @@ def logic_gate_component_spec(comp):
         "source_cls": type(comp).__name__,
         "logic_kind": comp.logic_kind,
         "k": comp.logic_k,
-        "cond": copy_declaration(comp._logic_gate_cond),
-        "out_elements": list(comp._logic_gate_out_elements),
+        "cond": copy_declaration(comp.declared_cond),
+        "out_elements": list(comp.declared_out_elements),
     }
     if comp.label != comp.basename():
         spec["label"] = comp.label
@@ -1724,9 +1738,10 @@ def component_spec(comp):
         component is of a kind no declaration describes.
     """
     from .obj_ctrl import ObjCtrl
-    from .obj_logic import ObjLogicGate
 
-    if isinstance(comp, ObjLogicGate):
+    # A gate says which declaration kind it is read back as. Read on that,
+    # never on its class: the class may be the engine's.
+    if getattr(comp, "declared_kind", None) == COMPONENT_KIND_LOGIC_GATE:
         return logic_gate_component_spec(comp)
 
     if isinstance(comp, cod3s.ObjMode2S):

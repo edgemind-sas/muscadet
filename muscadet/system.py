@@ -1,5 +1,6 @@
 import copy
 import re
+import warnings
 
 import cod3s
 
@@ -25,6 +26,7 @@ from .flow_continuous import (
 from .initial_state import initial_fixpoint_refusal, register_initial_settle
 from .mixture import MixtureGroupError, resolve_mixture_groups  # noqa: F401
 from .mode_signals import publish_mode_signals
+from .logic_gate import ObjLogicGate as LogicGateDeclaration
 from .obj_logic import LogicAnd, LogicOr
 from .ordering import (
     CAPACITY_ORDER_BASE,
@@ -34,6 +36,12 @@ from .ordering import (
     register_equation_order,
 )
 from .profile import register_noise_seed
+
+#: The component classes that are DECLARATIONS, by the ``cls`` name a model
+#: writes. A system adding one of them hands its declaration to
+#: :func:`muscadet.declare.build_component`, which reaches the engine's
+#: component builder, instead of searching a live class by that name.
+DECLARED_COMPONENT_CLASSES = {"ObjLogicGate": LogicGateDeclaration}
 
 #: Name of the single PDMP manager a muscadet system owns. Every continuous
 #: declaration registers on *this* manager, which is what makes PyCATSHOO
@@ -309,12 +317,35 @@ class System(cod3s.PycSystem):
         if message is not None:
             raise TypeError(message)
 
+        declared = DECLARED_COMPONENT_CLASSES.get(comp_specs.get("cls"))
+        if declared is not None:
+            return self._add_declared_component(declared, comp_specs)
+
         comp = super().add_component(**comp_specs)
 
         if comp is not None and self.component_has_continuous_flow(comp):
             self.get_or_create_pdmp_manager()
 
         return comp
+
+    def _add_declared_component(self, declared, comp_specs):
+        """Add a component whose class is a declaration.
+
+        The class describes; :func:`muscadet.declare.build_component` checks
+        the description and has the component built.
+        """
+        from .declare import build_component
+
+        name = comp_specs.get("name")
+        if name in self.comp:
+            warnings.warn(f"Component {name} already exists", UserWarning)
+            return None
+        params = {
+            key: value
+            for key, value in comp_specs.items()
+            if key not in ("cls", "logger")
+        }
+        return build_component(self, declared(**params).declaration())
 
     # ------------------------------------------------------------------
     # PDMP registration helpers

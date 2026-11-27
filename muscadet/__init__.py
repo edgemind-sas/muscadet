@@ -81,11 +81,14 @@ from .declare import (
 )
 from .engine import (
     check_run_targets,
+    component_builder,
+    ComponentBuilderMissingError,
     Engine,
     ENGINE_ENTRY_POINT_GROUP,
     EngineAlreadyRegisteredError,
     EngineError,
     EngineRunnerMissingError,
+    find_component_builder,
     get_engine,
     is_reference_engine,
     isimu_start_declaration_on,
