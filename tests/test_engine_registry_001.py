@@ -211,16 +211,31 @@ class TestASystemRunsWithoutAnyEngine:
         assert muscadet.is_reference_engine("pycatshoo")
         assert not muscadet.is_reference_engine("raichu")
 
-    def test_the_reference_engine_is_not_a_plugin(self):
-        """It needs no registration, and cannot be shadowed by one.
+    def test_pycatshoo_registers_like_any_other_engine(self):
+        """The name is not reserved: an adapter distribution registers it.
 
-        Left registrable, an engine package could take the name over and every
-        model that never asked for a plugin would silently change engine.
+        It used to be refused, PyCATSHOO being reached by functions of the seam
+        written for it alone. A document is now run on it through the registry,
+        exactly as on any engine, and muscadet registers nothing under it.
         """
-        with pytest.raises(muscadet.EngineAlreadyRegisteredError, match="pycatshoo"):
-            muscadet.register_engine(name="pycatshoo", simulate=lambda spec: spec)
-        with pytest.raises(muscadet.UnknownEngineError, match="reference path"):
+        with pytest.raises(muscadet.UnknownEngineError, match="pycatshoo"):
             muscadet.get_engine("pycatshoo")
+        fake = FakeEngine(name="pycatshoo")
+        muscadet.register_engine(name="pycatshoo", simulate=fake.simulate)
+        assert muscadet.get_engine("pycatshoo").simulate == fake.simulate
+
+        document = {"version": "1.0.0", "name": "doc", "components": {}}
+        assert (
+            muscadet.simulate_declaration_on("pycatshoo", document, {"nb_runs": 1})
+            == "pycatshoo-batch-1"
+        )
+        assert fake.batches[0]["spec"] is document
+
+    def test_an_unknown_kind_of_run_is_refused_by_name(self):
+        """The two kinds are named once; a third invented by typo is not a run."""
+        muscadet.register_engine(name="fake", simulate=FakeEngine().simulate)
+        with pytest.raises(muscadet.EngineError, match="unknown kind of run"):
+            muscadet.run_declaration_on("simulate_batch", "fake", {"version": "1.0.0"})
 
     def test_a_model_simulates_with_the_registry_empty(self, the_model):
         """The acceptance criterion itself: no engine installed, results anyway."""
@@ -332,10 +347,13 @@ class TestAnEngineRegistersAndReceivesTheDeclaration:
     def test_selecting_the_reference_engine_by_name_keeps_the_direct_path(
         self, the_model, monkeypatch
     ):
-        """A study naming ``pycatshoo`` runs where it always ran.
+        """A LIVE system naming ``pycatshoo`` runs where it stands.
 
-        A fake is registered while this happens: naming the reference, or
-        naming nothing, must not fall through to whatever else is installed.
+        A live ``muscadet.System`` is a PyCATSHOO system, and PyCATSHOO allows
+        one per process: naming the engine it already is, or naming nothing,
+        must not hand its declaration to the registry -- not to another
+        engine, and not to an adapter registered as ``pycatshoo`` either,
+        which would have to build a second system.
 
         The base ``simulate`` is intercepted rather than run, PyCATSHOO
         refusing to define an indicator twice and the reference path having
@@ -345,6 +363,8 @@ class TestAnEngineRegistersAndReceivesTheDeclaration:
         """
         fake = FakeEngine()
         muscadet.register_engine(name="fake", simulate=fake.simulate)
+        adapter = FakeEngine(name="pycatshoo")
+        muscadet.register_engine(name="pycatshoo", simulate=adapter.simulate)
         taken = []
         monkeypatch.setattr(
             cod3s.PycSystem,
@@ -356,7 +376,8 @@ class TestAnEngineRegistersAndReceivesTheDeclaration:
         the_model.simulate({"nb_runs": 2})
 
         assert taken == [(({"nb_runs": 2},), {})] * 2
-        assert fake.batches == [], "the reference path never reaches a plugin"
+        assert fake.batches == [], "the live path never reaches a plugin"
+        assert adapter.batches == [], "nor a registration under its own name"
 
 
 class TestAnEngineArrivesByEntryPoint:
