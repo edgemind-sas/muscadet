@@ -106,6 +106,7 @@ from .engine import (
     unregister_engine,
 )
 from .initial_state import InitialFixpointError
+from .logic_gate import ObjLogicGate
 from .profile import (
     build_profile,
     PiecewiseLinearProfile,
@@ -148,7 +149,6 @@ _ENGINE_EXPORTS = {
     "ObjCtrl": "obj_ctrl",
     "LogicAnd": "obj_logic",
     "LogicOr": "obj_logic",
-    "ObjLogicGate": "obj_logic",
     "CommandedRateLoopError": "ordering",
     "CommandedRateSelfLoopError": "ordering",
     "ContinuousFlowCycleError": "ordering",

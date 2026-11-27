@@ -1632,47 +1632,27 @@ def check_logic_gate_spec(spec):
 
 
 def build_logic_gate_component(system, spec):
-    """Build a portable gate after its named source components exist.
+    """Have the engine build a portable gate, once its sources exist.
 
-    The gate is built by the engine when the engine registered a component
-    builder for the kind, and by muscadet's own class otherwise.
+    muscadet declares a gate and builds none: the component comes from the
+    builder the engine registered for the kind. Where there is none, the
+    refusal names what is missing -- no engine, an engine whose discovery
+    failed, or an engine that builds no gate.
     """
     name = check_logic_gate_spec(spec)
     if name in system.comp:
         raise ComponentSpecError(f"Logic gate {name}: component already exists")
-    from .engine import REFERENCE_ENGINE, find_component_builder
+    from .engine import REFERENCE_ENGINE, EngineError, component_builder
 
-    builder = find_component_builder(REFERENCE_ENGINE, COMPONENT_KIND_LOGIC_GATE)
-    if builder is not None:
-        return builder(system, copy_declaration(spec))
-
-    from cod3s.pycatshoo.common import prepare_attr_tree
-
-    from .obj_logic import ObjLogicGate
-
-    groups = sanitize_cond_format(copy_declaration(spec.get("cond", [])))
-    for group in groups:
-        for leaf in group:
-            try:
-                prepare_attr_tree([[leaf]], system=system)
-            except (KeyError, ValueError) as error:
-                raise ComponentSpecError(
-                    f"Logic gate {name}: cannot resolve source "
-                    f"{leaf['obj']}.{leaf['attr']}: {error}"
-                ) from error
-    # Instantiated directly: ``system.add_component`` is what hands a gate to
-    # this function, and a search by class name could not tell this class from
-    # the one an engine carries under the same name.
-    return ObjLogicGate(
-        name,
-        kind=spec.get("logic_kind", "or"),
-        k=spec.get("k"),
-        cond=copy_declaration(spec.get("cond", [])),
-        out_elements=list(spec.get("out_elements", [])),
-        label=spec.get("label"),
-        description=spec.get("description"),
-        metadata=copy_declaration(spec.get("metadata", {})),
-    )
+    try:
+        builder = component_builder(REFERENCE_ENGINE, COMPONENT_KIND_LOGIC_GATE)
+    except EngineError as error:
+        raise type(error)(
+            f"Logic gate {name}: muscadet declares a gate and the "
+            f"{REFERENCE_ENGINE!r} engine builds it, and {error}. Install the "
+            "engine distribution beside muscadet (cod3s-pycatshoo)."
+        ) from error
+    return builder(system, copy_declaration(spec))
 
 
 def logic_gate_component_spec(comp):

@@ -46,6 +46,15 @@
   check runs from a systemd user service, which reads no profile, and a line
   that leaves the environment out ends in 0.3 s on the `conftest.py` refusal
   naming `Pycatshoo`, having run no test at all
+- The suite also needs the PyCATSHOO engine distribution, `cod3s-pycatshoo`:
+  muscadet declares a logic gate and that distribution builds it. It is a
+  development dependency written as a direct reference in `pyproject.toml`,
+  never under `[tool.uv.sources]` (uv applies the sources a git dependency
+  declares, so they would reach every project that installs muscadet).
+  `uv sync` installs it, and `conftest.py` refuses the run by name without it.
+  A kind handed to the engine is tested here through that distribution; a
+  test that needs a live class of that kind derives it from the engine's own
+  class
 - The engine-free part of the suite is `tests/engine_free/`, and it runs on
   request with `uv run pytest --no-engine`, in a process where PyCATSHOO is
   made unimportable. A test goes there when it reads documents and builds

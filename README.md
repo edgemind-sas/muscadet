@@ -3050,7 +3050,11 @@ specification and `tests/fixtures/` for sample inputs.
 ## Portable combinational gates
 
 `ObjLogicGate` reads named source variables and exports its boolean `result`,
-without an automaton. `system_spec()` retains its `cond` and `out_elements`;
+without an automaton. muscadet declares the gate and the engine builds it:
+`muscadet.ObjLogicGate` is the declaration, and a system holding a gate needs
+the engine distribution installed
+([`cod3s-pycatshoo`](https://github.com/edgemind-sas/cod3s-pycatshoo)).
+Without it, adding a gate is refused by name. `system_spec()` retains its `cond` and `out_elements`;
 `build_system()` resolves source dependencies before constructing each gate.
 The declaration uses `kind="logic_gate"` and `logic_kind="or"`, `"and"` or `"k"`
 (the constructor continues to use `kind` for the Boolean operator).

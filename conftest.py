@@ -33,7 +33,11 @@ pytest.RUN_TESTS_DIR = os.getcwd()
 #: ``find_spec``: a PyCATSHOO whose native libraries are missing from
 #: ``LD_LIBRARY_PATH`` has a findable spec and still cannot be imported, and
 #: that environment fails the suite exactly like an absent module.
-REQUIREMENTS = ("Pycatshoo", "cod3s")
+#:
+#: ``cod3s_pycatshoo`` is the engine distribution: muscadet declares a logic
+#: gate and that distribution builds it, so without it every model holding a
+#: gate fails on the same refusal. Importing it loads nothing native.
+REQUIREMENTS = ("Pycatshoo", "cod3s", "cod3s_pycatshoo")
 
 
 def unimportable_requirements(names=None):
@@ -76,6 +80,12 @@ def _wrong_interpreter_message(broken):
         "    uv sync                        # once, to build .venv",
         "    uv run pytest                  # or: .venv/bin/python -m pytest",
     ]
+    if any(name == "cod3s_pycatshoo" for name, _ in broken):
+        lines += [
+            "",
+            "cod3s_pycatshoo is the PyCATSHOO engine distribution (cod3s-pycatshoo),",
+            "a development dependency of muscadet: `uv sync` installs it.",
+        ]
     if any(name == "Pycatshoo" for name, _ in broken):
         # `uv sync` alone never repairs this one, so it is said rather than
         # implied: PyCATSHOO is not on PyPI and is not in the lock file. It is
