@@ -380,12 +380,23 @@ def find_component_builder(name: str, kind: str) -> Optional[Callable[..., Any]]
 
     For the transition during which muscadet still carries a live class for a
     kind an engine may already build: the caller keeps its own class when no
-    engine is registered under ``name``, or when that engine builds no
+    engine is advertised under ``name``, or when that engine builds no
     component of that kind.
+
+    Raises
+    ------
+    UnknownEngineError
+        The engine is installed and its discovery hook failed. That is not
+        "no engine": falling back to another class would hide the failure, so
+        it is raised with its reason.
     """
     try:
         return component_builder(name, kind)
-    except (UnknownEngineError, ComponentBuilderMissingError):
+    except ComponentBuilderMissingError:
+        return None
+    except UnknownEngineError:
+        if str(name) in _DISCOVERY_FAILURES:
+            raise
         return None
 
 

@@ -1,22 +1,24 @@
 """A gate is built by the engine that registered a builder for its kind.
 
-Until every engine distribution carries one, muscadet keeps its own gate
-class: no builder registered, and a model runs as it always did.
+muscadet declares a gate and carries no class that evaluates one. Without a
+builder, adding a gate is refused, and the refusal says which of the three
+things is missing: an engine, an engine whose discovery failed, or an engine
+that builds no gate.
 """
 
 import importlib.metadata
 
 import cod3s
 import pytest
+from cod3s_pycatshoo.logic_gate import ObjLogicGate as AdapterGate
 
 import muscadet
 from muscadet import declare
-from muscadet.obj_logic import ObjLogicGate as OwnGate
 
 COND = [[{"obj": "Source", "attr": "feed_fed_out", "value": True}]]
 
 
-class EngineGate(OwnGate):
+class EngineGate(AdapterGate):
     """What an engine distribution carries: a gate class of its own."""
 
 
@@ -37,12 +39,21 @@ class GateBuilder:
         )
 
 
+def a_hook_that_fails():
+    raise RuntimeError("the native library could not be loaded")
+
+
+def _advertise(monkeypatch, *entries):
+    def entry_points(group=None, **kwargs):
+        return list(entries) if group == muscadet.ENGINE_ENTRY_POINT_GROUP else []
+
+    monkeypatch.setattr(importlib.metadata, "entry_points", entry_points)
+    muscadet.reset_engines()
+
+
 @pytest.fixture(autouse=True)
 def only_the_engines_this_test_registers(monkeypatch):
-    monkeypatch.setattr(
-        importlib.metadata, "entry_points", lambda group=None, **kwargs: []
-    )
-    muscadet.reset_engines()
+    _advertise(monkeypatch)
     yield
     muscadet.reset_engines()
 
@@ -67,24 +78,52 @@ def _drop(system):
     cod3s.terminate_session()
 
 
-def test_without_a_builder_the_gate_is_muscadets_own():
+def test_the_gate_muscadet_exports_is_a_declaration():
+    assert muscadet.ObjLogicGate is muscadet.logic_gate.ObjLogicGate
+    assert not hasattr(muscadet.obj_logic, "ObjLogicGate")
+    document = muscadet.ObjLogicGate("Gate", cond=COND, kind="or").declaration()
+    assert declare.check_logic_gate_spec(document) == "Gate"
+
+
+def test_without_an_engine_a_gate_is_refused_by_name():
     assert muscadet.find_component_builder("pycatshoo", "logic_gate") is None
-    system = _system_with_a_source("own_gate")
+    system = _system_with_a_source("no_engine")
     try:
-        gate = _add_gate(system)
-        assert type(gate) is OwnGate
-        assert system.comp["Gate"] is gate
+        with pytest.raises(muscadet.UnknownEngineError) as refusal:
+            _add_gate(system)
+        message = str(refusal.value)
+        assert "Logic gate Gate" in message and "cod3s-pycatshoo" in message
+        assert "Gate" not in system.comp
     finally:
         _drop(system)
 
 
-def test_an_engine_that_builds_no_gate_leaves_it_to_muscadet():
+def test_an_engine_that_builds_no_gate_is_named_as_such():
     muscadet.register_engine(name="pycatshoo", simulate=lambda spec: None)
-    with pytest.raises(muscadet.ComponentBuilderMissingError, match="logic_gate"):
-        muscadet.component_builder("pycatshoo", "logic_gate")
-    system = _system_with_a_source("still_own_gate")
+    assert muscadet.find_component_builder("pycatshoo", "logic_gate") is None
+    system = _system_with_a_source("no_gate_builder")
     try:
-        assert type(_add_gate(system)) is OwnGate
+        with pytest.raises(muscadet.ComponentBuilderMissingError, match="logic_gate"):
+            _add_gate(system)
+    finally:
+        _drop(system)
+
+
+def test_an_engine_whose_discovery_failed_is_not_an_absent_engine(monkeypatch):
+    _advertise(
+        monkeypatch,
+        importlib.metadata.EntryPoint(
+            name="pycatshoo",
+            value=f"{__name__}:a_hook_that_fails",
+            group=muscadet.ENGINE_ENTRY_POINT_GROUP,
+        ),
+    )
+    with pytest.raises(muscadet.UnknownEngineError, match="native library"):
+        muscadet.find_component_builder("pycatshoo", "logic_gate")
+    system = _system_with_a_source("broken_engine")
+    try:
+        with pytest.raises(muscadet.UnknownEngineError, match="native library"):
+            _add_gate(system)
     finally:
         _drop(system)
 
@@ -123,6 +162,11 @@ def test_a_registered_builder_receives_the_checked_declaration():
 
 
 def test_a_second_gate_of_the_same_name_is_refused_as_any_component():
+    muscadet.register_engine(
+        name="pycatshoo",
+        simulate=lambda spec: None,
+        component_builders={"logic_gate": GateBuilder()},
+    )
     system = _system_with_a_source("twice")
     try:
         _add_gate(system)
