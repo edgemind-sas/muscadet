@@ -57,7 +57,7 @@
 - muscadet's declarative modules import no engine-bound module at module
   level: `declare`, `package_declaration`, `engine`, `importers`, `profile`,
   `conformance`, `ctrl_grammar`, `combine_policies`, `common`, `rules`,
-  `initial_state`. A function of `declare` that READS a live system or BUILDS
+  `initial_state`, `logic_gate`. A function of `declare` that READS a live system or BUILDS
   one imports the class it needs where it uses it.
   `tests/test_import_without_engine.py` is the guard
 - A platform export reaches a system declaration by two roads, and the suite

@@ -84,8 +84,16 @@ def register_the_advertised_engine():
 
 
 @pytest.fixture(autouse=True)
-def a_clean_registry():
-    """The registry is process-wide state; no test inherits another's engines."""
+def a_clean_registry(monkeypatch):
+    """The registry is process-wide state; no test inherits another's engines.
+
+    Nor the environment's: an engine distribution installed beside muscadet
+    advertises itself by entry point, and these tests state what muscadet does
+    with the engines THEY register. A test about discovery advertises its own.
+    """
+    monkeypatch.setattr(
+        importlib.metadata, "entry_points", lambda group=None, **kwargs: []
+    )
     muscadet.reset_engines()
     yield
     muscadet.reset_engines()

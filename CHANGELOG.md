@@ -4,6 +4,29 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 6.0.6 (2026-11-27)
+
+Maintenance release of the 6.0 line: the 6.6.0 change, without the
+pure-consumer change of 6.1.0.
+
+- An engine may now build a component of a declaration kind itself. An engine
+  registers `component_builders`, a table `kind -> (system, spec) ->
+  component`, with `register_engine`. `component_builder(name, kind)` returns
+  the builder or says by name what the engine builds, and
+  `find_component_builder` returns `None` instead.
+- The logic gate is the first kind handed over. `muscadet.logic_gate` carries
+  `ObjLogicGate` as a declaration: it holds data, checks its aggregation, and
+  writes the `logic_gate` component document. It loads without an engine.
+  A system adding `cls="ObjLogicGate"` now writes that document and has it
+  built: by the builder the `pycatshoo` engine registered for `logic_gate`
+  when there is one, and by muscadet's own gate class otherwise.
+- Nothing changes for a model, nor for an installation without such an
+  engine: `muscadet.ObjLogicGate` is still the live class, the same gate is
+  built, and it reads back as the same document. A gate is now read back on
+  the kind it declares (`declared_kind`), not on its class.
+- A gate whose aggregation is unknown is refused when it is added
+  (`ValueError`), before anything is built.
+
 ## 6.0.5 (2026-11-27)
 
 Maintenance release of the 6.0 line: the 6.5.0 change, without the

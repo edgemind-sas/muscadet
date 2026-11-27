@@ -206,6 +206,14 @@ class Engine(pydantic.BaseModel):
     #: Free text for a human reading :func:`registered_engines`.
     description: str = ""
 
+    #: ``kind -> (system, spec) -> component`` -- how this engine builds, on
+    #: one of its live systems, a component whose behaviour it owns. Keyed by
+    #: the declaration kind (:data:`muscadet.declare.COMPONENT_KINDS`), an
+    #: explicit table: a kind is never resolved by searching live classes.
+    component_builders: Dict[str, Callable[..., Any]] = pydantic.Field(
+        default_factory=dict
+    )
+
     def run(self, kind: str, spec: dict, *args, **kwargs) -> Any:
         """Hand ``spec`` to the runner for ``kind``, or say why there is none."""
         if kind not in RUN_KINDS:
@@ -243,6 +251,7 @@ def register_engine(
     isimu_start: Optional[Callable[..., Any]] = None,
     description: str = "",
     replace: bool = False,
+    component_builders: Optional[Dict[str, Callable[..., Any]]] = None,
 ) -> Engine:
     """Register an engine under ``name``, and return what was registered.
 
@@ -278,6 +287,7 @@ def register_engine(
         simulate=simulate,
         isimu_start=isimu_start,
         description=description,
+        component_builders=dict(component_builders or {}),
     )
     _ENGINES[name] = engine
     return engine
@@ -339,6 +349,44 @@ def get_engine(name: str) -> Engine:
             message += f"; discovery also failed for {sorted(_DISCOVERY_FAILURES)}"
         raise UnknownEngineError(message)
     return engine
+
+
+class ComponentBuilderMissingError(EngineError):
+    """The engine is registered, and builds no component of that kind."""
+
+
+def component_builder(name: str, kind: str) -> Callable[..., Any]:
+    """How engine ``name`` builds a component of declaration kind ``kind``.
+
+    Raises
+    ------
+    UnknownEngineError
+        No engine is registered under that name.
+    ComponentBuilderMissingError
+        The engine is registered and declares no builder for that kind.
+    """
+    engine = get_engine(name)
+    builder = engine.component_builders.get(kind)
+    if builder is None:
+        raise ComponentBuilderMissingError(
+            f"engine {engine.name!r} builds no component of kind {kind!r} "
+            f"(it builds: {sorted(engine.component_builders) or ['<none>']})"
+        )
+    return builder
+
+
+def find_component_builder(name: str, kind: str) -> Optional[Callable[..., Any]]:
+    """The builder of :func:`component_builder`, or ``None`` when there is none.
+
+    For the transition during which muscadet still carries a live class for a
+    kind an engine may already build: the caller keeps its own class when no
+    engine is registered under ``name``, or when that engine builds no
+    component of that kind.
+    """
+    try:
+        return component_builder(name, kind)
+    except (UnknownEngineError, ComponentBuilderMissingError):
+        return None
 
 
 def discover_engines(force: bool = False) -> Tuple[str, ...]:
