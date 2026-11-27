@@ -476,7 +476,15 @@ def run_scaled_scenario(obs):
         system,
         "PROFILED",
         flows_out=[
-            {"name": "p", "profile": muscadet.Profile(odc_ramp, continuous=True)}
+            {
+                "name": "p",
+                # ``odc_ramp`` drawn as one segment, exact over the horizon:
+                # a model that runs holds no Python function.
+                "profile": muscadet.PiecewiseLinearProfile(
+                    points=[[0.0, odc_ramp(0.0)], [4.0, odc_ramp(4.0)]],
+                    period=5.0,
+                ),
+            }
         ],
     )
 

@@ -108,8 +108,15 @@ def sinusoid(time):
 
 
 def make_ramp():
-    """A fresh ramp profile. One per flow: a profile is declaration state."""
-    return muscadet.Profile(ramp, continuous=True)
+    """A fresh ramp profile. One per flow: a profile is declaration state.
+
+    Declared as a drawn curve, since a model that runs holds no Python
+    function: one segment from 0.2 at t=0 to 1.0 at t=4, which is ``ramp``
+    exactly over the horizon. The period only has to exceed the horizon.
+    """
+    return muscadet.PiecewiseLinearProfile(
+        points=[[0.0, ramp(0.0)], [4.0, ramp(4.0)]], period=5.0
+    )
 
 
 # ----------------------------------------------------------------------

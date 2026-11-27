@@ -26,13 +26,12 @@ Three statements, and the third is the one that keeps the first two honest:
    declaration, because a target is a parameter of a run and not a section of a
    system. Without this the diff would be comparing run configurations and
    would pass for reasons that have nothing to do with the model;
-3. **a model no document describes is refused on the seam and still runs on
-   PyCATSHOO**, with the refusal kept where it can be read. That is not a hole
-   in the symmetry, it is where the format's declared boundary falls: a live
-   Python callable in a model is refused by name (ADR decision 3), those models
-   have always run here, and taking them away would be a regression bought to
-   pay for a slogan. The sentence that stays true is "both engines receive the
-   same document, or neither receives one".
+3. **a model no document describes runs on no engine.** A live Python
+   callable in a model is refused by name (ADR decision 3), on the seam and
+   on the live system alike, before any engine is reached. Such a model used
+   to run on PyCATSHOO all the same, on a path with no document; the sentence
+   that stays true is "both engines receive the same document, or neither
+   receives one", and neither now runs it.
 
 The running example is the RBD of the chantier: a source, a repairable block, a
 far end, the feared event "the flow no longer arrives", and a second event whose
@@ -165,7 +164,6 @@ def the_two_readings():
         "seam_with_targets": recorder.batches[0],
         "seam_free_cycling": recorder.batches[1],
         "reference": system.run_declaration,
-        "reference_refusal": system.run_declaration_refusal,
         "declared_targets": declared,
     }
 
@@ -193,12 +191,13 @@ def the_two_readings():
     with pytest.raises(muscadet.ComponentSpecError) as seam_refusal:
         undeclarable.simulate(run_params, engine="recorder")
 
-    undeclarable.simulate(run_params)
+    with pytest.raises(muscadet.ComponentSpecError) as live_refusal:
+        undeclarable.simulate(run_params)
 
     readings["undeclarable"] = {
         "seam_refusal": str(seam_refusal.value),
+        "live_refusal": str(live_refusal.value),
         "reference": undeclarable.run_declaration,
-        "reference_refusal": undeclarable.run_declaration_refusal,
         "batches_after": len(recorder.batches),
     }
 
@@ -222,7 +221,6 @@ class TestTheTwoEnginesReceivedOneDocument:
     ):
         """Without this there is nothing on the reference side to diff at all."""
         assert the_two_readings["reference"] is not None
-        assert the_two_readings["reference_refusal"] is None
         assert set(the_two_readings["reference"]["components"]) == {
             "Src",
             "Blk",
@@ -292,7 +290,7 @@ class TestBothEnginesResolveATargetOnTheDocument:
 
 
 class TestAModelNoDocumentDescribes:
-    """Neither engine receives one, and the reference engine still runs it."""
+    """No engine receives one, and it runs nowhere."""
 
     def test_the_seam_refuses_it_by_name(self, the_two_readings):
         assert "allocation_fun" in the_two_readings["undeclarable"]["seam_refusal"]
@@ -301,11 +299,11 @@ class TestAModelNoDocumentDescribes:
         """Refused at muscadet's door: the two recorded batches are the model above."""
         assert the_two_readings["undeclarable"]["batches_after"] == 2
 
-    def test_the_reference_run_happened_and_carries_no_document(self, the_two_readings):
-        assert the_two_readings["undeclarable"]["reference"] is None
+    def test_the_live_system_refuses_it_the_same_way(self, the_two_readings):
+        """One refusal, whichever engine the run names: the field and the component."""
+        refusal = the_two_readings["undeclarable"]["live_refusal"]
+        assert "allocation_fun" in refusal and "SPLIT" in refusal
+        assert refusal == the_two_readings["undeclarable"]["seam_refusal"]
 
-    def test_the_refusal_is_kept_rather_than_swallowed(self, the_two_readings):
-        """'This model is not portable' has to be a question with an answer."""
-        refusal = the_two_readings["undeclarable"]["reference_refusal"]
-        assert isinstance(refusal, muscadet.ComponentSpecError)
-        assert "allocation_fun" in str(refusal)
+    def test_the_refused_run_left_no_document(self, the_two_readings):
+        assert the_two_readings["undeclarable"]["reference"] is None
