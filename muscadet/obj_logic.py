@@ -1,11 +1,10 @@
-import re
+"""Flow components whose production is a logic of their inputs.
 
-import cod3s
-import Pycatshoo as Pyc
-from cod3s.pycatshoo.common import prepare_attr_tree, sanitize_cond_format
+``LogicOr`` and ``LogicAnd`` are flow components. The combinational gate
+``ObjLogicGate`` is not one and no longer lives here: muscadet declares it
+(:mod:`muscadet.logic_gate`) and the engine builds it.
+"""
 
-from .common import copy_declaration, resolve_gate_logic
-from .initial_state import RANK_OUTPUT, register_initial_evaluation
 from .obj import ObjFlow
 
 
@@ -59,106 +58,3 @@ class LogicAnd(LogicBase):
             )
 
         super().add_flows(**kwargs)
-
-
-class ObjLogicGate(cod3s.PycComponent):
-    """Combinational logic gate (OR / AND / k-of-n) — automaton-free.
-
-    A logic gate reads the observable variables of its connected source
-    components directly via the ``cond`` mechanism (same nested OR-of-AND
-    form as ``ObjEvent``, resolved by ``prepare_attr_tree``). A *sensitive
-    method* — not an automaton — recomputes a boolean ``result`` variable
-    whenever any referenced source variable changes, and ``result`` is
-    exported through one message box per downstream flow element so that a
-    regular muscadet ``FlowIn`` consumes the gate output.
-
-    Reading source variables directly means heterogeneous source flow names
-    need NO input message-box plumbing: the gate is decoupled from flow
-    types and is a pure boolean gate.
-
-    Args:
-        name: component name.
-        cond: nested list of leaves ``{obj, attr, value}`` referencing source
-            variables (e.g. ``<flow>_fed_out`` for the fed channel, or
-            ``<flow>_fed_available_out`` for the availability channel). Built
-            from the gate's inbound connections by the translator/importer.
-            By convention each source is its own unit clause
-            (``[[s1], [s2], ...]``) so ``kind`` alone selects the aggregation.
-        out_elements: downstream flow element names (the ``FlowIn`` names of
-            the gate's targets). One export message box ``{elem}_out`` is
-            created per element, exporting ``result`` under element ``elem``.
-        kind: ``"or"`` | ``"and"`` | ``"k"``.
-        k: threshold for ``kind == "k"`` (number of fed inputs required).
-
-    Edge cases (vacuous): an OR gate with no inputs is False, an AND gate
-    with no inputs is True, a k gate with no inputs is False
-    (Python ``any([])`` / ``all([])`` / ``sum([]) >= k``).
-    """
-
-    #: The declaration kind this component is read back as
-    #: (:func:`muscadet.declare.component_spec` reads on it, not on the class,
-    #: so that a gate an engine built is read the same way).
-    declared_kind = "logic_gate"
-
-    @property
-    def declared_cond(self):
-        return self._logic_gate_cond
-
-    @property
-    def declared_out_elements(self):
-        return self._logic_gate_out_elements
-
-    def __init__(self, name, cond=None, out_elements=None, kind="or", k=None, **kwargs):
-        super().__init__(name, **kwargs)
-
-        self._logic_gate_cond = copy_declaration(sanitize_cond_format(cond or []))
-        self._logic_gate_out_elements = list(out_elements or [])
-        self.logic_kind = kind
-        self.logic_k = k
-        self.result = self.addVariable("result", Pyc.TVarType.t_bool, False)
-
-        inner_logic, outer_logic = self._resolve_logic(kind, k)
-        cond_bis = prepare_attr_tree(self._logic_gate_cond, system=self.system())
-
-        def recompute():
-            value = outer_logic(
-                [
-                    inner_logic(
-                        [
-                            (
-                                getattr(leaf["attr"], leaf["attr_val_name"])()
-                                == leaf.get("value", True)
-                            )
-                            for leaf in clause
-                        ]
-                    )
-                    for clause in cond_bis
-                ]
-            )
-            self.result.setValue(bool(value))
-
-        self._recompute = recompute
-
-        # No automaton: register the recompute on every referenced source
-        # variable, so a change of any input re-evaluates the gate.
-        for clause in cond_bis:
-            for leaf in clause:
-                leaf["attr"].addSensitiveMethod(f"logic_gate_{name}", recompute)
-
-        # Expose ``result`` on the output interface, one box per downstream
-        # element name (so ``connect_flow``/``connect`` to a FlowIn matches).
-        for elem in out_elements or []:
-            self.addMessageBox(f"{elem}_out")
-            self.addMessageBoxExport(f"{elem}_out", self.result, elem)
-
-        recompute()  # seed the initial value
-
-        # A member of the initial fixpoint (#12): the components it feeds are
-        # replayed at start, and would otherwise read the value seeded here,
-        # before any source had started.
-        register_initial_evaluation(self, recompute, [self.result], RANK_OUTPUT)
-
-    @staticmethod
-    def _resolve_logic(kind, k):
-        """Return ``(inner_logic, outer_logic)`` for unit-clause conds."""
-        return resolve_gate_logic(kind, k)

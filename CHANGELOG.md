@@ -4,6 +4,34 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 6.0.7 (2026-11-27)
+
+Maintenance release of the 6.0 line: the 6.7.0 change, without the
+pure-consumer change of 6.1.0.
+
+- muscadet no longer carries a class that evaluates a logic gate.
+  `muscadet.obj_logic.ObjLogicGate` is removed: a gate is declared by muscadet
+  and built by the engine, through the builder the `pycatshoo` engine
+  registers for the `logic_gate` kind
+  ([`cod3s-pycatshoo`](https://github.com/edgemind-sas/cod3s-pycatshoo) 0.2.0
+  or later). A model does not change: `system.add_component(cls="ObjLogicGate",
+  ...)`, a platform export and a system declaration build the same gate, under
+  the same names, and read back as the same document.
+- `muscadet.ObjLogicGate` is now the declaration (`muscadet.logic_gate`), and
+  loads without an engine. Constructing it describes a gate and builds
+  nothing; a gate reaches a system through `add_component` or a declaration.
+- Without a builder, adding a gate is refused by name, and the refusal tells
+  the three cases apart: no engine registered (`UnknownEngineError`), an
+  engine installed whose discovery hook failed (`UnknownEngineError`, with
+  what the hook raised), an engine that builds no gate
+  (`ComponentBuilderMissingError`).
+- `find_component_builder` no longer answers `None` for an engine whose
+  discovery failed: it raises, so that a caller keeping a class of its own
+  does not hide a broken installation behind it.
+- The suite needs the engine distribution installed. It is a development
+  dependency, installed by `uv sync`, and the suite is refused by name without
+  it. The engine-free part (`pytest --no-engine`) does not need it.
+
 ## 6.0.6 (2026-11-27)
 
 Maintenance release of the 6.0 line: the 6.6.0 change, without the
