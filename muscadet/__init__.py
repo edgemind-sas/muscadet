@@ -89,7 +89,6 @@ from .engine import (
     get_engine,
     is_reference_engine,
     isimu_start_declaration_on,
-    reference_declaration,
     REFERENCE_ENGINE,
     register_engine,
     registered_engines,

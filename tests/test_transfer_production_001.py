@@ -42,8 +42,14 @@ TPR_DEMAND = 10.0
 
 
 def fixed(value):
-    """A declared equation returning a constant."""
-    return muscadet.Transfer(fun=lambda comp: value, continuous=True)
+    """A declared equation returning a constant.
+
+    Spelled as the one declarable shape, a unit conductance over a fixed
+    potential difference: ``1 x (value - 0)``, sign included.
+    """
+    return muscadet.ConductiveTransfer(
+        conductance=1.0, potential_a=value, potential_b=0.0
+    )
 
 
 # ----------------------------------------------------------------------

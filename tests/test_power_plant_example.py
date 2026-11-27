@@ -113,7 +113,7 @@ def test_scenario_A_hw_pumpA_redundancy_recovers():
         targets=["PumpA"],
         failure_param=8,
         failure_effects={"cooling_fed_available_out": False},
-        repair_cond=lambda: False,
+        repair_cond=False,
         repair_param=1e9,
     )
     try:
@@ -150,7 +150,7 @@ def test_scenario_B_full_cyber_chain_defeats_redundancy():
         targets=["HMI"],
         failure_param=10,
         failure_effects={},
-        repair_cond=lambda: False,
+        repair_cond=False,
         repair_param=1e9,
     )
     system.add_component(
@@ -160,7 +160,7 @@ def test_scenario_B_full_cyber_chain_defeats_redundancy():
         failure_param=5,
         failure_cond=[[{"attr": "occ", "obj": "HMI__mdc_phishing", "value": True}]],
         failure_effects={},
-        repair_cond=lambda: False,
+        repair_cond=False,
         repair_param=1e9,
     )
     system.add_component(
@@ -170,7 +170,7 @@ def test_scenario_B_full_cyber_chain_defeats_redundancy():
         failure_param=3,
         failure_cond=[[{"attr": "occ", "obj": "HMI__mdc_lateral", "value": True}]],
         failure_effects={"cooling_fed_available_out": False},
-        repair_cond=lambda: False,
+        repair_cond=False,
         repair_param=1e9,
     )
     system.add_component(
@@ -180,7 +180,7 @@ def test_scenario_B_full_cyber_chain_defeats_redundancy():
         failure_param=4,
         failure_cond=[[{"attr": "occ", "obj": "HMI__mdc_lateral", "value": True}]],
         failure_effects={"cooling_fed_available_out": False},
-        repair_cond=lambda: False,
+        repair_cond=False,
         repair_param=1e9,
     )
     try:
@@ -223,7 +223,7 @@ def test_scenario_C_partial_cyber_redundancy_holds():
         targets=["HMI"],
         failure_param=10,
         failure_effects={},
-        repair_cond=lambda: False,
+        repair_cond=False,
         repair_param=1e9,
     )
     system.add_component(
@@ -233,7 +233,7 @@ def test_scenario_C_partial_cyber_redundancy_holds():
         failure_param=5,
         failure_cond=[[{"attr": "occ", "obj": "HMI__mdc_phishing", "value": True}]],
         failure_effects={},
-        repair_cond=lambda: False,
+        repair_cond=False,
         repair_param=1e9,
     )
     system.add_component(
@@ -243,7 +243,7 @@ def test_scenario_C_partial_cyber_redundancy_holds():
         failure_param=3,
         failure_cond=[[{"attr": "occ", "obj": "HMI__mdc_lateral", "value": True}]],
         failure_effects={"cooling_fed_available_out": False},
-        repair_cond=lambda: False,
+        repair_cond=False,
         repair_param=1e9,
     )
     try:
@@ -277,7 +277,7 @@ def test_pumpB_requires_power_to_activate():
         targets=["Grid"],
         failure_param=5,
         failure_effects={"power_fed_available_out": False},
-        repair_cond=lambda: False,
+        repair_cond=False,
         repair_param=1e9,
     )
     try:

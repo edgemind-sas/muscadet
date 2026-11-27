@@ -9,10 +9,8 @@ a demonstration goes through: ``cod3s.pycatshoo.isimu.engine.ISimuEngine.start``
 **This module exists because the emission was first hooked onto the two
 wrappers alone**, and a session opened by the TUI was then a reference run with
 no document at all: nothing to compare with what the other engine received, on
-the very path a model is shown to a client, and ``run_declaration`` /
-``run_declaration_refusal`` both at ``None`` -- which is the one thing the pair
-must never mean after a run, since the broad refusal capture of
-``reference_declaration`` rests on "no document, a reason posted".
+the very path a model is shown to a client, and ``run_declaration`` at
+``None`` -- which it must never mean after a run.
 
 It is the same trap :meth:`muscadet.System.prerun` fell into and is documented
 under, one layer up: the pre-run step was hooked onto the wrappers too, a
@@ -23,14 +21,14 @@ this door does not fail; it answers.
 What is pinned, in order:
 
 1. **the primitive alone emits** -- no wrapper, exactly as the TUI calls it;
-2. **the invariant of the pair** -- a document, or a reason, never neither;
+2. **a run leaves its document**, on each door;
 3. **the wrapper emits the same document as the primitive.** The wrapper path
    reaches the primitive, so it emits twice, and the second emission happens
    after a target has been declared on the system. Asserting the two agree is
    what says that declaring a target does not change the model -- otherwise the
    attribute would end up holding a document nobody handed anyone;
-4. **a model no document describes posts its reason on this door too**, which
-   is the half of the invariant the happy path cannot show.
+4. **a model no document describes is refused on this door too**, by field,
+   before the session opens.
 """
 
 import json
@@ -79,7 +77,6 @@ def the_three_doors():
     system.startInteractive()
     by_primitive = {
         "document": system.run_declaration,
-        "refusal": system.run_declaration_refusal,
     }
 
     system.stopInteractive()
@@ -89,7 +86,6 @@ def the_three_doors():
     system.isimu_start(targets=[FEARED_EVENT])
     by_wrapper = {
         "document": system.run_declaration,
-        "refusal": system.run_declaration_refusal,
     }
 
     system.deleteSys()
@@ -111,10 +107,11 @@ def the_three_doors():
             ],
         },
     )
-    undeclarable.startInteractive()
+    with pytest.raises(muscadet.ComponentSpecError) as refused:
+        undeclarable.startInteractive()
     by_primitive_undeclarable = {
         "document": undeclarable.run_declaration,
-        "refusal": undeclarable.run_declaration_refusal,
+        "refusal": refused.value,
     }
 
     yield {
@@ -123,7 +120,6 @@ def the_three_doors():
         "primitive_undeclarable": by_primitive_undeclarable,
     }
 
-    undeclarable.stopInteractive()
     undeclarable.deleteSys()
     cod3s.terminate_session()
 
@@ -135,14 +131,10 @@ def test_the_engine_primitive_emits_the_document(the_three_doors):
     assert set(document["components"]) == {"Src", "Blk", "Tgt", FEARED_EVENT}
 
 
-@pytest.mark.parametrize("door", ["primitive", "wrapper", "primitive_undeclarable"])
-def test_a_reference_run_leaves_a_document_or_a_reason(the_three_doors, door):
-    """Never neither: the whole refusal capture rests on this pair being readable."""
-    reading = the_three_doors[door]
-    assert (reading["document"] is None) != (reading["refusal"] is None), (
-        f"{door}: document={reading['document'] is not None}, "
-        f"refusal={reading['refusal'] is not None}"
-    )
+@pytest.mark.parametrize("door", ["primitive", "wrapper"])
+def test_a_run_leaves_its_document(the_three_doors, door):
+    """A run that happened has a document: a model without one does not run."""
+    assert the_three_doors[door]["document"] is not None, door
 
 
 def test_both_doors_of_the_interactive_path_emit_the_same_document(the_three_doors):
@@ -157,8 +149,8 @@ def test_both_doors_of_the_interactive_path_emit_the_same_document(the_three_doo
     )
 
 
-def test_the_primitive_posts_the_refusal_of_a_model_it_cannot_write(the_three_doors):
-    """The door a demonstration uses says why a model is not portable, too."""
+def test_the_primitive_refuses_a_model_it_cannot_write(the_three_doors):
+    """The door a demonstration uses refuses it too, and says why, by field."""
     reading = the_three_doors["primitive_undeclarable"]
     assert reading["document"] is None
     assert isinstance(reading["refusal"], muscadet.ComponentSpecError)

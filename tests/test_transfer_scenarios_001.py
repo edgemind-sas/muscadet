@@ -73,7 +73,11 @@ class TscExchanger(muscadet.ObjFlow):
         self.add_transfer(
             "exchange",
             flows=["water", "air"],
-            equation=muscadet.Transfer(fun=lambda comp: TSC_MOVED, continuous=True),
+            # A constant, spelled as the one declarable shape: a unit
+            # conductance over a fixed potential difference.
+            equation=muscadet.ConductiveTransfer(
+                conductance=1.0, potential_a=TSC_MOVED, potential_b=0.0
+            ),
         )
 
 
@@ -285,6 +289,9 @@ def test_the_moved_quantity_follows_both_streams(the_system):
     pair = exchange.transfers["exchange"]
     original = pair.equation
 
+    # A mutation of a live engine object after the run started, which the
+    # declaration cannot see. It goes with the live classes when they leave
+    # muscadet.
     pair.equation = muscadet.Transfer(
         fun=lambda comp: comp.get_input_delivered("water")
         / max(comp.get_input_delivered("air"), 1e-9)
@@ -366,7 +373,9 @@ def test_the_kb_component_refuses_two_spellings_at_once(the_system):
             name="BADWALL2",
             cls="ExchangeContinuous",
             flow="heat",
-            transfer=muscadet.Transfer(fun=lambda comp: 1.0, continuous=True),
+            transfer=muscadet.ConductiveTransfer(
+                conductance=1.0, potential_a=1.0, potential_b=0.0
+            ),
             conductance=1.0,
             potential_a=1.0,
             potential_b=0.0,

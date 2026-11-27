@@ -71,7 +71,6 @@ CLUSTERS = {
     "SH": ("SH_C1", "SH_C2"),
     "PR": ("PR_C1", "PR_C2", "PR_C3"),
     "CAP": ("CAP_C1", "CAP_C2", "CAP_C3"),
-    "FUN": ("FUN_C1", "FUN_C2"),
     "Z": ("Z_C1", "Z_C2"),
     "UND": ("UND_C1", "UND_C2", "UND_C3"),
 }
@@ -332,19 +331,6 @@ def build_allocation_system():
         ),
     )
 
-    # -- A Python rule, declared alongside a policy it must win over
-    add_cluster(
-        system,
-        "FUN",
-        10.0,
-        {"FUN_C1": 6.0, "FUN_C2": 6.0},
-        policy=dict(
-            allocation="shares",
-            allocation_shares={"FUN_C1": 0.9, "FUN_C2": 0.1},
-            allocation_fun=split_evenly,
-        ),
-    )
-
     # -- Every consumer demanding zero
     add_cluster(system, "Z", 10.0, {"Z_C1": 0.0, "Z_C2": 0.0})
 
@@ -415,6 +401,47 @@ def build_allocation_system():
     add_clock(system.comp["AE16_SRC"])
 
     return system
+
+
+def build_custom_rule_system():
+    """One cluster whose output declares shares AND a Python allocation rule.
+
+    Kept out of the shared system: a model holding a Python callable has no
+    declaration, so it does not run, and it would take every other cluster
+    down with it.
+    """
+    system = muscadet.System(name="DemandAllocationCustomRule")
+
+    add_cluster(
+        system,
+        "FUN",
+        10.0,
+        {"FUN_C1": 6.0, "FUN_C2": 6.0},
+        policy=dict(
+            allocation="shares",
+            allocation_shares={"FUN_C1": 0.9, "FUN_C2": 0.1},
+            allocation_fun=split_evenly,
+        ),
+    )
+    add_clock(system.comp["FUN_SRC"])
+
+    return system
+
+
+def run_custom_rule_scenario(obs):
+    """Try to run the Python-rule cluster and keep what the refusal says."""
+    system = build_custom_rule_system()
+
+    with pytest.raises(
+        muscadet.declare.ComponentSpecError,
+        match=r"Component FUN_SRC, flow q out: field 'allocation_fun' holds function",
+    ) as refusal:
+        system.isimu_start()
+
+    obs["custom_rule_refusal"] = str(refusal.value)
+
+    system.deleteSys()
+    cod3s.terminate_session()
 
 
 def run_allocation_scenario(obs):
@@ -640,6 +667,7 @@ def the_run():
     """Drive both systems in turn, snapshotting what each produced."""
     obs = {}
 
+    run_custom_rule_scenario(obs)
     run_allocation_scenario(obs)
     run_first_sample_scenario(obs)
     run_capacity_demand_scenario(obs)
@@ -716,18 +744,17 @@ def test_ordered_priorities_serve_in_order_until_the_supply_is_gone(the_run):
     assert sum(the_run["allocated"]["PR"].values()) == pytest.approx(10.0)
 
 
-def test_a_custom_python_rule_is_used_over_the_declared_policy(the_run):
+def test_a_custom_python_rule_is_refused_when_the_model_runs(the_run):
     """R17, KD9: the output declares shares of 0.9 / 0.1 AND a Python rule.
 
-    The declared shares would give 6 and 4 once the first consumer is capped at
-    its demand; the rule shares alike, so both get 5.
+    A run always emits the declaration of its model first, and a Python
+    callable is a declaration no mapping can carry. The run is refused, and
+    the refusal names the field and the component holding it.
     """
-    received = the_run["received"]
+    refusal = the_run["custom_rule_refusal"]
 
-    assert received["FUN_C1"] == pytest.approx(5.0)
-    assert received["FUN_C2"] == pytest.approx(5.0)
-
-    assert sum(the_run["allocated"]["FUN"].values()) == pytest.approx(10.0)
+    assert "Component FUN_SRC" in refusal
+    assert "allocation_fun" in refusal
 
 
 def test_every_consumer_demanding_zero_delivers_zero(the_run):

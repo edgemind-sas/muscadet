@@ -51,7 +51,9 @@ CPF_ROUNDS = 3
 
 def constant(value):
     """A profile holding ``value`` at every instant."""
-    return muscadet.Profile(lambda time: value, continuous=True)
+    return muscadet.PiecewiseLinearProfile(
+        points=[[0.0, value], [1.0, value]], period=2.0
+    )
 
 
 class CpfSource(muscadet.ObjFlow):
