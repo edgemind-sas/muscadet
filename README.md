@@ -639,11 +639,11 @@ That was not true while PyCATSHOO kept a construction path of its own: the docum
 - **Emitting it cannot refuse a run.** Measured at 35 ms for a 300-component system, against a campaign counted in seconds; and the reader is never allowed to kill what it observes, so a model it cannot write leaves `run_declaration` at `None` and the reason on `run_declaration_refusal`. After a reference run **exactly one of the two is set** — a document, or why there is none, never neither.
 - **A model holding a live Python object has no document, and that is the format's declared boundary** — an `allocation_fun`, a `Profile` whose factor is a function, a `Transfer` with no mapping form, a condition built on a PyCATSHOO variable. Those models run here exactly as they always have; they are refused, by name and by field, on the seam. The sentence that holds is *both engines receive the same document, or neither receives one* — a model no document describes is one the other engine could not run either.
 
-A caller that holds a document rather than a system runs it on PyCATSHOO with the same gesture a registered engine offers:
+A caller that holds a document rather than a system runs it on PyCATSHOO the way it runs it on any engine, by name. PyCATSHOO is a registered engine: installing the [`cod3s-pycatshoo`](https://github.com/edgemind-sas/cod3s-pycatshoo) adapter is what registers it, and muscadet imports nothing of it.
 
 ```python
-muscadet.reference_simulate(document, params, targets=["TOP_EVENT"])
-muscadet.reference_isimu_start(document, targets=["TOP_EVENT"])
+muscadet.simulate_declaration_on("pycatshoo", document, params, targets=["TOP_EVENT"])
+muscadet.isimu_start_declaration_on("pycatshoo", document, targets=["TOP_EVENT"])
 ```
 
 PyCATSHOO forbids more than one live system per process, so a caller comparing a system with its own reconstruction does it in a process of its own — or compares the two documents, which needs no system at all.

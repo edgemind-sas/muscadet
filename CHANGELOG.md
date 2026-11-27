@@ -4,6 +4,32 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 6.0.4 (2026-11-27)
+
+Maintenance release of the 6.0 line: the 6.4.0 change, without the
+pure-consumer change of 6.1.0.
+
+- PyCATSHOO is a registered engine. A system declaration is run on it through
+  the engine registry, by name, like on any other engine:
+  `simulate_declaration_on("pycatshoo", document, params)` and
+  `isimu_start_declaration_on("pycatshoo", document)`. The engine is registered
+  by the [`cod3s-pycatshoo`](https://github.com/edgemind-sas/cod3s-pycatshoo)
+  adapter distribution, through the `muscadet.engines` entry point. muscadet
+  imports nothing of it.
+- The name `pycatshoo` is no longer reserved in the registry.
+  `register_engine("pycatshoo", ...)` is accepted, and `get_engine("pycatshoo")`
+  answers from the registry.
+- Removed: `reference_run`, `reference_simulate` and `reference_isimu_start`,
+  the document entry points written for PyCATSHOO alone. Replace
+  `reference_simulate(document, params)` with
+  `simulate_declaration_on("pycatshoo", document, params)`, with the adapter
+  installed.
+- `simulate_declaration_on`, `isimu_start_declaration_on` and
+  `run_declaration_on` are exported at the top level of the package.
+- Unchanged: a live `muscadet.System` still runs where it stands when a run
+  names `pycatshoo` or names nothing, whether or not an adapter is registered.
+  PyCATSHOO allows one system per process, and a live system is one.
+
 ## 6.0.3 (2026-11-26)
 
 Maintenance release of the 6.0 line: the 6.3.0 change below, without the
