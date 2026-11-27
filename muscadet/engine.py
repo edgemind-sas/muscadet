@@ -14,7 +14,7 @@ The chantier was deliberately asymmetric for a while (ADR
 decision 7): RAICHU crossed the declaration while PyCATSHOO kept a construction
 path of its own, so the reference engine was never at risk while the format was
 being invented. Since the switch, a run on a live system emits its declaration
-like any other (:func:`reference_declaration`) and is configured
+like any other (:meth:`muscadet.System.emit_run_declaration`) and is configured
 from it, so what each engine received compares on a diff, without a campaign on
 either side.
 
@@ -58,11 +58,14 @@ is the run it was asked for: :meth:`muscadet.System.declare_run_targets`
 resolves a target against the declaration, not against the components standing
 next to it.
 
-The one thing the declaration cannot describe -- a model holding a live Python
-object -- is the one case where that resolution has nowhere to happen, and
-:func:`reference_declaration` says so by name rather than letting the two paths
-part company in silence. Such a model runs on the live system and on nothing
-else: no document, so no registered engine can be handed it.
+**A model no document describes does not run.** A model holding a live Python
+object -- an ``allocation_fun``, a ``Profile`` whose factor is a function, a
+``Transfer`` with no mapping form, a condition built on an engine variable --
+is refused by the declaration, by field and by component, and that refusal
+stops the run before any engine is reached
+(:meth:`muscadet.System.emit_run_declaration`). Such a model used to run on a
+live system all the same, on a path with no document: one engine then ran
+something no other engine could be handed, and nothing compared the two.
 
 Run parameters travel BESIDE the declaration, not inside it, because they are
 the configuration of a run and not the description of a system: two systems
@@ -403,57 +406,6 @@ def system_declaration(system) -> dict:
     spec = system_spec(system)
     check_system_spec(spec)
     return spec
-
-
-def reference_declaration(system) -> Tuple[Optional[dict], Optional[Exception]]:
-    """The document a run on a LIVE system is read from, or the reason there is none.
-
-    :func:`system_declaration` with its refusal turned into an answer, and the
-    difference is the whole of what "both engines read the document" can mean
-    for the engine muscadet is made of.
-
-    **A run on a live system is never refused by the document reader**, and that is a
-    deliberate asymmetry with the seam rather than a hole left in it. muscadet's
-    declaration does not cover the whole of muscadet, and never will: a model
-    holding a live Python object -- an ``allocation_fun``, a ``Profile`` whose
-    factor is a function, a ``Transfer`` with no mapping form, a condition built
-    on a PyCATSHOO variable -- is refused by name, loudly, and that refusal is
-    the format's declared boundary (ADR decision 3). Those models run on
-    PyCATSHOO perfectly well and have always run. Refusing them here would take
-    working models away from every muscadet user to buy a symmetry none of them
-    asked for, which is why what happens instead is: no document, the reason
-    kept, and the run configured the way it was before there was a document at
-    all. The sentence the seam makes true is "both engines receive the same
-    document, or neither receives one" -- and a model no document describes is
-    a model RAICHU cannot run either.
-
-    **The refusal is kept and not raised, and it is not thrown away either.**
-    :attr:`muscadet.System.run_declaration_refusal` holds it after the run, so
-    "this model is not portable, here is the field that pins it down" is a
-    question with an answer rather than something a study finds out the day it
-    changes engine.
-
-    **Every exception is caught, not only the declaration's own.** A run that
-    worked yesterday must not stop working today because the reader met a shape
-    it has no opinion about: emitting a document is an observation of the model,
-    and an observation is not allowed to kill the thing it observes. Same
-    doctrine as :func:`_advertised_engines`, and the same guard against silence
-    -- what was caught is returned, never swallowed.
-
-    Parameters
-    ----------
-    system : muscadet.System
-
-    Returns
-    -------
-    (dict or None, Exception or None)
-        The document and no refusal, or no document and the refusal that
-        explains it. Never both, never neither.
-    """
-    try:
-        return system_declaration(system), None
-    except Exception as refusal:  # noqa: BLE001 -- see docstring
-        return None, refusal
 
 
 def run_target_names(targets) -> Tuple[str, ...]:

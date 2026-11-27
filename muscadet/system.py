@@ -11,11 +11,9 @@ from .declare import (
     removed_mode_class_message,
 )
 from .engine import (
-    check_run_targets,
     is_reference_engine,
     isimu_start_on,
-    reference_declaration,
-    run_target_names,
+    system_declaration,
     run_targets,
     simulate_on,
 )
@@ -691,57 +689,35 @@ class System(cod3s.PycSystem):
 
     @property
     def run_declaration(self):
-        """The document the last reference run was read from, or ``None``.
+        """The document the last run on this live system was read from, or ``None``.
 
         What PyCATSHOO received, kept so that it can be COMPARED: the seam
         hands a registered engine its document and that document is observable
-        from the engine's side, while the reference engine is the system
+        from the engine's side, while a live system is the engine's system
         itself and would otherwise leave nothing to diff. Two engines given one
-        model now yield two documents, and a divergence shows on a diff rather
+        model yield two documents, and a divergence shows on a diff rather
         than on a campaign (ADR decision 3).
 
-        **After a reference run, exactly one of this and
-        :attr:`run_declaration_refusal` is set**, and that invariant is what
-        makes the pair readable: a document, or the reason there is none.
-        Both at ``None`` means no reference run has happened -- and never "a
-        run that emitted nothing", which is what this attribute used to mean on
-        a session opened through :meth:`startInteractive`.
+        ``None`` means no run has happened on this system. A run always leaves
+        its document here: a model no document describes does not run (see
+        :meth:`emit_run_declaration`).
 
-        A run on a REGISTERED engine leaves both at ``None`` too, and that is
-        not the same statement: the document that run handed over is the
-        engine's, observable where the engine received it. This pair is the
-        reference engine's side of the diff, which nothing else would hold.
+        A run handed to a REGISTERED engine through :meth:`simulate` leaves
+        ``None`` too, and that is not the same statement: the document that run
+        handed over is the engine's, observable where the engine received it.
         """
         return getattr(self, "_run_declaration", None)
 
-    @property
-    def run_declaration_refusal(self):
-        """Why the last reference run had no document, or ``None``.
-
-        The one place "this model is not portable" is a question with an
-        answer. A model holding a live Python object is refused by the
-        declaration, by name and by field, and that refusal is the format's
-        declared boundary rather than a defect -- see
-        :func:`muscadet.engine.reference_declaration`. It does not stop the
-        run, so without this it would stop nothing and say nothing.
-
-        **No document without a reason posted here**: that is the invariant
-        the broad ``except Exception`` of ``reference_declaration`` rests on,
-        and it holds on the three run entry points alike -- see
-        :attr:`run_declaration`.
-        """
-        return getattr(self, "_run_declaration_refusal", None)
-
     def emit_run_declaration(self):
-        """Emit the document this run hands to the reference engine, and keep it.
+        """Emit the document this run is read from, and keep it.
 
-        The single emission point of the reference path. Runs on every
-        reference run, target or no target: the claim is that the document
+        The single emission point of a run on this live system. Runs on every
+        such run, target or no target: the claim is that the document
         describes what PyCATSHOO ran, and a document emitted only when someone
         asked for a target would be a claim about a minority of runs.
 
-        **Every reference run means all THREE doors**, which is the part that
-        has to be written down rather than trusted: :meth:`simulate` and
+        **Every run means all THREE doors**, which is the part that has to be
+        written down rather than trusted: :meth:`simulate` and
         :meth:`isimu_start` reach this through :meth:`declare_run_targets`, and
         :meth:`startInteractive` -- the engine primitive the TUI and
         ``isimu_start_cli`` drive, which goes through neither wrapper -- calls
@@ -749,51 +725,51 @@ class System(cod3s.PycSystem):
         is given through emitting nothing, which is the trap :meth:`prerun`
         already fell into once and is documented under.
 
+        **A model no document describes is refused here, and does not run.**
+        The declaration does not cover a model holding a live Python object --
+        an ``allocation_fun``, a ``Profile`` whose factor is a function, a
+        ``Transfer`` with no mapping form, a condition built on an engine
+        variable -- and refuses it by field and by component. That refusal used
+        to be caught and the run configured without a document: one engine then
+        ran a model no other engine could be handed. It now propagates, before
+        any engine is reached, so that a model either has a document every
+        engine can read, or does not run.
+
         Returns
         -------
-        dict or None
-            The declaration, or ``None`` when this model holds something no
-            document carries. Both are recorded on the system.
+        dict
+            The declaration, also kept on :attr:`run_declaration`.
+
+        Raises
+        ------
+        muscadet.declare.ComponentSpecError, muscadet.declare.SystemSpecError
+            When this model holds something no document carries.
         """
-        spec, refusal = reference_declaration(self)
+        self._run_declaration = None
+        spec = system_declaration(self)
         self._run_declaration = spec
-        self._run_declaration_refusal = refusal
         return spec
 
     def declare_run_targets(self, targets):
-        """Declare a run's sequence targets on the reference engine.
+        """Declare a run's sequence targets on this live system.
 
-        The reference path's half of :data:`~muscadet.engine.RUN_TARGETS`, and
-        the one place a reference run is configured -- so it is also where the
+        The live path's half of :data:`~muscadet.engine.RUN_TARGETS`, and the
+        one place a run on this system is configured -- so it is also where the
         document is emitted (:meth:`emit_run_declaration`), whether or not this
         run stops at anything.
 
         **The names are read against the DOCUMENT, like the seam's.** Both
-        paths now resolve a target through :func:`muscadet.engine.run_targets`,
+        paths resolve a target through :func:`muscadet.engine.run_targets`,
         against the very declaration the run hands over, and what is left here
         is the translation only PyCATSHOO can spell: ``addTarget`` on a state,
         which is what ``cod3s.PycSystem.add_targets`` does for an ``ObjEvent``
-        and the only shape of target this vocabulary names. That was not true
-        before the reference engine read the document: the names were resolved
-        against the live components, so the two paths answered the same
-        question by looking in two places, and the day they disagreed nothing
-        would have compared them.
+        and the only shape of target this vocabulary names.
 
         **The occurrence state comes from the document too**
         (:func:`muscadet.declare.declared_occurrence_state`). An event names its
         own states and cod3s' own helper hard codes ``occ``: a modeller who
         renamed the state would get a target on a state that does not exist,
         which is the silent campaign this whole vocabulary exists to stop.
-
-        **A model no document describes still runs, and still takes targets.**
-        The declaration does not cover the whole of muscadet -- a live Python
-        object in a model is refused by name, deliberately -- and those models
-        run on PyCATSHOO today. They keep running, and their targets resolve
-        against the live components, which is the lookup this method did for
-        everything before the switch. It is not a second way of doing the same
-        thing: it is the only one left when there is no document, and the
-        refusal that explains it is on
-        :attr:`run_declaration_refusal` rather than lost.
 
         Parameters
         ----------
@@ -811,27 +787,11 @@ class System(cod3s.PycSystem):
             When a name designates no event of this system.
         """
         spec = self.emit_run_declaration()
-
-        if spec is None:
-            names = check_run_targets(
-                run_target_names(targets),
-                [
-                    name
-                    for name, comp in self.comp.items()
-                    if isinstance(comp, cod3s.ObjEvent)
-                ],
-                self.comp,
-            )
-            states = {
-                name: getattr(self.comp[name], "occ_state_name", None) or "occ"
-                for name in names
-            }
-        else:
-            names = run_targets(spec, targets)
-            states = {name: declared_occurrence_state(spec, name) for name in names}
+        names = run_targets(spec, targets)
 
         for name in names:
-            self.addTarget(name, f"{name}.{states[name]}", "ST")
+            state = declared_occurrence_state(spec, name)
+            self.addTarget(name, f"{name}.{state}", "ST")
 
         return names
 
@@ -848,12 +808,11 @@ class System(cod3s.PycSystem):
 
         **Both paths emit the declaration**, and that is what makes the
         document the semantics rather than an export towards one engine: a
-        reference run reads its own configuration off the document
+        run on this system reads its own configuration off the document
         (:meth:`declare_run_targets`) and leaves it on
         :attr:`run_declaration`, so what the two engines received compares on a
-        diff. Emitting it costs one read of the model against a campaign, and
-        it cannot refuse a run: see
-        :func:`muscadet.engine.reference_declaration`.
+        diff. A model the declaration refuses does not run, on either path:
+        see :meth:`emit_run_declaration`.
 
         ``targets`` names the feared events this run stops at, and it is the
         one run parameter muscadet spells itself
@@ -926,8 +885,8 @@ class System(cod3s.PycSystem):
         the two wrappers alone, a session opened by the TUI or by
         ``isimu_start_cli`` was a reference run with NO document: nothing to
         compare with what the other engine received, on the very path a
-        demonstration is given, and ``run_declaration`` / ``run_declaration_refusal``
-        both at ``None`` -- which the pair is not allowed to mean after a run.
+        demonstration is given, and ``run_declaration`` at ``None`` -- which it
+        is not allowed to mean after a run.
 
         **Emitting unconditionally rather than once**, which the wrapper path
         makes visible: it emits, then reaches here and emits again, for one
@@ -962,7 +921,6 @@ class System(cod3s.PycSystem):
         self._equation_order = None
         self._equation_registrations = []
         self._run_declaration = None
-        self._run_declaration_refusal = None
         return super().deleteSys(*args, **kwargs)
 
     # ------------------------------------------------------------------

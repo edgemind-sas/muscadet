@@ -63,20 +63,13 @@ def test_system(the_system):
 
     assert len(obj_frun.automata_d) == 16
 
-    # Run simulation
-    the_system.isimu_start()
-
-    for cname in comp_name_list:
-        for fname in ["f1", "f2"]:
-            assert the_system.comp[cname].flows_out[fname].var_fed.value() is True
-
-    # Ensure transitions are valid before proceeding
-    transitions = the_system.isimu_fireable_transitions()
-    assert len(transitions) == 16
-    assert transitions[0].name.endswith("occ__01")
-    assert transitions[1].name.endswith("occ__01_02_03")
-    assert transitions[2].name.endswith("occ__01_02_04")
-    assert transitions[-1].name.endswith("occ__all")
+    # The naming rule is a Python function, which no declaration can carry:
+    # the automata are built, and the run is refused.
+    with pytest.raises(
+        muscadet.declare.ComponentSpecError,
+        match="Failure mode C00X__frun, trans_name_prefix_fun: holds function",
+    ):
+        the_system.isimu_start()
 
 
 def test_delete(the_system):

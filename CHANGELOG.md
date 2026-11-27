@@ -4,6 +4,31 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 6.5.0 (2026-11-27)
+
+- A model no document describes no longer runs. A run on a live system
+  (`simulate`, `isimu_start`, `startInteractive`) emits its system declaration
+  first, and the refusal of the declaration now stops the run:
+  `ComponentSpecError`, naming the field and the component, before any engine
+  is reached. Until now the refusal was caught, kept on
+  `System.run_declaration_refusal`, and the model ran on PyCATSHOO without a
+  document, where no other engine could be handed it.
+- What is refused: a Python function or a live engine object held by a model.
+  An `allocation_fun`, a `Profile` built on a function, a `Transfer` built on
+  a function, a condition whose `attr` or `obj` is a live variable or
+  component, a `repair_cond` given as a function, a `trans_name_prefix_fun`.
+  Each has a declarative spelling, except three: a transfer law that is a
+  ratio of two constituents of one measurement channel, a transfer law that
+  reads the component's own input deliveries, and a naming of common-cause
+  combinations with padding or a special case. Models relying on those do not
+  run on this release.
+- Removed: `System.run_declaration_refusal` and `reference_declaration`. A run
+  that happened always has a document on `System.run_declaration`.
+- The suite follows: the fixtures that held a function for convenience are
+  written in data, with the same expected values; `test_advection_001` and
+  `test_literature_validation_001` become refusal tests of the law they
+  validated.
+
 ## 6.4.0 (2026-11-27)
 
 - PyCATSHOO is a registered engine. A system declaration is run on it through
