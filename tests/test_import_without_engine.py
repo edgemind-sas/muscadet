@@ -59,6 +59,7 @@ def test_muscadet_imports_without_the_engine():
             import muscadet.engine
             import muscadet.importers
             import muscadet.conformance
+            import muscadet.logic_gate
             import muscadet.package_declaration
 
             import inspect

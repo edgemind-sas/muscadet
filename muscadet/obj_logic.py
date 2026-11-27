@@ -95,6 +95,19 @@ class ObjLogicGate(cod3s.PycComponent):
     (Python ``any([])`` / ``all([])`` / ``sum([]) >= k``).
     """
 
+    #: The declaration kind this component is read back as
+    #: (:func:`muscadet.declare.component_spec` reads on it, not on the class,
+    #: so that a gate an engine built is read the same way).
+    declared_kind = "logic_gate"
+
+    @property
+    def declared_cond(self):
+        return self._logic_gate_cond
+
+    @property
+    def declared_out_elements(self):
+        return self._logic_gate_out_elements
+
     def __init__(self, name, cond=None, out_elements=None, kind="or", k=None, **kwargs):
         super().__init__(name, **kwargs)
 
