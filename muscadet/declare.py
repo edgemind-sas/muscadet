@@ -1649,10 +1649,32 @@ def build_logic_gate_component(system, spec):
     except EngineError as error:
         raise type(error)(
             f"Logic gate {name}: muscadet declares a gate and the "
-            f"{REFERENCE_ENGINE!r} engine builds it, and {error}. Install the "
-            "engine distribution beside muscadet (cod3s-pycatshoo)."
+            f"{REFERENCE_ENGINE!r} engine builds it, and {error}. "
+            f"{_engine_distribution_advice(error)}"
         ) from error
     return builder(system, copy_declaration(spec))
+
+
+def _engine_distribution_advice(error):
+    """What to do about a builder the reference engine did not give.
+
+    Three situations, three answers: installing the distribution only helps
+    when it is absent.
+    """
+    from .engine import REFERENCE_ENGINE, ComponentBuilderMissingError
+    from .engine import discovery_failure
+
+    if isinstance(error, ComponentBuilderMissingError):
+        return (
+            "Upgrade the engine distribution (cod3s-pycatshoo) to a release "
+            "that builds this kind of component."
+        )
+    if discovery_failure(REFERENCE_ENGINE) is not None:
+        return (
+            "The engine distribution (cod3s-pycatshoo) is installed: what has "
+            "to be repaired is what kept it from registering."
+        )
+    return "Install the engine distribution beside muscadet (cod3s-pycatshoo)."
 
 
 def logic_gate_component_spec(comp):
@@ -1717,11 +1739,11 @@ def component_spec(comp):
         When a declaration holds something no mapping can carry, or when the
         component is of a kind no declaration describes.
     """
-    from .obj_ctrl import ObjCtrl
+    # A gate and a controller say which declaration kind they are read back
+    # as. Read on that, never on the class: the class may be the engine's.
+    declared_kind = getattr(comp, "declared_kind", None)
 
-    # A gate says which declaration kind it is read back as. Read on that,
-    # never on its class: the class may be the engine's.
-    if getattr(comp, "declared_kind", None) == COMPONENT_KIND_LOGIC_GATE:
+    if declared_kind == COMPONENT_KIND_LOGIC_GATE:
         return logic_gate_component_spec(comp)
 
     if isinstance(comp, cod3s.ObjMode2S):
@@ -1733,7 +1755,7 @@ def component_spec(comp):
     # happened to grow a ``flows_in`` would still be declared as the controller
     # it is, rather than through a collection that describes none of its
     # interfaces.
-    if isinstance(comp, ObjCtrl):
+    if declared_kind == COMPONENT_KIND_CONTROLLER:
         return controller_component_spec(comp)
 
     if hasattr(comp, "flows_in") and hasattr(comp, "flows_out"):
@@ -2885,6 +2907,11 @@ def build_controller_component(system, spec):
         for section in CONTROLLER_SECTIONS
     }
 
+    if clsname == "ObjCtrl":
+        return _build_declared_controller(system, name, spec, sections)
+
+    # A class of the model's own, searched by name among the live classes as
+    # it always was.
     comp = system.add_component(
         cls=clsname,
         name=name,
@@ -2909,6 +2936,47 @@ def build_controller_component(system, spec):
         )
 
     return comp
+
+
+def _build_declared_controller(system, name, spec, sections):
+    """Build the controller ``ObjCtrl`` declares, by the engine when it can.
+
+    The engine builds it when it registered a component builder for the kind,
+    and muscadet's own class does otherwise. That class is instantiated
+    directly: ``system.add_component`` is what hands a controller to this
+    function, and a search by class name could not tell this class from the
+    one an engine carries under the same name.
+    """
+    if name in system.comp:
+        raise ComponentSpecError(
+            f"Controller {name}: the system already holds a component of that "
+            f"name. A declaration builds a NEW controller; give this one a "
+            f"distinct 'name', or read the existing one back with "
+            f"component_spec"
+        )
+
+    from .engine import REFERENCE_ENGINE, EngineError, find_component_builder
+
+    try:
+        builder = find_component_builder(REFERENCE_ENGINE, COMPONENT_KIND_CONTROLLER)
+    except EngineError as error:
+        # The engine distribution is installed and could not register. Keeping
+        # muscadet's own class here would hide a broken installation.
+        raise type(error)(
+            f"Controller {name}: {error}. {_engine_distribution_advice(error)}"
+        ) from error
+    if builder is not None:
+        return builder(system, {**copy_declaration(spec), **sections})
+
+    from .obj_ctrl import ObjCtrl
+
+    return ObjCtrl(
+        name,
+        label=spec.get("label"),
+        description=spec.get("description"),
+        metadata=spec.get("metadata", {}),
+        **sections,
+    )
 
 
 # ---------------------------------------------------------------------------

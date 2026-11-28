@@ -2243,6 +2243,8 @@ A model carries two natures of thing. An `ObjFlow` transports a **conserved quan
 
 Until 4.0.0 the library had a word for the first nature only, so an instrument had to be written as an `ObjFlow` that transports nothing: discrete flows pressed into carrying a signal, a production condition standing in for a threshold, and a hidden two-state automaton standing in for the memory of a band. `muscadet.ObjCtrl` is the second word. It is a **peer** of `ObjFlow` and not a subclass: it derives straight from the cod3s component, mounts its variables and message boxes by hand as `ObjLogicGate` does, and holds no flow collection at all. A controller is therefore not a node of the continuous flow graph, and none of its links is ever an edge of it.
 
+A controller is declared by muscadet and may be built by the engine. `system.add_component(cls="ObjCtrl", ...)` writes the `controller` component document (`muscadet.controller.ObjCtrl` is that declaration, and loads without an engine), and the document is built by the builder the engine registered for the kind when there is one ([`cod3s-pycatshoo`](https://github.com/edgemind-sas/cod3s-pycatshoo) 0.3.0 or later), by muscadet's own class otherwise. Either way the same controller is built, under the same names, and it reads back as the same document.
+
 `SensorContinuous` is unchanged on its surface and now says what it means in this vocabulary: its band and its republication are the same grammar nodes a controller compiles. A model using one has nothing to change.
 
 ### A controlled tank, in full

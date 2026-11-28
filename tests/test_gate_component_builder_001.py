@@ -92,7 +92,8 @@ def test_without_an_engine_a_gate_is_refused_by_name():
         with pytest.raises(muscadet.UnknownEngineError) as refusal:
             _add_gate(system)
         message = str(refusal.value)
-        assert "Logic gate Gate" in message and "cod3s-pycatshoo" in message
+        assert "Logic gate Gate" in message
+        assert "Install the engine distribution beside muscadet" in message
         assert "Gate" not in system.comp
     finally:
         _drop(system)
@@ -103,8 +104,11 @@ def test_an_engine_that_builds_no_gate_is_named_as_such():
     assert muscadet.find_component_builder("pycatshoo", "logic_gate") is None
     system = _system_with_a_source("no_gate_builder")
     try:
-        with pytest.raises(muscadet.ComponentBuilderMissingError, match="logic_gate"):
+        with pytest.raises(muscadet.ComponentBuilderMissingError) as refusal:
             _add_gate(system)
+        message = str(refusal.value)
+        assert "logic_gate" in message
+        assert "Upgrade the engine distribution" in message
     finally:
         _drop(system)
 
@@ -122,8 +126,11 @@ def test_an_engine_whose_discovery_failed_is_not_an_absent_engine(monkeypatch):
         muscadet.find_component_builder("pycatshoo", "logic_gate")
     system = _system_with_a_source("broken_engine")
     try:
-        with pytest.raises(muscadet.UnknownEngineError, match="native library"):
+        with pytest.raises(muscadet.UnknownEngineError) as refusal:
             _add_gate(system)
+        message = str(refusal.value)
+        assert "native library" in message
+        assert "is installed" in message and "Install the" not in message
     finally:
         _drop(system)
 
