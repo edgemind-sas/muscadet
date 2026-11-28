@@ -47,7 +47,8 @@
   that leaves the environment out ends in 0.3 s on the `conftest.py` refusal
   naming `Pycatshoo`, having run no test at all
 - The suite also needs the PyCATSHOO engine distribution, `cod3s-pycatshoo`:
-  muscadet declares a logic gate and that distribution builds it. It is a
+  muscadet declares a logic gate and a controller, and that distribution
+  builds them. It is a
   development dependency written as a direct reference in `pyproject.toml`,
   never under `[tool.uv.sources]` (uv applies the sources a git dependency
   declares, so they would reach every project that installs muscadet).

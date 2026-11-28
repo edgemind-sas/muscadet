@@ -4,6 +4,44 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 6.0.8 (2026-11-28)
+
+Maintenance release of the 6.0 line: the 6.8.0 change, without the
+pure-consumer change of 6.1.0.
+
+- The controller is the second kind an engine may build. `muscadet.controller`
+  carries `ObjCtrl` as a declaration: it holds data, refuses a key no
+  controller reads and an emission the closed grammar does not carry, and
+  writes the `controller` component document. It loads without an engine.
+  A system adding `cls="ObjCtrl"` now writes that document and has it built:
+  by the builder the `pycatshoo` engine registered for `controller` when there
+  is one ([`cod3s-pycatshoo`](https://github.com/edgemind-sas/cod3s-pycatshoo)
+  0.3.0 or later), and by muscadet's own controller class otherwise.
+- Nothing changes for a model, nor for an installation whose engine builds no
+  controller: the same controller is built under the same variable, automaton
+  and message-box names, and it reads back as the same document. A controller
+  class a model derives itself from `muscadet.ObjCtrl` is still searched by
+  name among the live classes.
+- `muscadet.ObjCtrl` is still muscadet's own live class, and a controller the
+  engine built is not an instance of it: `isinstance(comp, muscadet.ObjCtrl)`
+  is false there, and a class attribute written on `muscadet.ObjCtrl` does not
+  reach it. Read `comp.declared_kind == "controller"`, and tune through a
+  subclass.
+- What is refused when a controller is added moves earlier, before any engine
+  object exists. An interface entry without a `name`, which raised a
+  `TypeError` from inside the constructor, is a `ComponentSpecError`. An
+  engine distribution installed whose discovery hook failed refuses the
+  controller with what the hook raised, where muscadet's own class used to
+  build it in silence. `add_components` no longer trips on the `logger` it
+  hands every component.
+- A controller is now read back on the kind it declares (`declared_kind`),
+  not on its class.
+- The refusal of a logic gate no engine builds gives the advice that fits:
+  install the engine distribution when none is installed, upgrade it when it
+  builds no gate, and repair what kept it from registering when it is
+  installed and its discovery hook failed. It said "install" in all three.
+  `discovery_failure(name)` tells why a discovery hook failed.
+
 ## 6.0.7 (2026-11-27)
 
 Maintenance release of the 6.0 line: the 6.7.0 change, without the

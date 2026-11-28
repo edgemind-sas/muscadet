@@ -83,6 +83,7 @@ from .engine import (
     check_run_targets,
     component_builder,
     ComponentBuilderMissingError,
+    discovery_failure,
     Engine,
     ENGINE_ENTRY_POINT_GROUP,
     EngineAlreadyRegisteredError,

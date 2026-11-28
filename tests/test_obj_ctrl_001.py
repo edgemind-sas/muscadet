@@ -211,7 +211,9 @@ def obs():
 def test_a_controller_declares_its_inputs_and_its_outputs(obs):
     controller = obs["system"].comp["CTRL"]
 
-    assert isinstance(controller, muscadet.ObjCtrl)
+    # Read on the kind it declares: the class may be the engine's.
+    assert controller.declared_kind == "controller"
+    assert type(controller).__name__ == "ObjCtrl"
     assert not isinstance(controller, muscadet.ObjFlow)
     assert list(controller.controls_in) == ["tank"]
     assert list(controller.controls_out) == ["fill"]
