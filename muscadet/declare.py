@@ -1726,7 +1726,7 @@ def component_spec(comp):
 
     Parameters
     ----------
-    comp : muscadet.ObjFlow, cod3s.ObjMode2S or muscadet.ObjCtrl
+    comp : muscadet.ObjFlow, cod3s.ObjMode2S or a live controller
 
     Returns
     -------
@@ -2703,7 +2703,7 @@ def controller_component_spec(comp):
 
     Parameters
     ----------
-    comp : muscadet.ObjCtrl
+    comp : a live controller, as the engine builds it
 
     Returns
     -------
@@ -2775,7 +2775,8 @@ def controller_component_spec(comp):
             "name": comp.basename(),
             COMPONENT_KIND_KEY: COMPONENT_KIND_CONTROLLER,
             "cls": "ObjCtrl",
-            SOURCE_CLS_KEY: type(comp).__name__,
+            SOURCE_CLS_KEY: getattr(comp, "declared_source_cls", None)
+            or type(comp).__name__,
             **{section: read[section] for section in CONTROLLER_SECTIONS},
         }
     )
@@ -2806,7 +2807,7 @@ def check_controller_spec(spec):
     more than a key list. ``build_ctrl_node`` is PURE -- it refuses an unknown
     operator, an inverted band, an empty combination, a ``k`` beside an ``or``,
     a Python callable -- so a batch of declarations is sorted without raising a
-    system. ``ObjCtrl.__init__`` walks it again before calling the engine
+    system. The live controller walks it again before calling the engine
     constructor, so the refusal is the same one either way; what changes is
     only how early it arrives, and that it arrives as a
     :class:`ComponentSpecError` like every other refusal of this module rather
@@ -2887,7 +2888,7 @@ def build_controller_component(system, spec):
 
     Returns
     -------
-    muscadet.ObjCtrl
+    The live controller, as the engine builds it.
 
     Raises
     ------
@@ -2910,8 +2911,9 @@ def build_controller_component(system, spec):
     if clsname == "ObjCtrl":
         return _build_declared_controller(system, name, spec, sections)
 
-    # A class of the model's own, searched by name among the live classes as
-    # it always was.
+    # A class of the model's own, searched by name as it always was: among
+    # the declarations derived from ``muscadet.ObjCtrl``, then among the live
+    # classes an engine distribution carries.
     comp = system.add_component(
         cls=clsname,
         name=name,
@@ -2939,13 +2941,17 @@ def build_controller_component(system, spec):
 
 
 def _build_declared_controller(system, name, spec, sections):
-    """Build the controller ``ObjCtrl`` declares, by the engine when it can.
+    """Have the engine build the controller ``ObjCtrl`` declares.
 
-    The engine builds it when it registered a component builder for the kind,
-    and muscadet's own class does otherwise. That class is instantiated
-    directly: ``system.add_component`` is what hands a controller to this
-    function, and a search by class name could not tell this class from the
-    one an engine carries under the same name.
+    muscadet declares a controller and builds none: the component comes from
+    the builder the engine registered for the kind. Where there is none, the
+    refusal names what is missing -- no engine, an engine whose discovery
+    failed, or an engine that builds no controller.
+
+    A component a class of the model declared is told so, and reads back
+    under that class as :data:`SOURCE_CLS_KEY`. Only a declaration class is
+    kept that way: a document naming any other class is read back under the
+    class the engine built, which is the one that describes what runs.
     """
     if name in system.comp:
         raise ComponentSpecError(
@@ -2955,28 +2961,24 @@ def _build_declared_controller(system, name, spec, sections):
             f"component_spec"
         )
 
-    from .engine import REFERENCE_ENGINE, EngineError, find_component_builder
+    from .engine import REFERENCE_ENGINE, EngineError, component_builder
 
     try:
-        builder = find_component_builder(REFERENCE_ENGINE, COMPONENT_KIND_CONTROLLER)
+        builder = component_builder(REFERENCE_ENGINE, COMPONENT_KIND_CONTROLLER)
     except EngineError as error:
-        # The engine distribution is installed and could not register. Keeping
-        # muscadet's own class here would hide a broken installation.
         raise type(error)(
-            f"Controller {name}: {error}. {_engine_distribution_advice(error)}"
+            f"Controller {name}: muscadet declares a controller and the "
+            f"{REFERENCE_ENGINE!r} engine builds it, and {error}. "
+            f"{_engine_distribution_advice(error)}"
         ) from error
-    if builder is not None:
-        return builder(system, {**copy_declaration(spec), **sections})
 
-    from .obj_ctrl import ObjCtrl
+    comp = builder(system, {**copy_declaration(spec), **sections})
 
-    return ObjCtrl(
-        name,
-        label=spec.get("label"),
-        description=spec.get("description"),
-        metadata=spec.get("metadata", {}),
-        **sections,
-    )
+    from .system import declared_component_class
+
+    if declared_component_class(spec.get(SOURCE_CLS_KEY)) is not None:
+        comp.declared_source_cls = spec[SOURCE_CLS_KEY]
+    return comp
 
 
 # ---------------------------------------------------------------------------

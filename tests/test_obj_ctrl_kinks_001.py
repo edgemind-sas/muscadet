@@ -71,6 +71,7 @@ import cod3s
 import pytest
 
 import muscadet
+from cod3s_pycatshoo.controller import ObjCtrl as EngineCtrl
 
 # Imported for their side effect: a component class resolves by name.
 from muscadet.kb.continuous import (  # noqa: F401
@@ -110,8 +111,12 @@ PUBLISHERS = ("PUB_A", "PUB_B", "PUB_C", "PUB_D")
 TIGHT_CAP = 3
 
 
-class ObjCtrlKinksTightCap(muscadet.ObjCtrl):
+class ObjCtrlKinksTightCap(EngineCtrl):
     """A controller refusing above :data:`TIGHT_CAP` crossings.
+
+    Derived from the engine's controller, not from ``muscadet.ObjCtrl``: that
+    one is a declaration, and a class that changes how a controller behaves
+    belongs with the class that carries the behaviour.
 
     The cap is read as ``self.CROSSING_CAP`` at every check precisely so that
     it can be lowered like this: asserting the refusal on the shipped value

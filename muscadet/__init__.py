@@ -107,6 +107,7 @@ from .engine import (
     unregister_engine,
 )
 from .initial_state import InitialFixpointError
+from .controller import ObjCtrl
 from .logic_gate import ObjLogicGate
 from .profile import (
     build_profile,
@@ -145,9 +146,6 @@ _ENGINE_EXPORTS = {
     "MixtureGroupError": "mixture",
     "MixtureIn": "mixture",
     "ObjFlow": "obj",
-    "CtrlServiceIn": "obj_ctrl",
-    "CtrlSignalOut": "obj_ctrl",
-    "ObjCtrl": "obj_ctrl",
     "LogicAnd": "obj_logic",
     "LogicOr": "obj_logic",
     "CommandedRateLoopError": "ordering",
@@ -166,6 +164,8 @@ _ENGINE_EXPORTS = {
 }
 
 #: The execution submodules, reachable as attributes of the package.
+#: ``obj_ctrl`` now holds only the names of the controller grammar and is
+#: kept here for that reach.
 _ENGINE_SUBMODULES = (
     "capability",
     "derating",

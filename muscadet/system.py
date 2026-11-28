@@ -47,6 +47,36 @@ DECLARED_COMPONENT_CLASSES = {
     "ObjCtrl": ControllerDeclaration,
 }
 
+#: The declarations a model may derive a class of its own from, found by the
+#: name of that class. A gate has no such use: its whole declaration is its
+#: arguments.
+DERIVABLE_DECLARATIONS = (ControllerDeclaration,)
+
+
+def declared_component_class(name):
+    """The declaration class a model writes as ``cls=name``, or ``None``.
+
+    One of :data:`DECLARED_COMPONENT_CLASSES`, or a class a model derived from
+    one of :data:`DERIVABLE_DECLARATIONS`: such a class fixes part of the
+    declaration in its constructor and is found by its name, as a class of the
+    model always was. It is looked up before the live classes, and a model
+    keeps the names of its classes distinct: of two carrying the same name,
+    which one is returned is not specified.
+    """
+    declared = DECLARED_COMPONENT_CLASSES.get(name)
+    if declared is not None or not isinstance(name, str):
+        return declared
+
+    found = None
+    pending = list(DERIVABLE_DECLARATIONS)
+    while pending:
+        for derived in pending.pop().__subclasses__():
+            if derived.__name__ == name:
+                found = derived
+            pending.append(derived)
+    return found
+
+
 #: Name of the single PDMP manager a muscadet system owns. Every continuous
 #: declaration registers on *this* manager, which is what makes PyCATSHOO
 #: sequence equation methods of *different* components against each other
@@ -321,7 +351,7 @@ class System(cod3s.PycSystem):
         if message is not None:
             raise TypeError(message)
 
-        declared = DECLARED_COMPONENT_CLASSES.get(comp_specs.get("cls"))
+        declared = declared_component_class(comp_specs.get("cls"))
         if declared is not None:
             return self._add_declared_component(declared, comp_specs)
 
