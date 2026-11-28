@@ -89,7 +89,7 @@ dev-dependencies = [
     # a direct reference and NOT under [tool.uv.sources]: uv applies the
     # sources a git dependency declares, so a source written here would reach
     # every project that installs muscadet and collide with its own pin.
-    "cod3s-pycatshoo @ git+https://github.com/edgemind-sas/cod3s-pycatshoo.git@0.2.0",
+    "cod3s-pycatshoo @ git+https://github.com/edgemind-sas/cod3s-pycatshoo.git@0.3.0",
     "autopep8",
     "black",
     "flake8",

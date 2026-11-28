@@ -1,17 +1,22 @@
 """A controller is built by the engine that registered a builder for its kind.
 
-Until every engine distribution carries one, muscadet keeps its own controller
-class: no builder registered, and a model runs as it always did.
+muscadet declares a controller and carries no class that runs one. Without a
+builder, adding a controller is refused, and the refusal says which of the
+three things is missing: an engine, an engine whose discovery failed, or an
+engine that builds no controller.
+
+A class a model derives from ``muscadet.ObjCtrl`` is a declaration too: it is
+found by its name, writes its document, and the engine builds it.
 """
 
 import importlib.metadata
 
 import cod3s
 import pytest
+from cod3s_pycatshoo.controller import ObjCtrl as AdapterCtrl
 
 import muscadet
 from muscadet import declare
-from muscadet.obj_ctrl import ObjCtrl as OwnCtrl
 
 CONTROLS_IN = [{"name": "tank"}]
 CONTROLS_OUT = [
@@ -28,7 +33,7 @@ CONTROLS_OUT = [
 ]
 
 
-class EngineCtrl(OwnCtrl):
+class EngineCtrl(AdapterCtrl):
     """What an engine distribution carries: a controller class of its own."""
 
 
@@ -52,17 +57,40 @@ class ControllerBuilder001Sensor(muscadet.ObjCtrl):
     """A class of the model's own, declaring its interfaces itself."""
 
     def __init__(self, name, **kwargs):
-        super().__init__(name, controls_in=[{"name": "tank"}], **kwargs)
+        super().__init__(
+            name, controls_in=CONTROLS_IN, controls_out=CONTROLS_OUT, **kwargs
+        )
+
+
+class ControllerBuilder001Gauge(ControllerBuilder001Sensor):
+    """A class derived from a class of the model: found by its name as well."""
+
+
+def a_hook_that_fails():
+    raise RuntimeError("the native library could not be loaded")
+
+
+def _advertise(monkeypatch, *entries):
+    def entry_points(group=None, **kwargs):
+        return list(entries) if group == muscadet.ENGINE_ENTRY_POINT_GROUP else []
+
+    monkeypatch.setattr(importlib.metadata, "entry_points", entry_points)
+    muscadet.reset_engines()
 
 
 @pytest.fixture(autouse=True)
 def only_the_engines_this_test_registers(monkeypatch):
-    monkeypatch.setattr(
-        importlib.metadata, "entry_points", lambda group=None, **kwargs: []
-    )
-    muscadet.reset_engines()
+    _advertise(monkeypatch)
     yield
     muscadet.reset_engines()
+
+
+def _register(builder):
+    muscadet.register_engine(
+        name="pycatshoo",
+        simulate=lambda spec: None,
+        component_builders={"controller": builder},
+    )
 
 
 def _add_controller(system, **more):
@@ -80,45 +108,74 @@ def _drop(system):
     cod3s.terminate_session()
 
 
-def test_the_controller_a_system_adds_is_declared_first():
-    document = muscadet.controller.ObjCtrl(
+def test_the_controller_muscadet_exports_is_a_declaration():
+    assert muscadet.ObjCtrl is muscadet.controller.ObjCtrl
+    assert not hasattr(muscadet.obj_ctrl, "ObjCtrl")
+    assert not hasattr(muscadet.obj_ctrl, "CtrlSignalOut")
+    document = muscadet.ObjCtrl(
         "Ctrl", controls_in=CONTROLS_IN, controls_out=CONTROLS_OUT
     ).declaration()
     assert declare.check_controller_spec(document) == "Ctrl"
-    assert muscadet.system.DECLARED_COMPONENT_CLASSES["ObjCtrl"] is (
-        muscadet.controller.ObjCtrl
-    )
 
 
-def test_without_a_builder_the_controller_is_muscadets_own():
+def test_the_grammar_is_still_read_from_the_module_it_was_first_read_from():
+    from muscadet import ctrl_grammar, obj_ctrl
+
+    assert obj_ctrl.CtrlBand is ctrl_grammar.CtrlBand
+    assert obj_ctrl.build_ctrl_node is ctrl_grammar.build_ctrl_node
+    assert obj_ctrl.AGGREGATION_CROSSING_CAP == ctrl_grammar.AGGREGATION_CROSSING_CAP
+
+
+def test_without_an_engine_a_controller_is_refused_by_name():
     assert muscadet.find_component_builder("pycatshoo", "controller") is None
-    system = muscadet.System("own_controller")
+    system = muscadet.System("no_engine")
     try:
-        controller = _add_controller(system)
-        assert type(controller) is OwnCtrl
-        assert system.comp["Ctrl"] is controller
+        with pytest.raises(muscadet.UnknownEngineError) as refusal:
+            _add_controller(system)
+        message = str(refusal.value)
+        assert "Controller Ctrl" in message
+        assert "Install the engine distribution beside muscadet" in message
+        assert "Ctrl" not in system.comp
     finally:
         _drop(system)
 
 
-def test_an_engine_that_builds_no_controller_leaves_it_to_muscadet():
+def test_an_engine_that_builds_no_controller_is_named_as_such():
     muscadet.register_engine(name="pycatshoo", simulate=lambda spec: None)
-    with pytest.raises(muscadet.ComponentBuilderMissingError, match="controller"):
-        muscadet.component_builder("pycatshoo", "controller")
-    system = muscadet.System("still_own_controller")
+    system = muscadet.System("no_controller_builder")
     try:
-        assert type(_add_controller(system)) is OwnCtrl
+        with pytest.raises(muscadet.ComponentBuilderMissingError) as refusal:
+            _add_controller(system)
+        message = str(refusal.value)
+        assert "controller" in message
+        assert "Upgrade the engine distribution" in message
+    finally:
+        _drop(system)
+
+
+def test_an_engine_whose_discovery_failed_is_not_an_absent_engine(monkeypatch):
+    _advertise(
+        monkeypatch,
+        importlib.metadata.EntryPoint(
+            name="pycatshoo",
+            value=f"{__name__}:a_hook_that_fails",
+            group=muscadet.ENGINE_ENTRY_POINT_GROUP,
+        ),
+    )
+    system = muscadet.System("broken_engine")
+    try:
+        with pytest.raises(muscadet.UnknownEngineError) as refusal:
+            _add_controller(system)
+        message = str(refusal.value)
+        assert "Controller Ctrl" in message and "native library" in message
+        assert "is installed" in message and "Install the" not in message
     finally:
         _drop(system)
 
 
 def test_a_registered_builder_receives_the_checked_declaration():
     builder = ControllerBuilder()
-    muscadet.register_engine(
-        name="pycatshoo",
-        simulate=lambda spec: None,
-        component_builders={"controller": builder},
-    )
+    _register(builder)
     system = muscadet.System("engine_controller")
     try:
         controller = _add_controller(system, label="Level switch")
@@ -129,9 +186,11 @@ def test_a_registered_builder_receives_the_checked_declaration():
         assert spec["controls_in"] == CONTROLS_IN
         assert spec["controls_out"] == CONTROLS_OUT
         assert spec["label"] == "Level switch"
-        # Read back on the kind it declares, not on its class.
+        # Read back on the kind it declares, not on its class, and under the
+        # class the model wrote rather than the one the engine built.
         read = declare.component_spec(controller)
         assert read["kind"] == "controller" and read["cls"] == "ObjCtrl"
+        assert read["source_cls"] == "ObjCtrl"
         assert read["controls_out"][0]["emit"] == CONTROLS_OUT[0]["emit"]
         declared = declare.system_spec(system)
     finally:
@@ -146,86 +205,82 @@ def test_a_registered_builder_receives_the_checked_declaration():
         _drop(rebuilt)
 
 
-def test_the_two_builds_declare_the_same_document():
-    system = muscadet.System("own_document")
-    try:
-        own = declare.system_spec(_and_a_label(system))
-    finally:
-        _drop(system)
-
-    muscadet.register_engine(
-        name="pycatshoo",
-        simulate=lambda spec: None,
-        component_builders={"controller": ControllerBuilder()},
-    )
-    system = muscadet.System("own_document")
-    try:
-        engine = declare.system_spec(_and_a_label(system))
-    finally:
-        _drop(system)
-
-    # ``source_cls`` names the class that was read, which is the one thing
-    # the two builds do not share in this test.
-    assert own["components"]["Ctrl"].pop("source_cls") == "ObjCtrl"
-    assert engine["components"]["Ctrl"].pop("source_cls") == "EngineCtrl"
-    assert own == engine
-
-
-def _and_a_label(system):
-    _add_controller(system, label="Level switch")
-    return system
-
-
-def test_a_class_of_the_model_is_still_searched_by_name():
+@pytest.mark.parametrize(
+    "cls", ["ControllerBuilder001Sensor", "ControllerBuilder001Gauge"]
+)
+def test_a_class_of_the_model_declares_and_the_engine_builds(cls):
     builder = ControllerBuilder()
-    muscadet.register_engine(
-        name="pycatshoo",
-        simulate=lambda spec: None,
-        component_builders={"controller": builder},
-    )
+    _register(builder)
     system = muscadet.System("own_class")
     try:
-        sensor = system.add_component(name="S", cls="ControllerBuilder001Sensor")
-        assert type(sensor) is ControllerBuilder001Sensor
+        sensor = system.add_component(name="S", cls=cls, label="Sensor")
+        assert type(sensor) is EngineCtrl
+        (spec,) = builder.specs
+        assert spec["cls"] == "ObjCtrl" and spec["source_cls"] == cls
+        assert spec["controls_in"] == CONTROLS_IN
         assert list(sensor.controls_in) == ["tank"]
+        assert list(sensor.controls_out) == ["fill"]
+        # Read back under the class the model wrote.
+        assert declare.component_spec(sensor)["source_cls"] == cls
+    finally:
+        _drop(system)
+
+
+def test_a_class_that_changes_a_behaviour_is_refused_where_it_is_defined():
+    with pytest.raises(TypeError) as refusal:
+
+        class ControllerBuilder001Tight(muscadet.ObjCtrl):
+            CROSSING_CAP = 3
+
+    message = str(refusal.value)
+    assert "ControllerBuilder001Tight" in message and "CROSSING_CAP" in message
+    assert "cod3s_pycatshoo.controller.ObjCtrl" in message
+
+    with pytest.raises(TypeError, match="add_control_out"):
+
+        class ControllerBuilder001Loud(muscadet.ObjCtrl):
+            def add_control_out(self, name, **params):
+                return None
+
+
+def test_a_document_naming_a_live_class_reads_back_as_what_the_engine_built():
+    """Only a declaration class is kept as the provenance of a rebuild."""
+    _register(ControllerBuilder())
+    system = muscadet.System("live_provenance")
+    try:
+        document = muscadet.ObjCtrl("Ctrl", controls_in=CONTROLS_IN).declaration()
+        document["source_cls"] = "SomeLiveSubclass"
+        controller = declare.build_component(system, document)
+        assert declare.component_spec(controller)["source_cls"] == "EngineCtrl"
+    finally:
+        _drop(system)
+
+
+def test_a_class_of_the_model_refuses_what_a_controller_refuses():
+    builder = ControllerBuilder()
+    _register(builder)
+    system = muscadet.System("own_class_refusal")
+    try:
+        with pytest.raises(ValueError, match="ControllerBuilder001Sensor"):
+            system.add_component(
+                name="S", cls="ControllerBuilder001Sensor", thresold=2.0
+            )
         assert builder.specs == []
     finally:
         _drop(system)
 
 
-def a_hook_that_fails():
-    raise RuntimeError("the native library could not be loaded")
+def test_a_name_no_class_carries_is_left_to_the_live_classes():
+    from muscadet.system import declared_component_class
 
-
-def test_an_engine_whose_discovery_failed_is_not_hidden_behind_muscadets_class(
-    monkeypatch,
-):
-    entry = importlib.metadata.EntryPoint(
-        name="pycatshoo",
-        value=f"{__name__}:a_hook_that_fails",
-        group=muscadet.ENGINE_ENTRY_POINT_GROUP,
-    )
-    monkeypatch.setattr(
-        importlib.metadata,
-        "entry_points",
-        lambda group=None, **kwargs: (
-            [entry] if group == muscadet.ENGINE_ENTRY_POINT_GROUP else []
-        ),
-    )
-    muscadet.reset_engines()
-    system = muscadet.System("broken_engine")
-    try:
-        with pytest.raises(muscadet.UnknownEngineError) as refusal:
-            _add_controller(system)
-        message = str(refusal.value)
-        assert "Controller Ctrl" in message and "native library" in message
-        assert "is installed" in message
-        assert "Ctrl" not in system.comp
-    finally:
-        _drop(system)
+    assert declared_component_class("ObjCtrl") is muscadet.ObjCtrl
+    assert declared_component_class("ObjLogicGate") is muscadet.ObjLogicGate
+    assert declared_component_class("ObjFlow") is None
+    assert declared_component_class(None) is None
 
 
 def test_a_second_controller_of_the_same_name_is_refused_as_any_component():
+    _register(ControllerBuilder())
     system = muscadet.System("twice")
     try:
         _add_controller(system)
@@ -237,11 +292,7 @@ def test_a_second_controller_of_the_same_name_is_refused_as_any_component():
 
 def test_a_malformed_controller_is_refused_before_any_builder_sees_it():
     builder = ControllerBuilder()
-    muscadet.register_engine(
-        name="pycatshoo",
-        simulate=lambda spec: None,
-        component_builders={"controller": builder},
-    )
+    _register(builder)
     system = muscadet.System("malformed")
     try:
         with pytest.raises(ValueError, match="thresold"):

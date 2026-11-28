@@ -388,10 +388,8 @@ def discovery_failure(name: str) -> Optional[str]:
 def find_component_builder(name: str, kind: str) -> Optional[Callable[..., Any]]:
     """The builder of :func:`component_builder`, or ``None`` when there is none.
 
-    For a kind muscadet still carries a live class for while an engine may
-    already build it: the caller keeps its own class when no engine is
-    advertised under ``name``, or when that engine builds no component of
-    that kind.
+    For a caller that has something else to do when no engine is advertised
+    under ``name``, or when that engine builds no component of that kind.
 
     Raises
     ------
