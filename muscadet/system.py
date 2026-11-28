@@ -26,6 +26,7 @@ from .flow_continuous import (
 from .initial_state import initial_fixpoint_refusal, register_initial_settle
 from .mixture import MixtureGroupError, resolve_mixture_groups  # noqa: F401
 from .mode_signals import publish_mode_signals
+from .controller import ObjCtrl as ControllerDeclaration
 from .logic_gate import ObjLogicGate as LogicGateDeclaration
 from .obj_logic import LogicAnd, LogicOr
 from .ordering import (
@@ -41,7 +42,10 @@ from .profile import register_noise_seed
 #: writes. A system adding one of them hands its declaration to
 #: :func:`muscadet.declare.build_component`, which reaches the engine's
 #: component builder, instead of searching a live class by that name.
-DECLARED_COMPONENT_CLASSES = {"ObjLogicGate": LogicGateDeclaration}
+DECLARED_COMPONENT_CLASSES = {
+    "ObjLogicGate": LogicGateDeclaration,
+    "ObjCtrl": ControllerDeclaration,
+}
 
 #: Name of the single PDMP manager a muscadet system owns. Every continuous
 #: declaration registers on *this* manager, which is what makes PyCATSHOO

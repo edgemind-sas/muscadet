@@ -603,6 +603,10 @@ class ObjCtrl(cod3s.PycComponent):
     #: name, BEFORE the engine object exists -- see :meth:`__init__`.
     DECLARATION_KEYS = CONTROLLER_DECLARATION_KEYS
 
+    #: The declaration kind this component is read back as. Read on this, never
+    #: on the class: the class may be the engine's.
+    declared_kind = "controller"
+
     #: The ceiling on the pair crossings ONE aggregating input may declare
     #: (R41). Read as ``self.CROSSING_CAP`` at every check, so a subclass
     #: lowers it by declaring it -- which is what a test of the refusal does,
