@@ -4,6 +4,41 @@ Releases before 5.0.0 are recorded in the git tags (`git tag`, `0.6.x` through
 `4.4.0`) and in the commit history; this file starts here rather than
 reconstructing them.
 
+## 6.0.9 (2026-11-28)
+
+Maintenance release of the 6.0 line: the 6.9.0 change, without the
+pure-consumer change of 6.1.0.
+
+- muscadet no longer carries a class that runs a controller.
+  `muscadet.obj_ctrl.ObjCtrl`, `CtrlSignalOut` and `CtrlServiceIn` are
+  removed: a controller is declared by muscadet and built by the engine,
+  through the builder the `pycatshoo` engine registers for the `controller`
+  kind ([`cod3s-pycatshoo`](https://github.com/edgemind-sas/cod3s-pycatshoo)
+  0.3.0 or later). A model does not change: `system.add_component(cls="ObjCtrl",
+  ...)`, a platform export and a system declaration build the same controller,
+  under the same names, and read back as the same document.
+- `muscadet.ObjCtrl` is now the declaration (`muscadet.controller`), and loads
+  without an engine. Constructing it describes a controller and builds
+  nothing.
+- A class a model derives from `muscadet.ObjCtrl` to fix its interfaces in its
+  constructor keeps working unchanged: `add_component(cls="ItsName")` finds it
+  by name, writes its document and has the engine build it, and it reads back
+  under its own name. Such a class declares and cannot change a behaviour. A
+  class that does (a method of its own, a lower `CROSSING_CAP`) derives from
+  the controller class of the engine distribution,
+  `cod3s_pycatshoo.controller.ObjCtrl`. Left on `muscadet.ObjCtrl`, it is
+  refused where it is defined (`TypeError`, naming what it adds), rather than
+  built as a plain controller that would ignore it.
+- `muscadet.CtrlSignalOut` and `muscadet.CtrlServiceIn` are no longer
+  exported. `muscadet.obj_ctrl` keeps the names of the controller grammar,
+  re-exported from `muscadet.ctrl_grammar`, and loads without an engine.
+- Without a builder, adding a controller is refused by name, with the three
+  cases told apart as for a logic gate.
+- A static guard (`tests/engine_free/test_live_classes_only_shrink_001.py`)
+  names the modules that still derive a class from an engine base, and
+  refuses any other. The list only shrinks.
+- The development dependency on the engine distribution moves to 0.3.0.
+
 ## 6.0.8 (2026-11-28)
 
 Maintenance release of the 6.0 line: the 6.8.0 change, without the
